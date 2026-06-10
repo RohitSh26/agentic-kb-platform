@@ -3,6 +3,7 @@
 from db.models.base import Base
 from db.models.embedding_cache import EmbeddingCache
 from db.models.generation_cache import GenerationCache
+from db.models.generation_cache_artifact import GenerationCacheArtifact
 from db.models.kb_build_run import KbBuildRun
 from db.models.knowledge_artifact import KnowledgeArtifact
 from db.models.knowledge_edge import KnowledgeEdge
@@ -13,6 +14,7 @@ __all__ = [
     "Base",
     "EmbeddingCache",
     "GenerationCache",
+    "GenerationCacheArtifact",
     "KbBuildRun",
     "KnowledgeArtifact",
     "KnowledgeEdge",

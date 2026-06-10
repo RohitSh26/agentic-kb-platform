@@ -21,17 +21,33 @@ class ArtifactModel(BaseModel):
     schema_version: Literal["1.0.0"] = ARTIFACT_SCHEMA_VERSION
 
 
-# Imported after ArtifactModel is defined; sources.py imports it from this package.
+# Imported after ArtifactModel is defined; submodules import it from this package.
 from contracts.artifact_schemas.sources import (  # noqa: E402
     NormalizedContent,
     SourceRef,
     SourceType,
 )
+from contracts.artifact_schemas.wikify import (  # noqa: E402
+    Chunk,
+    ConceptDraft,
+    KnowledgeKind,
+    SourceBackedFactDraft,
+    WikifyArtifactDraft,
+    WikifyArtifactType,
+    WikifyGeneration,
+)
 
 __all__ = [
     "ARTIFACT_SCHEMA_VERSION",
     "ArtifactModel",
+    "Chunk",
+    "ConceptDraft",
+    "KnowledgeKind",
     "NormalizedContent",
+    "SourceBackedFactDraft",
     "SourceRef",
     "SourceType",
+    "WikifyArtifactDraft",
+    "WikifyArtifactType",
+    "WikifyGeneration",
 ]

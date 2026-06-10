@@ -1,11 +1,11 @@
 """Incremental build runner — the 8-step algorithm from docs/architecture §7.
 
 Unchanged content_hash => chunk/wikify/graphify/embed/index are all skipped.
-Wikify/Graphify/Embed/Index are Protocols stubbed in this PR (real pipelines
-arrive in PR-05/06/08); every model-shaped call is gated by a cache lookup so a
-hit never reaches the stub. Generation-cache rows are recorded in the same
-transaction as their output artifacts, after the artifacts are persisted, so a
-crash between generate and cache can never strand a cache row without output.
+Wikify is real (kb_builder.wikify); Graphify/Embed/Index remain Protocols until
+PR-06/08. Every model-shaped call is gated by a cache lookup so a hit never
+reaches the model. Generation-cache rows are recorded in the same transaction
+as their output artifacts, after the artifacts are persisted, so a crash
+between generate and cache can never strand a cache row without output.
 """
 
 import uuid
@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.hashing import content_hash
 from common.logging import get_logger
-from contracts.artifact_schemas import NormalizedContent
+from contracts.artifact_schemas import NormalizedContent, WikifyArtifactDraft
 from contracts.versions import (
     CHUNKER_VERSION,
     GRAPHIFY_VERSION,
@@ -35,17 +35,9 @@ from kb_builder.build.cache import (
     code_graph_cache_key,
 )
 from kb_builder.connectors import Connector
+from kb_builder.wikify.write import write_wikify_artifacts
 
 logger = get_logger("kb_builder.build.runner")
-
-
-@dataclass(frozen=True)
-class ArtifactDraft:
-    """Placeholder wikify output; the real artifact contract lands in PR-05."""
-
-    artifact_type: str
-    title: str | None
-    body_text: str
 
 
 @dataclass(frozen=True)
@@ -60,10 +52,13 @@ class EdgeDraft:
 
 
 class Wikifier(Protocol):
-    model_name: str
-    model_params_hash: str
+    @property
+    def model_name(self) -> str: ...
 
-    async def wikify(self, content: NormalizedContent) -> Sequence[ArtifactDraft]: ...
+    @property
+    def model_params_hash(self) -> str: ...
+
+    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]: ...
 
 
 class Graphifier(Protocol):
@@ -283,33 +278,15 @@ class BuildRunner:
         )
         hit = await self._generation_gate.lookup(cache_key)
         if hit is not None:
-            return [hit.output_artifact_id] if hit.output_artifact_id is not None else []
+            return await self._generation_gate.lookup_artifact_ids(cache_key)
         drafts = await self._wikifier.wikify(fetched)
         counters.llm_calls += 1
-        if len(drafts) > 1:
-            # generation_cache.output_artifact_id holds a single id; mapping a
-            # cache row to N artifacts is the PR-05 contract. Failing loudly here
-            # beats silently dropping artifacts from embed/index on cache hits.
-            raise NotImplementedError(
-                "multi-artifact wikify output requires the PR-05 cache-to-artifacts mapping"
-            )
-        artifacts: list[KnowledgeArtifact] = []
-        for draft in drafts:
-            artifact = KnowledgeArtifact(
-                artifact_type=draft.artifact_type,
-                source_id=source_id,
-                title=draft.title,
-                body_text=draft.body_text,
-                content_hash=content_hash(draft.body_text),
-                kb_version=self._kb_version,
-            )
-            self._session.add(artifact)
-            artifacts.append(artifact)
-            counters.artifacts_created += 1
-        # flush artifacts BEFORE recording the cache row (same transaction) so a
-        # cache row can never exist without its output artifact.
-        await self._session.flush()
-        artifact_ids = [artifact.artifact_id for artifact in artifacts]
+        # write_wikify_artifacts flushes BEFORE the cache row is recorded (same
+        # transaction) so a cache row can never exist without its output artifacts.
+        artifact_ids = await write_wikify_artifacts(
+            self._session, source_id=source_id, kb_version=self._kb_version, drafts=drafts
+        )
+        counters.artifacts_created += len(artifact_ids)
         await self._generation_gate.record(
             cache_key=cache_key,
             input_hash=fetched.content_hash,
@@ -317,7 +294,7 @@ class BuildRunner:
             model_name=self._wikifier.model_name,
             model_params_hash=self._wikifier.model_params_hash,
             output_schema_version=OUTPUT_SCHEMA_VERSION,
-            output_artifact_id=artifact_ids[0] if artifact_ids else None,
+            output_artifact_ids=artifact_ids,
         )
         return artifact_ids
 
@@ -355,7 +332,7 @@ class BuildRunner:
             model_name="graphify",
             model_params_hash=PARSER_CONFIG_VERSION,
             output_schema_version=OUTPUT_SCHEMA_VERSION,
-            output_artifact_id=None,
+            output_artifact_ids=(),
         )
 
     async def _embed_gated(self, counters: _Counters, artifact_id: uuid.UUID) -> None:

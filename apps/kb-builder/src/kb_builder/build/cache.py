@@ -9,12 +9,13 @@ retries never duplicate cache rows.
 import uuid
 from collections.abc import Sequence
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.hashing import content_hash
 from common.logging import get_logger
-from db.models import EmbeddingCache, GenerationCache
+from db.models import EmbeddingCache, GenerationCache, GenerationCacheArtifact
 
 logger = get_logger("kb_builder.build.cache")
 
@@ -94,6 +95,21 @@ class GenerationCacheGate:
         logger.info("event=generation_cache_lookup cache_key=%s hit=%s", cache_key, hit is not None)
         return hit
 
+    async def lookup_artifact_ids(self, cache_key: str) -> list[uuid.UUID]:
+        """All output artifact ids for a cache row, in generation order.
+
+        generation_cache_artifact is the single source of truth on hits;
+        generation_cache.output_artifact_id is denormalized and never read here.
+        """
+        rows = (
+            await self._session.execute(
+                select(GenerationCacheArtifact.artifact_id)
+                .where(GenerationCacheArtifact.cache_key == cache_key)
+                .order_by(GenerationCacheArtifact.position)
+            )
+        ).scalars()
+        return list(rows)
+
     async def record(
         self,
         *,
@@ -103,9 +119,9 @@ class GenerationCacheGate:
         model_name: str,
         model_params_hash: str,
         output_schema_version: str,
-        output_artifact_id: uuid.UUID | None,
+        output_artifact_ids: Sequence[uuid.UUID],
     ) -> None:
-        """Idempotent insert; call only after the output artifact row is persisted
+        """Idempotent insert; call only after the output artifact rows are persisted
         in the same transaction, or a retry would hit the cache and find nothing."""
         statement = (
             insert(GenerationCache)
@@ -116,12 +132,30 @@ class GenerationCacheGate:
                 model_name=model_name,
                 model_params_hash=model_params_hash,
                 output_schema_version=output_schema_version,
-                output_artifact_id=output_artifact_id,
+                # denormalized copy of position 0 (architecture §6 sketch); the
+                # hit path reads generation_cache_artifact instead.
+                output_artifact_id=output_artifact_ids[0] if output_artifact_ids else None,
             )
             .on_conflict_do_nothing(index_elements=["cache_key"])
         )
         await self._session.execute(statement)
-        logger.info("event=generation_cache_record cache_key=%s", cache_key)
+        if output_artifact_ids:
+            mapping = (
+                insert(GenerationCacheArtifact)
+                .values(
+                    [
+                        {"cache_key": cache_key, "artifact_id": artifact_id, "position": position}
+                        for position, artifact_id in enumerate(output_artifact_ids)
+                    ]
+                )
+                .on_conflict_do_nothing(index_elements=["cache_key", "artifact_id"])
+            )
+            await self._session.execute(mapping)
+        logger.info(
+            "event=generation_cache_record cache_key=%s output_artifacts=%d",
+            cache_key,
+            len(output_artifact_ids),
+        )
 
 
 class EmbeddingCacheGate:

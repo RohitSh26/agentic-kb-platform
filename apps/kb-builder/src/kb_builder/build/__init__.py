@@ -11,7 +11,6 @@ from kb_builder.build.cache import (
     concept_rollup_cache_key,
 )
 from kb_builder.build.runner import (
-    ArtifactDraft,
     BuildRunner,
     EdgeDraft,
     Embedder,
@@ -21,7 +20,6 @@ from kb_builder.build.runner import (
 )
 
 __all__ = [
-    "ArtifactDraft",
     "BuildRunner",
     "EdgeDraft",
     "Embedder",
