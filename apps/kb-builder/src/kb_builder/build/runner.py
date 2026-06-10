@@ -42,6 +42,8 @@ from kb_builder.build.cache import (
 )
 from kb_builder.connectors import Connector
 from kb_builder.graphify_adapter.write import write_code_artifacts, write_code_edges
+from kb_builder.linker.run import run_linker
+from kb_builder.linker.semantic import SimilarityProvider
 from kb_builder.wikify.write import write_wikify_artifacts
 
 logger = get_logger("kb_builder.build.runner")
@@ -101,6 +103,7 @@ class BuildRunner:
         graphifier: Graphifier,
         embedder: Embedder,
         indexer: SearchIndexer,
+        similarity: SimilarityProvider | None = None,
     ) -> None:
         self._session = session
         self._kb_version = kb_version
@@ -108,6 +111,7 @@ class BuildRunner:
         self._graphifier = graphifier
         self._embedder = embedder
         self._indexer = indexer
+        self._similarity = similarity
         self._generation_gate = GenerationCacheGate(session)
         self._embedding_gate = EmbeddingCacheGate(session)
 
@@ -153,6 +157,9 @@ class BuildRunner:
                         counters, fetched, code_key_map, pending_edges
                     )
             await self._write_pending_edges(code_key_map, pending_edges)
+            await run_linker(
+                self._session, kb_version=self._kb_version, similarity=self._similarity
+            )
             await self._finish_run(build_id, counters, status="completed")
             await self._session.commit()
         except Exception as error:
