@@ -99,8 +99,8 @@ class WikifyGenerator:
             )
 
         logger.info(
-            "event=wikify_generated source_uri=%s chunks=%d concepts=%d facts=%d "
-            "dropped_facts=%d drafts=%d",
+            "event=wikify_generated source_uri=%s chunks=%d concepts=%d facts_kept=%d "
+            "facts_dropped=%d drafts=%d",
             content.source.source_uri,
             len(chunks),
             len(generation.concepts),

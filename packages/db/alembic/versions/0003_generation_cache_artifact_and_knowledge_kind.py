@@ -62,6 +62,15 @@ def upgrade() -> None:
             "cache_key", "position", name="uq_generation_cache_artifact_cache_key_position"
         ),
     )
+    # Backfill: pre-0003 cache rows recorded a single output artifact in
+    # generation_cache.output_artifact_id. The hit path now reads ONLY the
+    # mapping table, so without this backfill those rows would hit the cache
+    # but return zero artifacts — silently dropping them from embed/index.
+    op.execute(
+        "INSERT INTO generation_cache_artifact (cache_key, artifact_id, position) "
+        "SELECT cache_key, output_artifact_id, 0 FROM generation_cache "
+        "WHERE output_artifact_id IS NOT NULL"
+    )
     op.add_column("knowledge_artifact", sa.Column("knowledge_kind", sa.Text(), nullable=True))
     # op.f() keeps the metadata naming convention (ck_%(table_name)s_...) from
     # double-prefixing the already-final constraint name.

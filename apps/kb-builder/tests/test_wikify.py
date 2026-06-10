@@ -50,6 +50,11 @@ def test_chunker_packs_paragraphs_and_splits_oversized_ones() -> None:
     assert chunk_text("") == []
     assert chunk_text("\n\n\n\n") == []
 
+    # a paragraph of exactly MAX_CHUNK_CHARS fills one chunk without splitting
+    exact = "y" * MAX_CHUNK_CHARS
+    exact_chunks = chunk_text(exact + "\n\n" + "tail")
+    assert [chunk.text for chunk in exact_chunks] == [exact, "tail"]
+
 
 def test_draft_kind_must_match_type() -> None:
     with pytest.raises(ValidationError, match="interpreted"):

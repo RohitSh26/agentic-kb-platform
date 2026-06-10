@@ -1,9 +1,12 @@
 """Deterministic chunker: same normalized text => same chunks, on any machine.
 
 Splits on blank-line paragraph boundaries and packs paragraphs into chunks of
-at most MAX_CHUNK_CHARS; a single oversized paragraph is hard-split. Changing
-any of this behavior must bump contracts.versions.CHUNKER_VERSION because the
-chunker output feeds the chunk-summary cache key.
+at most MAX_CHUNK_CHARS; a single oversized paragraph is hard-split. Runs of
+3+ newlines collapse to one "\n\n" joiner, so chunk text is NOT always a
+verbatim substring of the source — verbatim checks (e.g. fact quotes) must use
+the original normalized text. Changing any of this behavior must bump
+contracts.versions.CHUNKER_VERSION because the chunker output feeds the
+chunk-summary cache key.
 """
 
 from common.hashing import content_hash

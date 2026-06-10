@@ -140,6 +140,10 @@ class GenerationCacheGate:
         )
         await self._session.execute(statement)
         if output_artifact_ids:
+            # Retry-idempotent for the same ids. Two CONCURRENT builders missing
+            # the same key would record different ids and the loser aborts on
+            # uq_(cache_key, position) (not covered by the PK conflict target) —
+            # loud, not silent; fine for the single nightly runner.
             mapping = (
                 insert(GenerationCacheArtifact)
                 .values(

@@ -37,6 +37,7 @@ from db.models import (
 from kb_builder.build import (
     BuildRunner,
     EdgeDraft,
+    GenerationCacheGate,
     activate_kb_version,
     chunk_summary_cache_key,
     code_graph_cache_key,
@@ -406,6 +407,22 @@ async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
     # one wikify cache row + one graphify cache row (github_code source)
     assert await _count(session, GenerationCache) == 2
     assert await _count(session, GenerationCacheArtifact) == 2
+    # the mapping preserves generation order (ORDER BY position)
+    mapped_titles = (
+        (
+            await session.execute(
+                select(KnowledgeArtifact.title)
+                .join(
+                    GenerationCacheArtifact,
+                    GenerationCacheArtifact.artifact_id == KnowledgeArtifact.artifact_id,
+                )
+                .order_by(GenerationCacheArtifact.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert mapped_titles == ["a", "b"]
 
     # retry with a stale-looking source: cache hit, zero model calls, both
     # artifacts still reach embed/index.
@@ -430,6 +447,39 @@ async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
     assert indexer2.calls == 1
     assert await _count(session, KnowledgeArtifact) == 2
     assert await _count(session, GenerationCacheArtifact) == 2
+
+
+@requires_db
+async def test_generation_cache_record_is_idempotent_for_same_ids(session: AsyncSession) -> None:
+    source = SourceItem(
+        source_type="github_doc", source_uri="u", source_version="v", content_hash="h"
+    )
+    session.add(source)
+    await session.flush()
+    artifact = KnowledgeArtifact(
+        artifact_type="summary",
+        source_id=source.source_id,
+        body_text="t",
+        kb_version="v-test.1",
+        knowledge_kind="interpreted",
+    )
+    session.add(artifact)
+    await session.flush()
+
+    gate = GenerationCacheGate(session)
+    for _ in range(2):  # a build retry re-records the same output set
+        await gate.record(
+            cache_key="k",
+            input_hash="h",
+            prompt_version="1.0.0",
+            model_name="gpt-test",
+            model_params_hash="p",
+            output_schema_version="1.0.0",
+            output_artifact_ids=[artifact.artifact_id],
+        )
+    assert await _count(session, GenerationCache) == 1
+    assert await _count(session, GenerationCacheArtifact) == 1
+    assert await gate.lookup_artifact_ids("k") == [artifact.artifact_id]
 
 
 class FakeModelClient:

@@ -278,7 +278,17 @@ class BuildRunner:
         )
         hit = await self._generation_gate.lookup(cache_key)
         if hit is not None:
-            return await self._generation_gate.lookup_artifact_ids(cache_key)
+            artifact_ids = await self._generation_gate.lookup_artifact_ids(cache_key)
+            if not artifact_ids:
+                # Every known wikifier emits >= 1 draft, so an empty mapping on a
+                # hit almost certainly means a corrupt/unbackfilled cache row;
+                # surface it rather than silently dropping artifacts.
+                logger.warning(
+                    "event=wikify_cache_hit_empty_mapping cache_key=%s source_uri=%s",
+                    cache_key,
+                    fetched.source.source_uri,
+                )
+            return artifact_ids
         drafts = await self._wikifier.wikify(fetched)
         counters.llm_calls += 1
         # write_wikify_artifacts flushes BEFORE the cache row is recorded (same
