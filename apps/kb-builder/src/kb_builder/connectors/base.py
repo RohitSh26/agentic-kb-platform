@@ -27,7 +27,7 @@ class FetchBackend(Protocol):
 
 
 class Connector(Protocol):
-    source_type: SourceType
+    source_type: ClassVar[SourceType]
 
     async def list_sources(self) -> list[SourceRef]: ...
 

@@ -38,4 +38,13 @@ class KbBuildRun(Base):
     )
     error_summary: Mapped[str | None] = mapped_column(Text)
 
-    __table_args__ = (Index("ix_kb_build_run_kb_version", "kb_version"),)
+    __table_args__ = (
+        Index("ix_kb_build_run_kb_version", "kb_version"),
+        # at most one build run may be active at a time (invariant 5)
+        Index(
+            "uq_kb_build_run_single_active",
+            "status",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )

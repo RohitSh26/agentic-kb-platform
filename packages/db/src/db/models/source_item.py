@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Text, text
+from sqlalchemy import Boolean, DateTime, Index, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,4 +37,5 @@ class SourceItem(Base):
     __table_args__ = (
         Index("ix_source_item_content_hash", "content_hash"),
         Index("ix_source_item_source_uri_source_version", "source_uri", "source_version"),
+        UniqueConstraint("source_type", "source_uri", name="uq_source_item_source_type_source_uri"),
     )
