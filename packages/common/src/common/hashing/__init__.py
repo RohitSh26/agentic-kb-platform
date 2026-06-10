@@ -1,14 +1,10 @@
 """Deterministic content hashing for cache keys and incremental-build change detection."""
 
-import hashlib
+from common.hashing.content_hash import (
+    content_hash,
+    normalize_code,
+    normalize_text,
+    normalized_content_hash,
+)
 
-__all__ = ["content_hash"]
-
-
-def content_hash(content: str | bytes) -> str:
-    """Return the canonical hex digest used as ``content_hash`` across the platform.
-
-    Same input always yields the same digest; strings are UTF-8 encoded first.
-    """
-    data = content.encode("utf-8") if isinstance(content, str) else content
-    return hashlib.sha256(data).hexdigest()
+__all__ = ["content_hash", "normalize_code", "normalize_text", "normalized_content_hash"]
