@@ -1,0 +1,99 @@
+"""Request/response schemas for the context.* Context Broker tools.
+
+Schema-first per .claude/rules/mcp-tools.md: these models are the contract
+the PR-10 broker implements against; PR-09 registers them on stub tools.
+extra="forbid" plus required justification fields is what rejects a bare
+{"query": "..."} at the schema layer — the broker never sees it.
+"""
+
+from typing import Literal, Self
+
+from pydantic import Field, model_validator
+
+from contracts.mcp_schemas.base import McpModel
+from contracts.mcp_schemas.evidence import AgentRole, EvidenceCard
+
+
+class CreatePackRequest(McpModel):
+    run_id: str = Field(min_length=1)
+    task: str = Field(min_length=1)
+    approved_context_plan: str = Field(min_length=1)
+    retrieval_profile: str = Field(min_length=1)
+    budget_tokens: int = Field(ge=1)
+
+
+class CreatePackResponse(McpModel):
+    context_pack_id: str = Field(min_length=1)
+    kb_version: str = Field(min_length=1)
+    summary: str
+    evidence_cards: list[EvidenceCard]
+    open_questions: list[str]
+    budget_used_tokens: int = Field(ge=0)
+
+
+class ReadPackRequest(McpModel):
+    """Role-specific view of a pack.
+
+    `role` selects a *view* only. Authorization, ledger attribution, and
+    per-agent budget identity always come from the authenticated MCP session,
+    never from request fields — a spoofed role must not grant another role's
+    access.
+    """
+
+    context_pack_id: str = Field(min_length=1)
+    role: AgentRole
+
+
+class ReadPackResponse(McpModel):
+    context_pack_id: str = Field(min_length=1)
+    kb_version: str = Field(min_length=1)
+    role: AgentRole
+    summary: str
+    evidence_cards: list[EvidenceCard]
+    open_questions: list[str]
+    budget_remaining_tokens: int = Field(ge=0)
+
+
+RequestMoreStatus = Literal["reused", "approved", "denied", "needs_human_approval"]
+
+
+class RequestMoreRequest(McpModel):
+    context_pack_id: str = Field(min_length=1)
+    agent_name: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    why_needed: str = Field(min_length=1)
+    decision_needed: str = Field(min_length=1)
+    already_checked_evidence_ids: list[str]
+    max_tokens: int = Field(ge=1)
+
+
+class RequestMoreResponse(McpModel):
+    status: RequestMoreStatus
+    reused_evidence_ids: list[str]
+    new_evidence_cards: list[EvidenceCard]
+    tokens_returned: int = Field(ge=0)
+    budget_remaining_tokens: int = Field(ge=0)
+    denial_reason: str | None = None
+
+    @model_validator(mode="after")
+    def _denied_requires_reason(self) -> Self:
+        if self.status == "denied" and not self.denial_reason:
+            raise ValueError("denial_reason is required when status is 'denied'")
+        return self
+
+
+class OpenEvidenceRequest(McpModel):
+    context_pack_id: str = Field(min_length=1)
+    evidence_id: str = Field(min_length=1)
+    max_tokens: int = Field(ge=1)
+
+
+class OpenEvidenceResponse(McpModel):
+    evidence_id: str = Field(min_length=1)
+    level: Literal["L2", "L3"]
+    # named to keep the security rule visible in the contract: expanded text is
+    # retrieved content and must never change tool policy or instructions
+    untrusted_content: str
+    tokens_used: int = Field(ge=0)
+    budget_remaining_tokens: int = Field(ge=0)
+    source_uri: str | None = None
