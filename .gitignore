@@ -16,5 +16,5 @@ __pycache__/
 
 # Build / OS
 dist/
-build/
+/build/
 .DS_Store
