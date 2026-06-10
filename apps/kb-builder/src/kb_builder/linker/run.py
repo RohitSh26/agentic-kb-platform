@@ -1,25 +1,21 @@
 """Linker orchestration: load artifacts, deterministic pass, semantic fallback.
 
 Scans all non-deleted artifacts (not only this build's) because cache-hit
-artifacts keep their original kb_version. If the computed edge set is identical
-to the previous version's, the write is skipped entirely so nightly builds do
-not grow knowledge_edge by a full copy per night — matching graphify, where
-unchanged sources keep their previously written edges and kb_version records
-when an edge was created, not a serving filter.
+artifacts keep their original kb_version. The write pass reconciles the
+knowledge_edge table with the computed set — one row per logical link,
+refreshed in place and deleted when its evidence disappears — so nightly
+builds never accrete duplicate or stale linker edges.
 """
-
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.logging import get_logger
-from contracts.artifact_schemas import LinkEdgeDraft
-from db.models import KnowledgeArtifact, KnowledgeEdge, SourceItem
+from db.models import KnowledgeArtifact, SourceItem
 from kb_builder.linker.deterministic import find_deterministic_links
 from kb_builder.linker.records import LinkableArtifact
 from kb_builder.linker.semantic import SimilarityProvider, find_semantic_links
-from kb_builder.linker.write_edges import EDGE_SOURCE, write_link_edges
+from kb_builder.linker.write_edges import write_link_edges
 
 logger = get_logger("kb_builder.linker.run")
 
@@ -29,8 +25,8 @@ async def run_linker(
     *,
     kb_version: str,
     similarity: SimilarityProvider | None = None,
-) -> tuple[int, int]:
-    """Compute and persist linker edges; return (inserted, refreshed)."""
+) -> tuple[int, int, int]:
+    """Compute and persist linker edges; return (inserted, refreshed, deleted)."""
     artifacts = await _load_linkable_artifacts(session)
     drafts = find_deterministic_links(artifacts)
     if similarity is None:
@@ -44,8 +40,6 @@ async def run_linker(
         ]
         existing_pairs = {(d.from_artifact_id, d.to_artifact_id, str(d.edge_type)) for d in drafts}
         drafts += await find_semantic_links(similarity, unlinked, existing_pairs=existing_pairs)
-    if await _unchanged_since_previous_version(session, kb_version=kb_version, drafts=drafts):
-        return 0, 0
     return await write_link_edges(session, kb_version=kb_version, drafts=drafts)
 
 
@@ -62,39 +56,3 @@ async def _load_linkable_artifacts(session: AsyncSession) -> list[LinkableArtifa
         .where(SourceItem.is_deleted.is_(False))
     )
     return [LinkableArtifact(*row) for row in rows.tuples()]
-
-
-async def _unchanged_since_previous_version(
-    session: AsyncSession, *, kb_version: str, drafts: list[LinkEdgeDraft]
-) -> bool:
-    previous_version = (
-        await session.execute(
-            select(KnowledgeEdge.kb_version)
-            .where(KnowledgeEdge.source == EDGE_SOURCE, KnowledgeEdge.kb_version != kb_version)
-            .order_by(KnowledgeEdge.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if previous_version is None:
-        return False
-    rows = await session.execute(
-        select(
-            KnowledgeEdge.from_artifact_id,
-            KnowledgeEdge.to_artifact_id,
-            KnowledgeEdge.edge_type,
-            KnowledgeEdge.confidence,
-        ).where(KnowledgeEdge.source == EDGE_SOURCE, KnowledgeEdge.kb_version == previous_version)
-    )
-    previous: set[tuple[uuid.UUID, uuid.UUID, str, float | None]] = set(rows.tuples())
-    computed = {
-        (d.from_artifact_id, d.to_artifact_id, str(d.edge_type), d.confidence) for d in drafts
-    }
-    if previous != computed:
-        return False
-    logger.info(
-        "event=linker_edges_unchanged previous_kb_version=%s kb_version=%s count=%d",
-        previous_version,
-        kb_version,
-        len(computed),
-    )
-    return True

@@ -1,17 +1,19 @@
-"""Persist linker edges idempotently.
+"""Persist linker edges as one row per logical link.
 
-Inserts target the partial unique index uq_knowledge_edge_linker
-(from, to, edge_type, kb_version WHERE source='linker'), so a rerun within the
-same kb_version never duplicates an edge; a conflicting row instead refreshes
-its confidence (thresholds may have been retuned between retries). Edges below
-LOW_CONFIDENCE_THRESHOLD are written but flagged with a structured log so the
-eval harness can audit them — uncertain links are recorded as low confidence,
-never silently promoted to facts.
+Upserts target the partial unique index uq_knowledge_edge_linker
+(from, to, edge_type WHERE source='linker'): a rerun refreshes confidence and
+kb_version in place instead of accreting a copy per version, so graph queries
+never see duplicates. Linker edges absent from the computed set are deleted —
+their textual evidence is gone, and serving them would fabricate links
+(invariant 7). Edges below LOW_CONFIDENCE_THRESHOLD are written but flagged
+with a structured log so the eval harness can audit them — uncertain links are
+recorded as low confidence, never silently promoted to facts.
 """
 
+import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import text
+from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,8 +29,8 @@ LOW_CONFIDENCE_THRESHOLD = 0.9
 
 async def write_link_edges(
     session: AsyncSession, *, kb_version: str, drafts: Sequence[LinkEdgeDraft]
-) -> tuple[int, int]:
-    """Upsert one knowledge_edge row per draft; return (inserted, refreshed).
+) -> tuple[int, int, int]:
+    """Reconcile linker edges with the computed set; return (inserted, refreshed, deleted).
 
     Drafts must be unique on (from, to, edge_type) — the linker run dedupes —
     because a single INSERT cannot update the same conflicting row twice.
@@ -57,9 +59,9 @@ async def write_link_edges(
                 kb_version=kb_version,
             )
             .on_conflict_do_update(
-                index_elements=["from_artifact_id", "to_artifact_id", "edge_type", "kb_version"],
+                index_elements=["from_artifact_id", "to_artifact_id", "edge_type"],
                 index_where=text("source = 'linker'"),
-                set_={"confidence": draft.confidence},
+                set_={"confidence": draft.confidence, "kb_version": kb_version},
             )
             .returning(text("(xmax = 0)"))
         )
@@ -68,11 +70,43 @@ async def write_link_edges(
             inserted += 1
         else:
             refreshed += 1
+    deleted = await _delete_stale(session, drafts)
     await session.flush()
     logger.info(
-        "event=linker_edges_written kb_version=%s inserted=%d refreshed=%d",
+        "event=linker_edges_written kb_version=%s inserted=%d refreshed=%d deleted=%d",
         kb_version,
         inserted,
         refreshed,
+        deleted,
     )
-    return inserted, refreshed
+    return inserted, refreshed, deleted
+
+
+async def _delete_stale(session: AsyncSession, drafts: Sequence[LinkEdgeDraft]) -> int:
+    computed: set[tuple[uuid.UUID, uuid.UUID, str]] = {
+        (d.from_artifact_id, d.to_artifact_id, str(d.edge_type)) for d in drafts
+    }
+    rows = await session.execute(
+        select(
+            KnowledgeEdge.edge_id,
+            KnowledgeEdge.from_artifact_id,
+            KnowledgeEdge.to_artifact_id,
+            KnowledgeEdge.edge_type,
+        ).where(KnowledgeEdge.source == EDGE_SOURCE)
+    )
+    stale_ids: list[uuid.UUID] = []
+    for edge_id, from_id, to_id, edge_type in rows.tuples():
+        if (from_id, to_id, edge_type) in computed:
+            continue
+        stale_ids.append(edge_id)
+        logger.info(
+            "event=linker_edge_deleted reason=evidence_gone edge_id=%s from=%s to=%s edge_type=%s",
+            edge_id,
+            from_id,
+            to_id,
+            edge_type,
+        )
+    if not stale_ids:
+        return 0
+    await session.execute(delete(KnowledgeEdge).where(KnowledgeEdge.edge_id.in_(stale_ids)))
+    return len(stale_ids)

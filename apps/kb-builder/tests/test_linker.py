@@ -17,6 +17,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import func, select, text
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from db.models import KnowledgeArtifact, KnowledgeEdge, SourceItem
@@ -389,8 +390,8 @@ async def _linker_edge_count(session: AsyncSession) -> int:
 async def test_run_linker_completes_canonical_chain(session: AsyncSession) -> None:
     artifacts = await _seed_canonical_chain(session)
 
-    inserted, refreshed = await run_linker(session, kb_version="v-link.1")
-    assert (inserted, refreshed) == (3, 0)
+    inserted, refreshed, deleted = await run_linker(session, kb_version="v-link.1")
+    assert (inserted, refreshed, deleted) == (3, 0, 0)
 
     edges = await _edge_tuples(session)
     concept = artifacts["concept"].artifact_id
@@ -426,32 +427,47 @@ async def test_run_linker_completes_canonical_chain(session: AsyncSession) -> No
 
 @requires_db
 async def test_run_linker_rerun_same_version_is_idempotent(session: AsyncSession) -> None:
-    await _seed_canonical_chain(session)
+    artifacts = await _seed_canonical_chain(session)
 
     first = await run_linker(session, kb_version="v-link.1")
-    assert first == (3, 0)
+    assert first == (3, 0, 0)
     count_after_first = await _linker_edge_count(session)
 
-    inserted, _refreshed = await run_linker(session, kb_version="v-link.1")
-    assert inserted == 0  # never inserts duplicates
+    # a retuned confidence between retries is observably refreshed in place
+    await session.execute(
+        sa_update(KnowledgeEdge)
+        .where(
+            KnowledgeEdge.source == EDGE_SOURCE,
+            KnowledgeEdge.from_artifact_id == artifacts["symbol"].artifact_id,
+        )
+        .values(confidence=0.5)
+    )
+
+    inserted, refreshed, deleted = await run_linker(session, kb_version="v-link.1")
+    assert (inserted, refreshed, deleted) == (0, 3, 0)  # never inserts duplicates
     assert await _linker_edge_count(session) == count_after_first == 3
+    restored = (
+        await session.execute(
+            select(KnowledgeEdge.confidence).where(
+                KnowledgeEdge.source == EDGE_SOURCE,
+                KnowledgeEdge.from_artifact_id == artifacts["symbol"].artifact_id,
+            )
+        )
+    ).scalar_one()
+    assert restored == pytest.approx(IMPLEMENTS_CONFIDENCE)
 
 
 @requires_db
-async def test_run_linker_skips_write_when_set_unchanged(
-    session: AsyncSession, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_rerun_under_new_version_refreshes_in_place(session: AsyncSession) -> None:
     await _seed_canonical_chain(session)
     await run_linker(session, kb_version="v-link.1")
 
-    with caplog.at_level(logging.INFO, logger="kb_builder.linker.run"):
-        result = await run_linker(session, kb_version="v-link.2")
+    result = await run_linker(session, kb_version="v-link.2")
 
-    assert result == (0, 0)
-    assert any("event=linker_edges_unchanged" in r.getMessage() for r in caplog.records)
+    assert result == (0, 3, 0)  # one row per logical link — no copy per version
     edges = await _edge_tuples(session, source=EDGE_SOURCE)
-    assert all(kb_version == "v-link.1" for *_, kb_version in edges)
-    assert len(edges) == 3  # v-link.1 edges still served
+    assert len(edges) == 3
+    assert all(kb_version == "v-link.2" for *_, kb_version in edges)
 
 
 @requires_db
@@ -476,10 +492,11 @@ async def test_run_linker_writes_new_version_when_set_changes(session: AsyncSess
         body_text="def route_payment(self): ...",
     )
 
-    inserted, _refreshed = await run_linker(session, kb_version="v-link.3")
-    assert inserted > 0
+    inserted, refreshed, deleted = await run_linker(session, kb_version="v-link.3")
+    assert (inserted, refreshed, deleted) == (1, 3, 0)
 
     edges = await _edge_tuples(session, source=EDGE_SOURCE)
+    assert len(edges) == 4
     assert (
         new_symbol.artifact_id,
         new_concept.artifact_id,
@@ -487,14 +504,38 @@ async def test_run_linker_writes_new_version_when_set_changes(session: AsyncSess
         "linker",
         "v-link.3",
     ) in edges
-    # original edges from v-link.1 are untouched
+    # the original logical edge still exists exactly once, refreshed in place
     assert (
         artifacts["symbol"].artifact_id,
         artifacts["concept"].artifact_id,
         "implements",
         "linker",
-        "v-link.1",
+        "v-link.3",
     ) in edges
+
+
+@requires_db
+async def test_stale_edge_is_deleted_when_evidence_disappears(
+    session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    artifacts = await _seed_canonical_chain(session)
+    await run_linker(session, kb_version="v-link.1")
+    assert await _linker_edge_count(session) == 3
+
+    # the ADO card no longer mentions the concept: its requests edge is stale
+    await session.execute(
+        sa_update(KnowledgeArtifact)
+        .where(KnowledgeArtifact.artifact_id == artifacts["card_summary"].artifact_id)
+        .values(body_text="Feature request: ship personalization improvements.")
+    )
+
+    with caplog.at_level(logging.INFO, logger="kb_builder.linker.write_edges"):
+        inserted, refreshed, deleted = await run_linker(session, kb_version="v-link.2")
+
+    assert (inserted, refreshed, deleted) == (0, 2, 1)
+    assert any("event=linker_edge_deleted" in r.getMessage() for r in caplog.records)
+    edges = await _edge_tuples(session, source=EDGE_SOURCE)
+    assert {edge_type for _, _, edge_type, *_ in edges} == {"documents", "implements"}
 
 
 @requires_db
@@ -522,9 +563,11 @@ async def test_run_linker_semantic_edge_is_flagged_low_confidence(
     )
 
     with caplog.at_level(logging.WARNING, logger="kb_builder.linker.write_edges"):
-        inserted, refreshed = await run_linker(session, kb_version="v-sem.1", similarity=provider)
+        inserted, refreshed, deleted = await run_linker(
+            session, kb_version="v-sem.1", similarity=provider
+        )
 
-    assert (inserted, refreshed) == (1, 0)
+    assert (inserted, refreshed, deleted) == (1, 0, 0)
     assert provider.calls == [concept.artifact_id]  # no deterministic match, fallback used
     row = (
         await session.execute(select(KnowledgeEdge).where(KnowledgeEdge.source == EDGE_SOURCE))

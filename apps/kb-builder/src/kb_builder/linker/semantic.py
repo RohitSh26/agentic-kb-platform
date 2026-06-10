@@ -42,7 +42,11 @@ async def find_semantic_links(
     *,
     existing_pairs: set[tuple[uuid.UUID, uuid.UUID, str]],
 ) -> list[LinkEdgeDraft]:
-    """Propose implements(symbol -> concept) edges for unlinked concepts."""
+    """Propose implements(symbol -> concept) edges for unlinked concepts.
+
+    existing_pairs is mutated in place: accepted (from, to, edge_type) keys are
+    added so deterministic edges always win and no pair is proposed twice.
+    """
     drafts: list[LinkEdgeDraft] = []
     rejected = 0
     for concept in concepts:

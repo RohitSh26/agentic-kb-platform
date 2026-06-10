@@ -38,7 +38,6 @@ class KnowledgeEdge(Base):
             "from_artifact_id",
             "to_artifact_id",
             "edge_type",
-            "kb_version",
             unique=True,
             postgresql_where=text("source = 'linker'"),
         ),

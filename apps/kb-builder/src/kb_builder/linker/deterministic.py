@@ -4,11 +4,14 @@ Exact textual evidence only: a symbol's qualified name, a file path, an
 endpoint title, or a concept title appearing verbatim in another artifact's
 text. Anything weaker is left to the semantic pass — over-linking is the
 brief's explicit failure mode, so short or single-word titles that would match
-incidentally are excluded entirely.
+incidentally are excluded entirely. Patterns are compiled once per title (not
+per document pair) and guarded by substring prefilters, keeping the nightly
+docs x titles scan cheap.
 """
 
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from common.logging import get_logger
 from contracts.artifact_schemas import LinkEdgeDraft, LinkerEdgeType
@@ -30,16 +33,36 @@ MIN_CONCEPT_TITLE_CHARS = 6
 MIN_SYMBOL_TITLE_CHARS = 4
 
 
+@dataclass(frozen=True)
+class _Matcher:
+    artifact: LinkableArtifact
+    needle: str
+    pattern: re.Pattern[str]
+    casefold_prefilter: bool
+
+
 def find_deterministic_links(artifacts: Sequence[LinkableArtifact]) -> list[LinkEdgeDraft]:
-    concepts = [a for a in artifacts if a.artifact_type == "concept" and _eligible_concept(a)]
-    symbols = [
-        a
+    concept_matchers = [
+        _Matcher(a, a.title.lower(), _phrase_pattern(a.title), casefold_prefilter=True)
+        for a in artifacts
+        if a.artifact_type == "concept" and a.title is not None and _eligible_concept_title(a.title)
+    ]
+    symbol_matchers = [
+        _Matcher(a, a.title, _symbol_pattern(a.title), casefold_prefilter=False)
         for a in artifacts
         if a.artifact_type == "code_symbol"
         and a.title is not None
         and len(a.title) >= MIN_SYMBOL_TITLE_CHARS
     ]
-    code = [a for a in artifacts if a.artifact_type in CODE_ARTIFACT_TYPES]
+    code_matchers = symbol_matchers + [
+        # code_file titles are paths, endpoint titles are "METHOD /route"; both
+        # get boundary guards so "src/a/b.py" never matches inside "other/src/a/b.py".
+        _Matcher(a, a.title, _path_pattern(a.title), casefold_prefilter=False)
+        for a in artifacts
+        if a.artifact_type in CODE_ARTIFACT_TYPES
+        and a.artifact_type != "code_symbol"
+        and a.title is not None
+    ]
     docs = [
         a
         for a in artifacts
@@ -68,64 +91,57 @@ def find_deterministic_links(artifacts: Sequence[LinkableArtifact]) -> list[Link
             )
         )
 
-    for concept in concepts:
-        concept_text = _text_of(concept)
-        for symbol in symbols:
-            assert symbol.title is not None
-            if _contains_symbol(concept_text, symbol.title):
-                add(symbol, concept, "implements", IMPLEMENTS_CONFIDENCE)
+    for concept_matcher in concept_matchers:
+        concept = concept_matcher.artifact
+        concept_text = "\n".join(part for part in (concept.title, concept.body_text) if part)
+        for symbol_matcher in symbol_matchers:
+            if _matches(symbol_matcher, concept_text, concept_text.lower()):
+                add(symbol_matcher.artifact, concept, "implements", IMPLEMENTS_CONFIDENCE)
 
     for doc in docs:
-        assert doc.body_text is not None
+        body = doc.body_text or ""
+        body_lower = body.lower()
         edge_type: LinkerEdgeType = (
             "requests" if doc.source_type in CARD_SOURCE_TYPES else "documents"
         )
-        for concept in concepts:
-            assert concept.title is not None
-            if _contains_phrase(doc.body_text, concept.title):
-                add(doc, concept, edge_type, DOC_LINK_CONFIDENCE)
-        for target in code:
-            if target.title is None:
-                continue
-            if target.artifact_type == "code_symbol":
-                matched = len(target.title) >= MIN_SYMBOL_TITLE_CHARS and _contains_symbol(
-                    doc.body_text, target.title
-                )
-            else:
-                # code_file titles are paths, endpoint titles are "METHOD /route";
-                # both are distinctive enough for verbatim containment.
-                matched = target.title in doc.body_text
-            if matched:
-                add(doc, target, "mentions", DOC_LINK_CONFIDENCE)
+        for concept_matcher in concept_matchers:
+            if _matches(concept_matcher, body, body_lower):
+                add(doc, concept_matcher.artifact, edge_type, DOC_LINK_CONFIDENCE)
+        for code_matcher in code_matchers:
+            if _matches(code_matcher, body, body_lower):
+                add(doc, code_matcher.artifact, "mentions", DOC_LINK_CONFIDENCE)
 
     logger.info(
         "event=linker_deterministic_matched concepts=%d symbols=%d docs=%d edges=%d",
-        len(concepts),
-        len(symbols),
+        len(concept_matchers),
+        len(symbol_matchers),
         len(docs),
         len(drafts),
     )
     return drafts
 
 
-def _eligible_concept(artifact: LinkableArtifact) -> bool:
-    title = artifact.title
-    if title is None:
+def _matches(matcher: _Matcher, text: str, text_lower: str) -> bool:
+    # Substring prefilter: the regex only runs when the raw needle occurs at all.
+    haystack = text_lower if matcher.casefold_prefilter else text
+    if matcher.needle not in haystack:
         return False
+    return matcher.pattern.search(text) is not None
+
+
+def _eligible_concept_title(title: str) -> bool:
     return " " in title.strip() or len(title) >= MIN_CONCEPT_TITLE_CHARS
 
 
-def _text_of(artifact: LinkableArtifact) -> str:
-    return "\n".join(part for part in (artifact.title, artifact.body_text) if part)
-
-
-def _contains_symbol(text: str, qualified_name: str) -> bool:
+def _symbol_pattern(qualified_name: str) -> re.Pattern[str]:
     # Boundaries exclude identifier chars and dots so "get_user" never matches
     # inside "get_user_embedding" or "Service.get_user_embedding".
-    pattern = rf"(?<![\w.]){re.escape(qualified_name)}(?![\w])"
-    return re.search(pattern, text) is not None
+    return re.compile(rf"(?<![\w.]){re.escape(qualified_name)}(?![\w])")
 
 
-def _contains_phrase(text: str, phrase: str) -> bool:
-    pattern = rf"\b{re.escape(phrase)}\b"
-    return re.search(pattern, text, re.IGNORECASE) is not None
+def _phrase_pattern(phrase: str) -> re.Pattern[str]:
+    return re.compile(rf"\b{re.escape(phrase)}\b", re.IGNORECASE)
+
+
+def _path_pattern(title: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![\w/]){re.escape(title)}(?![\w/])")
