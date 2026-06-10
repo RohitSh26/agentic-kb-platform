@@ -19,6 +19,8 @@ class RetrievalEvent(Base):
     context_pack_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     agent_name: Mapped[str] = mapped_column(Text, nullable=False)
     tool_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # broker outcome: approved / reused / denied / needs_human_approval
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'approved'"))
     query_text: Mapped[str | None] = mapped_column(Text)
     normalized_query: Mapped[str | None] = mapped_column(Text)
     retrieval_profile: Mapped[str | None] = mapped_column(Text)

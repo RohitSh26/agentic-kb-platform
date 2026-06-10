@@ -23,7 +23,7 @@ L2+ through `context.open_evidence` with a budget.
 
 | Field | Type | Notes |
 |---|---|---|
-| `evidence_id` | string | the citable handle; stable within a pack |
+| `evidence_id` | string | the citable handle; stable within a pack (V1: the artifact UUID as a string) |
 | `artifact_id` | UUID | provenance into the registry |
 | `level` | "L0" \| "L1" | |
 | `card_type` | string | concept / summary / chunk / fact / code_symbol … |

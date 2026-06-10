@@ -42,7 +42,7 @@ and the migrations. Summary:
 | `generation_cache` / `generation_cache_artifact` | Cache key ⇒ generated outputs ⇒ produced artifacts. | kb-builder |
 | `embedding_cache` | Embedding call gate, keyed `(artifact_id, text_hash, embedding_model)`. The vector itself is stored as a float array (`ARRAY(double precision)` — no pgvector in V1), so the Search index rebuilds without re-embedding. | kb-builder |
 | `kb_build_run` | One row per nightly build: `kb_version`, `status` (`running`/`completed`/`failed`/`validation_failed`/`active`/`superseded`), counters, timestamps. | kb-builder |
-| `retrieval_event` | Ledger: one row per MCP retrieval call — `run_id`, `context_pack_id`, `agent_name`, `tool_name`, `query_text`/`normalized_query`, `retrieval_profile`, `kb_version`, `source_filters`, `returned_artifact_ids`, `reused_evidence_ids`, `new_evidence_ids`, `cache_hit`, `semantic_reuse`, `tokens_returned`, `latency_ms`, `created_at`. | **mcp-server** |
+| `retrieval_event` | Ledger: one row per MCP retrieval call — `run_id`, `context_pack_id`, `agent_name`, `tool_name`, `status`, `query_text`/`normalized_query`, `retrieval_profile`, `kb_version`, `source_filters`, `returned_artifact_ids`, `reused_evidence_ids`, `new_evidence_ids`, `cache_hit`, `semantic_reuse`, `tokens_returned`, `latency_ms`, `created_at`. | **mcp-server** |
 
 ## Columns mcp-server depends on (pinned by its contract tests)
 
@@ -52,8 +52,10 @@ and the migrations. Summary:
 
 `ledger.list_retrievals` (see `mcp-tools-contract.md`) maps its response from this
 table: `tool` ← `tool_name`, `evidence_ids` ← `reused_evidence_ids` ∪
-`new_evidence_ids`. The record's `status` field has **no backing column yet** —
-PR-10 must add it via a kb-builder migration (and update this document) before
-the broker can write it.
+`new_evidence_ids`, `status` ← `status` (text, NOT NULL, server default
+`'approved'`; added by kb-builder migration 0007 — values are the broker's
+outcome statuses, e.g. `approved`/`reused`/`denied`/`needs_human_approval`).
+Evidence ids are artifact UUIDs rendered as strings in V1, which is why the
+`*_evidence_ids` columns are UUID arrays.
 
 Renaming or retyping these requires a coordinated change in both services.
