@@ -12,7 +12,6 @@ from kb_builder.build.cache import (
 )
 from kb_builder.build.runner import (
     BuildRunner,
-    EdgeDraft,
     Embedder,
     Graphifier,
     SearchIndexer,
@@ -21,7 +20,6 @@ from kb_builder.build.runner import (
 
 __all__ = [
     "BuildRunner",
-    "EdgeDraft",
     "Embedder",
     "EmbeddingCacheGate",
     "GenerationCacheGate",

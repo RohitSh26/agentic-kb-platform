@@ -69,13 +69,21 @@ source_item(source_id PK, source_type, source_uri, source_version, repo?, branch
             external_id?, content_hash NOT NULL, last_seen_at, is_deleted=false, created_at, updated_at)
 
 knowledge_artifact(artifact_id PK, artifact_type, source_id FK, title, body_text, content_hash,
-                   artifact_hash, kb_version, authority_score, freshness_score, created_at, updated_at)
+                   artifact_hash, kb_version, knowledge_kind?, authority_score, freshness_score,
+                   span_start?, span_end?, created_at, updated_at)
+                   -- span_*: 1-based inclusive line span for code artifacts; the file path comes
+                   -- from source_id -> source_item.path
 
 knowledge_edge(edge_id PK, from_artifact_id FK, to_artifact_id FK, edge_type, confidence, source,
                kb_version, created_at)
 
 generation_cache(cache_key PK, input_hash, prompt_version, model_name, model_params_hash,
                  output_schema_version, output_artifact_id FK, created_at)
+
+generation_cache_artifact(cache_key FK, artifact_id FK, position, created_at,
+                          PRIMARY KEY(cache_key, artifact_id))
+                          -- source of truth for cache-hit output sets, ordered by position;
+                          -- generation_cache.output_artifact_id is a denormalized copy of position 0
 
 embedding_cache(artifact_id FK, text_hash, embedding_model, embedding_hash, azure_search_doc_id,
                 created_at, PRIMARY KEY(artifact_id, text_hash, embedding_model))
