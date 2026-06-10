@@ -172,6 +172,19 @@ class EmbeddingCacheGate:
         self, *, artifact_id: uuid.UUID, text_hash: str, embedding_model: str
     ) -> EmbeddingCache | None:
         hit = await self._session.get(EmbeddingCache, (artifact_id, text_hash, embedding_model))
+        if hit is not None and hit.embedding is None:
+            # A row without its vector (pre-0006) cannot serve an index rebuild;
+            # treat it as a miss so the vector is backfilled exactly once.
+            # Expunge the stale instance so post-backfill reads in this session
+            # see the stored vector instead of the identity-map copy.
+            logger.info(
+                "event=embedding_cache_vectorless_row artifact_id=%s text_hash=%s model=%s",
+                artifact_id,
+                text_hash,
+                embedding_model,
+            )
+            self._session.expunge(hit)
+            hit = None
         logger.info(
             "event=embedding_cache_lookup artifact_id=%s text_hash=%s model=%s hit=%s",
             artifact_id,
@@ -188,19 +201,29 @@ class EmbeddingCacheGate:
         text_hash: str,
         embedding_model: str,
         embedding_hash: str,
+        embedding: list[float] | None = None,
         azure_search_doc_id: str | None = None,
     ) -> None:
-        statement = (
-            insert(EmbeddingCache)
-            .values(
-                artifact_id=artifact_id,
-                text_hash=text_hash,
-                embedding_model=embedding_model,
-                embedding_hash=embedding_hash,
-                azure_search_doc_id=azure_search_doc_id,
-            )
-            .on_conflict_do_nothing(index_elements=["artifact_id", "text_hash", "embedding_model"])
+        key = ["artifact_id", "text_hash", "embedding_model"]
+        base = insert(EmbeddingCache).values(
+            artifact_id=artifact_id,
+            text_hash=text_hash,
+            embedding_model=embedding_model,
+            embedding_hash=embedding_hash,
+            embedding=embedding,
+            azure_search_doc_id=azure_search_doc_id,
         )
+        # A vector-bearing record backfills a pre-existing vectorless row
+        # (hash + vector updated together so they never diverge); a vectorless
+        # record never touches an existing row, and azure_search_doc_id is
+        # never overwritten on conflict.
+        if embedding is not None:
+            statement = base.on_conflict_do_update(
+                index_elements=key,
+                set_={"embedding_hash": embedding_hash, "embedding": embedding},
+            )
+        else:
+            statement = base.on_conflict_do_nothing(index_elements=key)
         await self._session.execute(statement)
         logger.info(
             "event=embedding_cache_record artifact_id=%s text_hash=%s model=%s",

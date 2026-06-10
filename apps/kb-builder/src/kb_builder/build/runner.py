@@ -1,8 +1,9 @@
 """Incremental build runner — the 8-step algorithm from docs/architecture §7.
 
 Unchanged content_hash => chunk/wikify/graphify/embed/index are all skipped.
-Wikify (kb_builder.wikify) and the graphify adapter (kb_builder.graphify_adapter)
-are real; Embed/Index remain Protocols until PR-08. Every model-shaped call is
+Wikify (kb_builder.wikify), the graphify adapter (kb_builder.graphify_adapter),
+and the search indexer (kb_builder.indexer) are real; the embedding backend
+remains a Protocol until the Azure OpenAI client lands. Every model-shaped call is
 gated by a cache lookup so a hit never reaches the model. Generation-cache rows
 are recorded in the same transaction as their output artifacts, after the
 artifacts are persisted, so a crash between generate and cache can never strand
@@ -63,16 +64,27 @@ class Graphifier(Protocol):
     async def graphify(self, content: NormalizedContent) -> GraphifyResult: ...
 
 
+@dataclass(frozen=True)
+class EmbeddingResult:
+    """The vector is persisted in embedding_cache so the Search index stays
+    rebuildable from Postgres without re-embedding (invariant 1/4)."""
+
+    embedding_hash: str
+    vector: list[float]
+
+
 class Embedder(Protocol):
     embedding_model: str
 
-    async def embed(self, text: str) -> str:
-        """Return the embedding_hash for the text."""
-        ...
+    async def embed(self, text: str) -> EmbeddingResult: ...
 
 
 class SearchIndexer(Protocol):
     async def upsert_documents(self, artifact_ids: Sequence[uuid.UUID]) -> int: ...
+
+    async def delete_orphaned(self) -> int:
+        """Remove index docs whose artifact left the registry; returns count."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -160,6 +172,15 @@ class BuildRunner:
             await run_linker(
                 self._session, kb_version=self._kb_version, similarity=self._similarity
             )
+            # reconcile the index before validation can run against it, so an
+            # orphaned doc can never permanently block activation (invariant 5)
+            orphans_removed = await self._indexer.delete_orphaned()
+            if orphans_removed:
+                logger.info(
+                    "event=build_index_orphans_removed build_id=%s count=%d",
+                    build_id,
+                    orphans_removed,
+                )
             await self._finish_run(build_id, counters, status="completed")
             await self._session.commit()
         except Exception as error:
@@ -412,11 +433,12 @@ class BuildRunner:
         )
         if hit is not None:
             return
-        embedding_hash = await self._embedder.embed(artifact.body_text)
+        result = await self._embedder.embed(artifact.body_text)
         counters.embedding_calls += 1
         await self._embedding_gate.record(
             artifact_id=artifact_id,
             text_hash=text_hash,
             embedding_model=self._embedder.embedding_model,
-            embedding_hash=embedding_hash,
+            embedding_hash=result.embedding_hash,
+            embedding=result.vector,
         )
