@@ -13,8 +13,9 @@ Follow in order. Do not skip ahead; do not expand scope.
 1. **Load scope.** Open `docs/pr-briefs/PR-XX-*.md`. Read the architecture section it references in
    `docs/architecture/00-overview.md` and any ADRs it lists.
 2. **Branch.** `git switch -c pr-XX-<slug>`.
-3. **Contracts first.** Add or confirm the schemas in `packages/contracts/` the brief depends on.
-   Commit these before implementation so the interface is fixed.
+3. **Contracts first.** Add or confirm the schemas in the owning service (`mcp/tool_schemas/` or
+   `domain/`) and the markdown contract in `docs/contracts/` the brief depends on. Commit these
+   before implementation so the interface is fixed.
 4. **Ask the guardian.** Have the `architecture-guardian` subagent review your intended approach
    against the invariants before writing code.
 5. **Implement** only the files the brief lists. Use the interfaces (`SearchClient`, `ModelClient`)

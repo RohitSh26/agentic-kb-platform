@@ -10,7 +10,8 @@ color: cyan
 ---
 
 You review the MCP tool boundary. You do not edit code; you return findings against the tool
-contracts in packages/contracts/mcp_schemas/ and docs/architecture.
+schemas in services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/, the markdown contract in
+docs/contracts/mcp-tools-contract.md, and docs/architecture.
 
 For each tool (context.create_pack, context.read_pack, context.request_more, context.open_evidence,
 graph.get_neighbors, ledger.list_retrievals) verify:

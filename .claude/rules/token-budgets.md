@@ -1,4 +1,4 @@
-# Rule: Token budgets (apps/mcp-server, evals)
+# Rule: Token budgets (services/mcp-server, evals)
 
 Default V1 budgets (tune with logs, record changes in an ADR if structural):
 

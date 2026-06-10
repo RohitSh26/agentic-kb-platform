@@ -1,4 +1,4 @@
-# Rule: Connectors + incremental build (apps/kb-builder/src/connectors)
+# Rule: Connectors + incremental build (services/kb-builder/src/agentic_kb_builder/connectors)
 
 - Connectors are deterministic: same source state ⇒ same normalized content ⇒ same content_hash.
 - Sources: github_code (commit SHA), github_doc (commit SHA), azure_wiki (page id+revision),

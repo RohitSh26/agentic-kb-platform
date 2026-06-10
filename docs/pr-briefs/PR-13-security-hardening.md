@@ -8,9 +8,10 @@ handling, and audit logging.
 docs/architecture §12, §14. .claude/agents/security-auditor. ADR-0001.
 
 ## Files to create / change
-- `apps/mcp-server/src/auth/rbac.py` (filter retrieval by requester authorization BEFORE returning).
-- `src/context_broker/untrusted.py` (wrap + mark retrieved content; injection detection).
-- `src/telemetry/audit.py` (log every context expansion + source access).
+- `services/mcp-server/src/agentic_mcp_server/auth/rbac.py` (filter retrieval by requester
+  authorization BEFORE returning).
+- `context_broker/untrusted.py` (wrap + mark retrieved content; injection detection).
+- `telemetry/audit.py` (log every context expansion + source access).
 - infra: managed identity bindings; Key Vault only where managed identity can't be used.
 
 ## Contracts

@@ -10,8 +10,8 @@ docs/architecture §8–10. ADR-0005. .claude/rules/{mcp-tools,token-budgets}.md
 skill.
 
 ## Files to create
-- `apps/mcp-server/src/context_broker/{pack.py,request_more.py,evidence.py,budgets.py,dedupe.py}`.
-- `src/context_broker/graph.py`, `src/context_broker/ledger.py`.
+- `services/mcp-server/src/agentic_mcp_server/context_broker/{pack.py,request_more.py,evidence.py,budgets.py,dedupe.py}`.
+- `context_broker/graph.py`, `context_broker/ledger.py`.
 
 ## Contracts
 Exact tool I/O per docs/architecture §8; request_more rejects bare {"query": "..."}; statuses

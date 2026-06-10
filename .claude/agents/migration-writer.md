@@ -8,7 +8,9 @@ model: claude-fable-5
 color: green
 ---
 
-You write database migrations for the Knowledge Registry (packages/db).
+You write database migrations for the Knowledge Registry. kb-builder owns the schema: models live
+in services/kb-builder/src/agentic_kb_builder/infrastructure/postgres/models/ and Alembic
+migrations in services/kb-builder/migrations/ (run alembic from services/kb-builder).
 
 Requirements for every migration:
 - Generate with `alembic revision --autogenerate -m "<scope>"`, then HAND-EDIT to be correct and
