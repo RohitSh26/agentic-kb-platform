@@ -188,6 +188,7 @@ class EmbeddingCacheGate:
         text_hash: str,
         embedding_model: str,
         embedding_hash: str,
+        embedding: list[float] | None = None,
         azure_search_doc_id: str | None = None,
     ) -> None:
         statement = (
@@ -197,6 +198,7 @@ class EmbeddingCacheGate:
                 text_hash=text_hash,
                 embedding_model=embedding_model,
                 embedding_hash=embedding_hash,
+                embedding=embedding,
                 azure_search_doc_id=azure_search_doc_id,
             )
             .on_conflict_do_nothing(index_elements=["artifact_id", "text_hash", "embedding_model"])

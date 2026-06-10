@@ -13,6 +13,7 @@ from kb_builder.build.cache import (
 from kb_builder.build.runner import (
     BuildRunner,
     Embedder,
+    EmbeddingResult,
     Graphifier,
     SearchIndexer,
     Wikifier,
@@ -22,6 +23,7 @@ __all__ = [
     "BuildRunner",
     "Embedder",
     "EmbeddingCacheGate",
+    "EmbeddingResult",
     "GenerationCacheGate",
     "Graphifier",
     "SearchIndexer",

@@ -34,6 +34,7 @@ from contracts.artifact_schemas import (
     WikifyGeneration,
 )
 from db.models import (
+    EmbeddingCache,
     GenerationCache,
     GenerationCacheArtifact,
     KbBuildRun,
@@ -43,6 +44,7 @@ from db.models import (
 )
 from kb_builder.build import (
     BuildRunner,
+    EmbeddingResult,
     GenerationCacheGate,
     activate_kb_version,
     chunk_summary_cache_key,
@@ -215,20 +217,25 @@ class SpyEmbedder:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def embed(self, text: str) -> str:
+    async def embed(self, text: str) -> EmbeddingResult:
         self.calls += 1
-        return "emb-" + content_hash(text)[:12]
+        return EmbeddingResult(embedding_hash="emb-" + content_hash(text)[:12], vector=[0.5, 0.25])
 
 
 class SpyIndexer:
     def __init__(self) -> None:
         self.calls = 0
         self.received: list[uuid.UUID] = []
+        self.delete_orphaned_calls = 0
 
     async def upsert_documents(self, artifact_ids: Sequence[uuid.UUID]) -> int:
         self.calls += 1
         self.received.extend(artifact_ids)
         return len(artifact_ids)
+
+    async def delete_orphaned(self) -> int:
+        self.delete_orphaned_calls += 1
+        return 0
 
 
 URI = "https://github.com/o/r/blob/sha1/a.py"
@@ -296,6 +303,19 @@ async def test_first_build_processes_then_unchanged_build_skips_everything(
     # but the skip path still refreshes last_seen_at for deletion sweeps
     seen_after = (await session.execute(select(SourceItem.last_seen_at))).scalar_one()
     assert seen_after is not None and seen_after > seen_before
+
+
+@requires_db
+async def test_embedding_vector_persisted_and_orphan_sweep_runs(session: AsyncSession) -> None:
+    """The vector lands in embedding_cache (index rebuildable without
+    re-embedding) and every successful run reconciles index orphans."""
+    runner, *_, indexer = _runner(session)
+    await runner.run([_connector("x = 1\n")])
+    await session.commit()
+
+    rows = (await session.execute(select(EmbeddingCache))).scalars().all()
+    assert rows and all(row.embedding == [0.5, 0.25] for row in rows)
+    assert indexer.delete_orphaned_calls == 1
 
 
 @requires_db
