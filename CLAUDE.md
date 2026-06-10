@@ -46,7 +46,8 @@ If a task seems to need one of these, stop and write an ADR proposing it (see `/
 - **DB access / migrations**: SQLAlchemy 2.x (async, `asyncpg`) + **Alembic**.
 - **Search**: `azure-search-documents` behind a `SearchClient` interface (never called directly by tools).
 - **Models/embeddings**: Azure OpenAI behind a thin `ModelClient` interface.
-- **Lint/format**: `ruff`. **Types**: `pyright` (strict on `packages/`). **Tests**: `pytest` + `pytest-asyncio`.
+- **Lint/format**: `ruff`. **Types**: `pyright` (strict on each service's `domain`, `infrastructure`,
+  and tool-schema packages). **Tests**: `pytest` + `pytest-asyncio`.
 - **CI / nightly build**: GitHub Actions.
 
 The blueprint is implementation-agnostic; these are the V1 choices recorded in `docs/adr/0006-stack.md`.
@@ -54,16 +55,21 @@ The blueprint is implementation-agnostic; these are the V1 choices recorded in `
 ## Repo map
 
 ```
-apps/mcp-server      Remote MCP server + Context Broker (runtime plane)
-apps/kb-builder      Nightly incremental build (build plane): connectors, wikify, graphify, linker, indexer
-packages/contracts   MCP schemas, artifact schemas, agent output schemas (shared, the contract boundary)
-packages/db          Alembic migrations + SQLAlchemy models (the Knowledge Registry)
-packages/common      hashing, logging, token_budgeting
+services/kb-builder  Self-contained build plane: connectors, wikify, graphify, linker, indexing.
+                     OWNS the Postgres schema — Alembic migrations live here (migrations/).
+services/mcp-server  Self-contained runtime plane: MCP Context Broker, auth, telemetry, tool
+                     schemas, health. NEVER runs migrations or build-plane code.
+docs/contracts/      Markdown cross-service contracts — the ONLY thing the services share.
+                     No shared Python packages; duplicate small DTOs instead.
 agents/              PRODUCT runtime agent manifests (orchestrator + subagents the MCP runtime serves)
 docs/                architecture, ADRs, PR briefs, contracts, runbooks
 evals/               retrieval_cases + agent_task_cases (build the eval set before expanding autonomy)
 infra/               Bicep/Terraform for the lean Azure footprint
 ```
+
+> Each service is its own `uv` project (pyproject, uv.lock, Dockerfile, tests/{unit,integration,
+> contract}). Services never import each other or root-level packages — import-boundary contract
+> tests fail on violations. See `docs/adr/0008-self-contained-services.md`.
 
 > Two distinct agent layers — do not confuse them:
 > - **`.claude/agents/`** = Claude Code *build* subagents that help us write this platform.
@@ -73,8 +79,9 @@ infra/               Bicep/Terraform for the lean Azure footprint
 
 - **One PR at a time.** Pick the next brief in `docs/pr-briefs/`, implement only its scope. Never
   "build the whole platform." Use `/next-pr` to load the next brief.
-- **Contracts before code.** For any MCP tool or build artifact, write/confirm the schema in
-  `packages/contracts/` first, then implement against it.
+- **Contracts before code.** For any MCP tool or build artifact, write/confirm the schema in the
+  owning service (`mcp/tool_schemas/` or `domain/`) and the markdown contract in `docs/contracts/`
+  first, then implement against it.
 - **Tests ship in the same PR.** Especially budget, dedupe, cache-hit, and evidence-expansion tests
   for retrieval — not just happy-path search.
 - **Migrations are forward + rollback.** Every schema change is an Alembic revision with a downgrade
@@ -89,10 +96,10 @@ infra/               Bicep/Terraform for the lean Azure footprint
 
 When working in the matching area, the relevant rule file applies:
 
-- @.claude/rules/postgres.md — Knowledge Registry & storage ownership (`packages/db`, `apps/kb-builder`)
-- @.claude/rules/mcp-tools.md — Context Broker tool boundary (`apps/mcp-server`, contracts)
-- @.claude/rules/token-budgets.md — budget numbers (`apps/mcp-server`, `evals`)
-- @.claude/rules/connectors.md — connectors & incremental build (`apps/kb-builder`)
+- @.claude/rules/postgres.md — Knowledge Registry & storage ownership (`services/kb-builder`)
+- @.claude/rules/mcp-tools.md — Context Broker tool boundary (`services/mcp-server`)
+- @.claude/rules/token-budgets.md — budget numbers (`services/mcp-server`, `evals`)
+- @.claude/rules/connectors.md — connectors & incremental build (`services/kb-builder`)
 - @.claude/rules/python.md — Python style & stack (all `src/`)
 
 ## Definition of done (per PR)
