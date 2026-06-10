@@ -11,7 +11,8 @@ class SourceRef(ArtifactModel):
     """Identity of one source item; mirrors the source_item registry columns.
 
     source_version semantics per connector: github_code/github_doc = commit SHA,
-    azure_wiki = page id + revision, ado_card = revision.
+    azure_wiki = page revision (page id goes in external_id, never concatenated),
+    ado_card = revision.
     """
 
     source_type: SourceType
