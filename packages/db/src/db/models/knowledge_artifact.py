@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Text, text
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,6 +28,10 @@ class KnowledgeArtifact(Base):
     knowledge_kind: Mapped[str | None] = mapped_column(Text)
     authority_score: Mapped[float | None] = mapped_column(Float)
     freshness_score: Mapped[float | None] = mapped_column(Float)
+    # 1-based inclusive line span for code artifacts (path comes via source_id ->
+    # source_item.path); lets L2 evidence return precise snippets at a source version.
+    span_start: Mapped[int | None] = mapped_column(Integer)
+    span_end: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

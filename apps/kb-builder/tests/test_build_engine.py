@@ -20,7 +20,14 @@ from common.hashing import content_hash
 from contracts.artifact_schemas import (
     Chunk,
     ConceptDraft,
+    FileGraph,
+    GraphifyResult,
     NormalizedContent,
+    ParsedCall,
+    ParsedEndpoint,
+    ParsedImport,
+    ParsedSymbol,
+    ParsedTest,
     SourceBackedFactDraft,
     SourceRef,
     WikifyArtifactDraft,
@@ -36,7 +43,6 @@ from db.models import (
 )
 from kb_builder.build import (
     BuildRunner,
-    EdgeDraft,
     GenerationCacheGate,
     activate_kb_version,
     chunk_summary_cache_key,
@@ -45,6 +51,7 @@ from kb_builder.build import (
     get_active_kb_version,
 )
 from kb_builder.connectors import GitHubCodeConnector
+from kb_builder.graphify_adapter import file_graph_to_artifacts, file_graph_to_edges
 from kb_builder.wikify import WikifyGenerator
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
@@ -183,24 +190,23 @@ class FailingWikifier(SpyWikifier):
 
 
 class SpyGraphifier:
+    """Runs the real adapter over a tiny fixed graph: code_file + one symbol
+    spanning line 1, plus one self-referential calls edge."""
+
     def __init__(self) -> None:
         self.calls = 0
 
-    async def graphify(
-        self, content: NormalizedContent, artifact_ids: Sequence[uuid.UUID]
-    ) -> Sequence[EdgeDraft]:
+    async def graphify(self, content: NormalizedContent) -> GraphifyResult:
         self.calls += 1
-        if not artifact_ids:
-            return []
-        return [
-            EdgeDraft(
-                from_artifact_id=artifact_ids[0],
-                to_artifact_id=artifact_ids[0],
-                edge_type="defined_in",
-                confidence=1.0,
-                source="graphify",
-            )
-        ]
+        graph = FileGraph(
+            path=content.source.path or "",
+            symbols=(ParsedSymbol(name="f", kind="function", span_start=1, span_end=1),),
+            calls=(ParsedCall(from_symbol="f", to_symbol="f"),),
+        )
+        return GraphifyResult(
+            artifacts=file_graph_to_artifacts(graph, file_text=content.text),
+            edges=file_graph_to_edges(graph),
+        )
 
 
 class SpyEmbedder:
@@ -217,9 +223,11 @@ class SpyEmbedder:
 class SpyIndexer:
     def __init__(self) -> None:
         self.calls = 0
+        self.received: list[uuid.UUID] = []
 
     async def upsert_documents(self, artifact_ids: Sequence[uuid.UUID]) -> int:
         self.calls += 1
+        self.received.extend(artifact_ids)
         return len(artifact_ids)
 
 
@@ -269,8 +277,9 @@ async def test_first_build_processes_then_unchanged_build_skips_everything(
     assert run1.sources_seen == 1
     assert run1.sources_changed == 1
     assert run1.llm_calls == 1
-    assert run1.embedding_calls == 1
-    assert (wikifier.calls, graphifier.calls, embedder.calls, indexer.calls) == (1, 1, 1, 1)
+    # summary body + code_symbol snippet are embedded; code_file is pointer-only
+    assert run1.embedding_calls == 2
+    assert (wikifier.calls, graphifier.calls, embedder.calls, indexer.calls) == (1, 1, 2, 1)
 
     seen_before = (await session.execute(select(SourceItem.last_seen_at))).scalar_one()
     assert seen_before is not None
@@ -334,7 +343,8 @@ async def test_cache_hit_prevents_model_calls_even_when_source_looks_changed(
     assert run2.embedding_calls == 0
     assert (wikifier2.calls, graphifier2.calls, embedder2.calls) == (0, 0, 0)
     assert indexer2.calls == 1  # reindexing reused artifacts is allowed
-    assert await _count(session, KnowledgeArtifact) == 1
+    # summary + code_file + code_symbol, and the calls edge — no duplicates on retry
+    assert await _count(session, KnowledgeArtifact) == 3
     assert await _count(session, KnowledgeEdge) == 1
 
 
@@ -403,11 +413,12 @@ async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
     )
     await runner.run([_connector("x = 1\n")])
     await session.commit()
-    assert await _count(session, KnowledgeArtifact) == 2
+    # 2 wikify concepts + 2 graphify code artifacts (code_file + code_symbol)
+    assert await _count(session, KnowledgeArtifact) == 4
     # one wikify cache row + one graphify cache row (github_code source)
     assert await _count(session, GenerationCache) == 2
-    assert await _count(session, GenerationCacheArtifact) == 2
-    # the mapping preserves generation order (ORDER BY position)
+    assert await _count(session, GenerationCacheArtifact) == 4
+    # the wikify mapping preserves generation order (ORDER BY position)
     mapped_titles = (
         (
             await session.execute(
@@ -416,6 +427,7 @@ async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
                     GenerationCacheArtifact,
                     GenerationCacheArtifact.artifact_id == KnowledgeArtifact.artifact_id,
                 )
+                .where(KnowledgeArtifact.artifact_type == "concept")
                 .order_by(GenerationCacheArtifact.position)
             )
         )
@@ -443,10 +455,10 @@ async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
     await session.commit()
     assert run2.llm_calls == 0
     assert wikifier2.calls == 0
-    assert embedder2.calls == 0  # embedding cache also hits for both artifacts
+    assert embedder2.calls == 0  # embedding cache also hits for every artifact
     assert indexer2.calls == 1
-    assert await _count(session, KnowledgeArtifact) == 2
-    assert await _count(session, GenerationCacheArtifact) == 2
+    assert await _count(session, KnowledgeArtifact) == 4
+    assert await _count(session, GenerationCacheArtifact) == 4
 
 
 @requires_db
@@ -526,8 +538,16 @@ async def test_wikify_pipeline_cache_miss_writes_then_cache_hit_skips_model(
 
     artifacts = (await session.execute(select(KnowledgeArtifact))).scalars().all()
     by_type = {artifact.artifact_type: artifact for artifact in artifacts}
-    # 1 chunk + summary + concept + the quote-backed fact; the invented fact is dropped
-    assert sorted(by_type) == ["chunk", "concept", "source_backed_fact", "summary"]
+    # wikify: 1 chunk + summary + concept + the quote-backed fact (the invented
+    # fact is dropped); graphify: code_file + code_symbol
+    assert sorted(by_type) == [
+        "chunk",
+        "code_file",
+        "code_symbol",
+        "concept",
+        "source_backed_fact",
+        "summary",
+    ]
     summary = by_type["summary"]
     assert summary.knowledge_kind == "interpreted"
     assert summary.authority_score is not None and summary.authority_score < 1.0
@@ -552,7 +572,298 @@ async def test_wikify_pipeline_cache_miss_writes_then_cache_hit_skips_model(
     await session.commit()
     assert model_client2.calls == 0
     assert run2.llm_calls == 0
-    assert await _count(session, KnowledgeArtifact) == 4
+    assert await _count(session, KnowledgeArtifact) == 6
+
+
+class FixtureGraphifier:
+    def __init__(self, graph: FileGraph) -> None:
+        self.calls = 0
+        self._graph = graph
+
+    async def graphify(self, content: NormalizedContent) -> GraphifyResult:
+        self.calls += 1
+        return GraphifyResult(
+            artifacts=file_graph_to_artifacts(self._graph, file_text=content.text),
+            edges=file_graph_to_edges(self._graph),
+        )
+
+
+@requires_db
+async def test_graphify_fixture_graph_creates_artifacts_and_edges(session: AsyncSession) -> None:
+    """PR-06 acceptance: a fixture graph becomes code artifacts with exact spans
+    and imports/calls/tests/exposed_as edges; cross-file targets resolve via DB
+    lookup; unresolvable targets drop the edge instead of fabricating a node."""
+    util_source = SourceItem(
+        source_type="github_code",
+        source_uri="https://github.com/o/r/blob/sha1/lib/util.py",
+        source_version="sha1",
+        repo="o/r",
+        path="lib/util.py",
+        content_hash="util-hash",
+    )
+    session.add(util_source)
+    await session.flush()
+    util_file = KnowledgeArtifact(
+        artifact_type="code_file",
+        source_id=util_source.source_id,
+        title="lib/util.py",
+        kb_version="v-test.0",
+        knowledge_kind="source_backed",
+    )
+    session.add(util_file)
+    await session.commit()
+
+    graph = FileGraph(
+        path="a.py",
+        symbols=(ParsedSymbol(name="get_user", kind="function", span_start=1, span_end=3),),
+        endpoints=(ParsedEndpoint(http_method="GET", route="/users/{id}", symbol="get_user"),),
+        tests=(ParsedTest(name="test_get_user", span_start=5, span_end=6, targets=("get_user",)),),
+        imports=(
+            ParsedImport(target_path="lib/util.py"),  # resolves to the pre-existing artifact
+            ParsedImport(target_path="lib/missing.py"),  # unresolved => dropped
+        ),
+        calls=(
+            # cross-file symbol that was never persisted => dropped
+            ParsedCall(from_symbol="get_user", to_symbol="lib/util.py::helper"),
+        ),
+    )
+    runner = BuildRunner(
+        session,
+        kb_version="v-test.1",
+        wikifier=SpyWikifier(),
+        graphifier=FixtureGraphifier(graph),
+        embedder=SpyEmbedder(),
+        indexer=SpyIndexer(),
+    )
+    await runner.run([_connector("line1\nline2\nline3\nline4\nline5\nline6\n")])
+    await session.commit()
+
+    rows = (
+        (
+            await session.execute(
+                select(KnowledgeArtifact).where(KnowledgeArtifact.kb_version == "v-test.1")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    artifacts = {(row.artifact_type, row.title): row for row in rows}
+    symbol = artifacts[("code_symbol", "get_user")]
+    assert (symbol.span_start, symbol.span_end) == (1, 3)
+    assert symbol.body_text == "line1\nline2\nline3"
+    assert symbol.knowledge_kind == "source_backed"
+    test_artifact = artifacts[("test", "test_get_user")]
+    assert (test_artifact.span_start, test_artifact.span_end) == (5, 6)
+    assert test_artifact.body_text == "line5\nline6"
+    endpoint = artifacts[("endpoint", "GET /users/{id}")]
+    assert endpoint.body_text is None and endpoint.span_start is None
+    assert artifacts[("code_file", "a.py")].body_text is None
+
+    edges = (await session.execute(select(KnowledgeEdge))).scalars().all()
+    by_type = {edge.edge_type: edge for edge in edges}
+    assert sorted(by_type) == ["exposed_as", "imports", "tests"]  # dropped edges absent
+    assert all(edge.source == "graphify" and edge.kb_version == "v-test.1" for edge in edges)
+    assert by_type["imports"].to_artifact_id == util_file.artifact_id
+    assert by_type["imports"].confidence == 1.0
+    assert by_type["exposed_as"].from_artifact_id == symbol.artifact_id
+    assert by_type["exposed_as"].to_artifact_id == endpoint.artifact_id
+    assert by_type["tests"].from_artifact_id == test_artifact.artifact_id
+    assert by_type["tests"].to_artifact_id == symbol.artifact_id
+
+
+class MultiFileGraphifier:
+    def __init__(self, graphs: dict[tuple[str | None, str | None], FileGraph]) -> None:
+        self.calls = 0
+        self._graphs = graphs
+
+    async def graphify(self, content: NormalizedContent) -> GraphifyResult:
+        self.calls += 1
+        graph = self._graphs[(content.source.repo, content.source.path)]
+        return GraphifyResult(
+            artifacts=file_graph_to_artifacts(graph, file_text=content.text),
+            edges=file_graph_to_edges(graph),
+        )
+
+
+@requires_db
+async def test_cross_file_edges_resolve_within_one_build_regardless_of_order(
+    session: AsyncSession,
+) -> None:
+    """a2.py imports b.py and both change in the same build, with a2.py processed
+    first. Because edges resolve in one end-of-run pass, the edge must bind to
+    b.py's THIS-build artifact — not the stale one from a previous build."""
+    b_uri = "https://github.com/o/r/blob/sha1/b.py"
+    old_b_source = SourceItem(
+        source_type="github_code",
+        source_uri=b_uri,
+        source_version="sha0",
+        repo="o/r",
+        path="b.py",
+        content_hash="old-b",
+    )
+    session.add(old_b_source)
+    await session.flush()
+    old_b_file = KnowledgeArtifact(
+        artifact_type="code_file",
+        source_id=old_b_source.source_id,
+        title="b.py",
+        kb_version="v-test.0",
+        knowledge_kind="source_backed",
+    )
+    session.add(old_b_file)
+    await session.commit()
+
+    a_uri = "https://github.com/o/r/blob/sha1/a2.py"
+    a_ref = SourceRef(
+        source_type="github_code",
+        source_uri=a_uri,
+        source_version="sha1",
+        repo="o/r",
+        path="a2.py",
+    )
+    b_ref = SourceRef(
+        source_type="github_code",
+        source_uri=b_uri,
+        source_version="sha1",
+        repo="o/r",
+        path="b.py",
+    )
+    graphs: dict[tuple[str | None, str | None], FileGraph] = {
+        ("o/r", "a2.py"): FileGraph(path="a2.py", imports=(ParsedImport(target_path="b.py"),)),
+        ("o/r", "b.py"): FileGraph(path="b.py"),
+    }
+    connector = GitHubCodeConnector(
+        FakeBackend([a_ref, b_ref], {a_uri: "import b\n", b_uri: "x = 2\n"})
+    )
+    runner = BuildRunner(
+        session,
+        kb_version="v-test.1",
+        wikifier=SpyWikifier(),
+        graphifier=MultiFileGraphifier(graphs),
+        embedder=SpyEmbedder(),
+        indexer=SpyIndexer(),
+    )
+    await runner.run([connector])
+    await session.commit()
+
+    new_b_file_id = (
+        await session.execute(
+            select(KnowledgeArtifact.artifact_id).where(
+                KnowledgeArtifact.artifact_type == "code_file",
+                KnowledgeArtifact.title == "b.py",
+                KnowledgeArtifact.kb_version == "v-test.1",
+            )
+        )
+    ).scalar_one()
+    edge = (
+        await session.execute(select(KnowledgeEdge).where(KnowledgeEdge.edge_type == "imports"))
+    ).scalar_one()
+    assert edge.to_artifact_id == new_b_file_id
+    assert edge.to_artifact_id != old_b_file.artifact_id
+
+
+@requires_db
+async def test_same_path_in_two_repos_does_not_cross_bind_edges(session: AsyncSession) -> None:
+    """Symbolic keys are repo-relative, so two repos sharing a path must not
+    cross-bind: main.py's import of src/utils.py binds to its own repo's
+    artifact even though the other repo's src/utils.py was processed first."""
+    r_utils_uri = "https://github.com/o/r/blob/sha1/src/utils.py"
+    z_utils_uri = "https://github.com/o/z/blob/sha1/src/utils.py"
+    z_main_uri = "https://github.com/o/z/blob/sha1/main.py"
+    refs = [
+        SourceRef(
+            source_type="github_code",
+            source_uri=r_utils_uri,
+            source_version="sha1",
+            repo="o/r",
+            path="src/utils.py",
+        ),
+        SourceRef(
+            source_type="github_code",
+            source_uri=z_main_uri,
+            source_version="sha1",
+            repo="o/z",
+            path="main.py",
+        ),
+        SourceRef(
+            source_type="github_code",
+            source_uri=z_utils_uri,
+            source_version="sha1",
+            repo="o/z",
+            path="src/utils.py",
+        ),
+    ]
+    graphs: dict[tuple[str | None, str | None], FileGraph] = {
+        ("o/r", "src/utils.py"): FileGraph(path="src/utils.py"),
+        ("o/z", "src/utils.py"): FileGraph(path="src/utils.py"),
+        ("o/z", "main.py"): FileGraph(
+            path="main.py", imports=(ParsedImport(target_path="src/utils.py"),)
+        ),
+    }
+    connector = GitHubCodeConnector(
+        FakeBackend(
+            refs,
+            {r_utils_uri: "r = 1\n", z_utils_uri: "z = 1\n", z_main_uri: "import utils\n"},
+        )
+    )
+    runner = BuildRunner(
+        session,
+        kb_version="v-test.1",
+        wikifier=SpyWikifier(),
+        graphifier=MultiFileGraphifier(graphs),
+        embedder=SpyEmbedder(),
+        indexer=SpyIndexer(),
+    )
+    await runner.run([connector])
+    await session.commit()
+
+    z_utils_id = (
+        await session.execute(
+            select(KnowledgeArtifact.artifact_id)
+            .join(SourceItem, KnowledgeArtifact.source_id == SourceItem.source_id)
+            .where(
+                KnowledgeArtifact.artifact_type == "code_file",
+                SourceItem.repo == "o/z",
+                SourceItem.path == "src/utils.py",
+            )
+        )
+    ).scalar_one()
+    edge = (
+        await session.execute(select(KnowledgeEdge).where(KnowledgeEdge.edge_type == "imports"))
+    ).scalar_one()
+    assert edge.to_artifact_id == z_utils_id
+
+
+@requires_db
+async def test_graphify_cache_hit_still_feeds_code_artifacts_to_index(
+    session: AsyncSession,
+) -> None:
+    """A graphify cache hit must surface the mapped code artifact ids to
+    embed/index, or code artifacts vanish from Search on every cached build."""
+    runner, *_ = _runner(session)
+    await runner.run([_connector("x = 1\n")])
+    await session.commit()
+    code_ids = set(
+        (
+            await session.execute(
+                select(KnowledgeArtifact.artifact_id).where(
+                    KnowledgeArtifact.artifact_type.in_(["code_file", "code_symbol"])
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(code_ids) == 2
+
+    await session.execute(update(SourceItem).values(content_hash="stale"))
+    await session.commit()
+    runner2, _, graphifier2, _, indexer2 = _runner(session, "v-test.2")
+    await runner2.run([_connector("x = 1\n")])
+    await session.commit()
+    assert graphifier2.calls == 0
+    assert code_ids <= set(indexer2.received)
+    assert await _count(session, KnowledgeEdge) == 1  # retry never duplicates edges
 
 
 @requires_db

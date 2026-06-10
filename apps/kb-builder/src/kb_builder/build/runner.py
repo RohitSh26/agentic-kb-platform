@@ -1,11 +1,12 @@
 """Incremental build runner — the 8-step algorithm from docs/architecture §7.
 
 Unchanged content_hash => chunk/wikify/graphify/embed/index are all skipped.
-Wikify is real (kb_builder.wikify); Graphify/Embed/Index remain Protocols until
-PR-06/08. Every model-shaped call is gated by a cache lookup so a hit never
-reaches the model. Generation-cache rows are recorded in the same transaction
-as their output artifacts, after the artifacts are persisted, so a crash
-between generate and cache can never strand a cache row without output.
+Wikify (kb_builder.wikify) and the graphify adapter (kb_builder.graphify_adapter)
+are real; Embed/Index remain Protocols until PR-08. Every model-shaped call is
+gated by a cache lookup so a hit never reaches the model. Generation-cache rows
+are recorded in the same transaction as their output artifacts, after the
+artifacts are persisted, so a crash between generate and cache can never strand
+a cache row without output.
 """
 
 import uuid
@@ -19,7 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.hashing import content_hash
 from common.logging import get_logger
-from contracts.artifact_schemas import NormalizedContent, WikifyArtifactDraft
+from contracts.artifact_schemas import (
+    CodeEdgeDraft,
+    GraphifyResult,
+    NormalizedContent,
+    WikifyArtifactDraft,
+)
 from contracts.versions import (
     CHUNKER_VERSION,
     GRAPHIFY_VERSION,
@@ -27,7 +33,7 @@ from contracts.versions import (
     PARSER_CONFIG_VERSION,
     PROMPT_VERSION,
 )
-from db.models import KbBuildRun, KnowledgeArtifact, KnowledgeEdge, SourceItem
+from db.models import KbBuildRun, KnowledgeArtifact, SourceItem
 from kb_builder.build.cache import (
     EmbeddingCacheGate,
     GenerationCacheGate,
@@ -35,20 +41,10 @@ from kb_builder.build.cache import (
     code_graph_cache_key,
 )
 from kb_builder.connectors import Connector
+from kb_builder.graphify_adapter.write import write_code_artifacts, write_code_edges
 from kb_builder.wikify.write import write_wikify_artifacts
 
 logger = get_logger("kb_builder.build.runner")
-
-
-@dataclass(frozen=True)
-class EdgeDraft:
-    """Placeholder graphify output; the real edge contract lands in PR-06."""
-
-    from_artifact_id: uuid.UUID
-    to_artifact_id: uuid.UUID
-    edge_type: str
-    confidence: float | None = None
-    source: str | None = None
 
 
 class Wikifier(Protocol):
@@ -62,9 +58,7 @@ class Wikifier(Protocol):
 
 
 class Graphifier(Protocol):
-    async def graphify(
-        self, content: NormalizedContent, artifact_ids: Sequence[uuid.UUID]
-    ) -> Sequence[EdgeDraft]: ...
+    async def graphify(self, content: NormalizedContent) -> GraphifyResult: ...
 
 
 class Embedder(Protocol):
@@ -77,6 +71,14 @@ class Embedder(Protocol):
 
 class SearchIndexer(Protocol):
     async def upsert_documents(self, artifact_ids: Sequence[uuid.UUID]) -> int: ...
+
+
+@dataclass(frozen=True)
+class _PendingEdges:
+    """Edge drafts from one graphified file, held until the end of the run."""
+
+    repo: str
+    drafts: tuple[CodeEdgeDraft, ...]
 
 
 @dataclass
@@ -131,6 +133,8 @@ class BuildRunner:
         await self._session.commit()
         logger.info("event=build_run_started build_id=%s kb_version=%s", build_id, self._kb_version)
         counters = _Counters()
+        code_key_map: dict[tuple[str, str], uuid.UUID] = {}
+        pending_edges: list[_PendingEdges] = []
         try:
             for connector in connectors:
                 for ref in await connector.list_sources():
@@ -145,7 +149,10 @@ class BuildRunner:
                         )
                         continue
                     counters.sources_changed += 1
-                    await self._process_changed_source(counters, fetched)
+                    await self._process_changed_source(
+                        counters, fetched, code_key_map, pending_edges
+                    )
+            await self._write_pending_edges(code_key_map, pending_edges)
             await self._finish_run(build_id, counters, status="completed")
             await self._session.commit()
         except Exception as error:
@@ -254,12 +261,18 @@ class BuildRunner:
         return source_id
 
     async def _process_changed_source(
-        self, counters: _Counters, fetched: NormalizedContent
+        self,
+        counters: _Counters,
+        fetched: NormalizedContent,
+        code_key_map: dict[tuple[str, str], uuid.UUID],
+        pending_edges: list[_PendingEdges],
     ) -> None:
         source_id = await self._upsert_source_item(fetched)
         artifact_ids = await self._wikify_gated(counters, fetched, source_id)
         if fetched.source.source_type == "github_code":
-            await self._graphify_gated(fetched, artifact_ids)
+            artifact_ids += await self._graphify_gated(
+                counters, fetched, source_id, code_key_map, pending_edges
+            )
         for artifact_id in artifact_ids:
             await self._embed_gated(counters, artifact_id)
         if artifact_ids:
@@ -309,8 +322,18 @@ class BuildRunner:
         return artifact_ids
 
     async def _graphify_gated(
-        self, fetched: NormalizedContent, artifact_ids: Sequence[uuid.UUID]
-    ) -> None:
+        self,
+        counters: _Counters,
+        fetched: NormalizedContent,
+        source_id: uuid.UUID,
+        code_key_map: dict[tuple[str, str], uuid.UUID],
+        pending_edges: list[_PendingEdges],
+    ) -> list[uuid.UUID]:
+        """Graphify one changed code file; returns its code artifact ids so they
+        reach embed/index on hits and misses alike (graphify itself is a
+        deterministic parser, not an LLM call — llm_calls stays untouched).
+        Edges are only collected here; they are resolved and written once at the
+        end of the run, after every changed file's artifacts exist."""
         ref = fetched.source
         cache_key = code_graph_cache_key(
             repo=ref.repo or "",
@@ -321,20 +344,29 @@ class BuildRunner:
             parser_config_version=PARSER_CONFIG_VERSION,
         )
         if await self._generation_gate.lookup(cache_key) is not None:
-            return
-        edges = await self._graphifier.graphify(fetched, artifact_ids)
-        for edge in edges:
-            self._session.add(
-                KnowledgeEdge(
-                    from_artifact_id=edge.from_artifact_id,
-                    to_artifact_id=edge.to_artifact_id,
-                    edge_type=edge.edge_type,
-                    confidence=edge.confidence,
-                    source=edge.source,
-                    kb_version=self._kb_version,
+            artifact_ids = await self._generation_gate.lookup_artifact_ids(cache_key)
+            if not artifact_ids:
+                # Every file graph yields at least its code_file artifact, so an
+                # empty mapping on a hit means a corrupt/unbackfilled cache row.
+                logger.warning(
+                    "event=graphify_cache_hit_empty_mapping cache_key=%s source_uri=%s",
+                    cache_key,
+                    ref.source_uri,
                 )
-            )
-        await self._session.flush()
+            return artifact_ids
+        result = await self._graphifier.graphify(fetched)
+        key_to_id = await write_code_artifacts(
+            self._session,
+            source_id=source_id,
+            kb_version=self._kb_version,
+            drafts=result.artifacts,
+        )
+        counters.artifacts_created += len(key_to_id)
+        repo = ref.repo or ""
+        code_key_map.update({(repo, key): artifact_id for key, artifact_id in key_to_id.items()})
+        if result.edges:
+            pending_edges.append(_PendingEdges(repo=repo, drafts=result.edges))
+        artifact_ids = list(key_to_id.values())
         await self._generation_gate.record(
             cache_key=cache_key,
             input_hash=fetched.content_hash,
@@ -342,8 +374,24 @@ class BuildRunner:
             model_name="graphify",
             model_params_hash=PARSER_CONFIG_VERSION,
             output_schema_version=OUTPUT_SCHEMA_VERSION,
-            output_artifact_ids=(),
+            output_artifact_ids=artifact_ids,
         )
+        return artifact_ids
+
+    async def _write_pending_edges(
+        self, code_key_map: dict[tuple[str, str], uuid.UUID], pending_edges: list[_PendingEdges]
+    ) -> None:
+        """Single end-of-run resolution pass: every changed file's artifacts are
+        already flushed, so cross-file targets within this build resolve to this
+        build's artifacts regardless of connector iteration order."""
+        for pending in pending_edges:
+            await write_code_edges(
+                self._session,
+                kb_version=self._kb_version,
+                repo=pending.repo,
+                drafts=pending.drafts,
+                key_to_id=code_key_map,
+            )
 
     async def _embed_gated(self, counters: _Counters, artifact_id: uuid.UUID) -> None:
         artifact = await self._session.get(KnowledgeArtifact, artifact_id)
