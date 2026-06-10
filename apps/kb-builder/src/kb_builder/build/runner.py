@@ -11,8 +11,11 @@ crash between generate and cache can never strand a cache row without output.
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Protocol
+
+from sqlalchemy import func, select, text, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.hashing import content_hash
 from common.logging import get_logger
@@ -32,9 +35,6 @@ from kb_builder.build.cache import (
     code_graph_cache_key,
 )
 from kb_builder.connectors import Connector
-from sqlalchemy import func, select, text
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger("kb_builder.build.runner")
 
@@ -84,6 +84,16 @@ class SearchIndexer(Protocol):
     async def upsert_documents(self, artifact_ids: Sequence[uuid.UUID]) -> int: ...
 
 
+@dataclass
+class _Counters:
+    sources_seen: int = 0
+    sources_changed: int = 0
+    artifacts_created: int = 0
+    llm_calls: int = 0
+    embedding_calls: int = 0
+    search_docs_upserted: int = 0
+
+
 class BuildRunner:
     def __init__(
         self,
@@ -105,6 +115,9 @@ class BuildRunner:
         self._embedding_gate = EmbeddingCacheGate(session)
 
     async def run(self, connectors: Sequence[Connector]) -> KbBuildRun:
+        """Execute one build. The runner owns the session's transactions: the run
+        row is committed up front so the audit record survives a failed build;
+        per-source work is committed only when the whole build succeeds."""
         run = KbBuildRun(
             kb_version=self._kb_version,
             status="running",
@@ -119,49 +132,84 @@ class BuildRunner:
         )
         self._session.add(run)
         await self._session.flush()
-        logger.info(
-            "event=build_run_started build_id=%s kb_version=%s", run.build_id, run.kb_version
-        )
+        build_id = run.build_id
+        await self._session.commit()
+        logger.info("event=build_run_started build_id=%s kb_version=%s", build_id, self._kb_version)
+        counters = _Counters()
         try:
             for connector in connectors:
                 for ref in await connector.list_sources():
                     fetched = await connector.fetch(ref)
-                    run.sources_seen += 1
+                    counters.sources_seen += 1
                     if await self._is_unchanged(fetched):
+                        await self._touch_last_seen(fetched)
                         logger.info(
                             "event=build_skip_unchanged source_uri=%s content_hash=%s",
                             ref.source_uri,
                             fetched.content_hash,
                         )
                         continue
-                    run.sources_changed += 1
-                    await self._process_changed_source(run, fetched)
+                    counters.sources_changed += 1
+                    await self._process_changed_source(counters, fetched)
+            await self._finish_run(build_id, counters, status="completed")
+            await self._session.commit()
         except Exception as error:
-            run.status = "failed"
-            run.error_summary = f"{type(error).__name__}: {error}"
-            run.completed_at = await self._now()
-            await self._session.flush()
-            logger.error(
-                "event=build_run_failed build_id=%s error=%s", run.build_id, run.error_summary
-            )
+            # discard partial work, then record the failure in a fresh transaction
+            # so the audit row is never lost (no silent failures).
+            await self._session.rollback()
+            error_summary = f"{type(error).__name__}: {error}"
+            await self._finish_run(build_id, counters, status="failed", error_summary=error_summary)
+            await self._session.commit()
+            logger.error("event=build_run_failed build_id=%s error=%s", build_id, error_summary)
             raise
-        run.status = "completed"
-        run.completed_at = await self._now()
-        await self._session.flush()
+        final = (
+            await self._session.execute(select(KbBuildRun).where(KbBuildRun.build_id == build_id))
+        ).scalar_one()
         logger.info(
             "event=build_run_completed build_id=%s sources_seen=%d sources_changed=%d "
             "llm_calls=%d embedding_calls=%d search_docs_upserted=%d",
-            run.build_id,
-            run.sources_seen,
-            run.sources_changed,
-            run.llm_calls,
-            run.embedding_calls,
-            run.search_docs_upserted,
+            build_id,
+            counters.sources_seen,
+            counters.sources_changed,
+            counters.llm_calls,
+            counters.embedding_calls,
+            counters.search_docs_upserted,
         )
-        return run
+        return final
 
-    async def _now(self) -> datetime:
-        return (await self._session.execute(select(func.now()))).scalar_one()
+    async def _finish_run(
+        self,
+        build_id: uuid.UUID,
+        counters: "_Counters",
+        *,
+        status: str,
+        error_summary: str | None = None,
+    ) -> None:
+        await self._session.execute(
+            update(KbBuildRun)
+            .where(KbBuildRun.build_id == build_id)
+            .values(
+                status=status,
+                error_summary=error_summary,
+                completed_at=func.now(),
+                sources_seen=counters.sources_seen,
+                sources_changed=counters.sources_changed,
+                artifacts_created=counters.artifacts_created,
+                llm_calls=counters.llm_calls,
+                embedding_calls=counters.embedding_calls,
+                search_docs_upserted=counters.search_docs_upserted,
+            )
+        )
+
+    async def _touch_last_seen(self, fetched: NormalizedContent) -> None:
+        await self._session.execute(
+            update(SourceItem)
+            .where(
+                SourceItem.source_type == fetched.source.source_type,
+                SourceItem.source_uri == fetched.source.source_uri,
+            )
+            .values(last_seen_at=func.now())
+        )
 
     async def _is_unchanged(self, fetched: NormalizedContent) -> bool:
         existing = (
@@ -210,18 +258,20 @@ class BuildRunner:
         )
         return source_id
 
-    async def _process_changed_source(self, run: KbBuildRun, fetched: NormalizedContent) -> None:
+    async def _process_changed_source(
+        self, counters: _Counters, fetched: NormalizedContent
+    ) -> None:
         source_id = await self._upsert_source_item(fetched)
-        artifact_ids = await self._wikify_gated(run, fetched, source_id)
+        artifact_ids = await self._wikify_gated(counters, fetched, source_id)
         if fetched.source.source_type == "github_code":
-            await self._graphify_gated(run, fetched, artifact_ids)
+            await self._graphify_gated(fetched, artifact_ids)
         for artifact_id in artifact_ids:
-            await self._embed_gated(run, artifact_id)
+            await self._embed_gated(counters, artifact_id)
         if artifact_ids:
-            run.search_docs_upserted += await self._indexer.upsert_documents(artifact_ids)
+            counters.search_docs_upserted += await self._indexer.upsert_documents(artifact_ids)
 
     async def _wikify_gated(
-        self, run: KbBuildRun, fetched: NormalizedContent, source_id: uuid.UUID
+        self, counters: _Counters, fetched: NormalizedContent, source_id: uuid.UUID
     ) -> list[uuid.UUID]:
         cache_key = chunk_summary_cache_key(
             source_content_hash=fetched.content_hash,
@@ -235,7 +285,14 @@ class BuildRunner:
         if hit is not None:
             return [hit.output_artifact_id] if hit.output_artifact_id is not None else []
         drafts = await self._wikifier.wikify(fetched)
-        run.llm_calls += 1
+        counters.llm_calls += 1
+        if len(drafts) > 1:
+            # generation_cache.output_artifact_id holds a single id; mapping a
+            # cache row to N artifacts is the PR-05 contract. Failing loudly here
+            # beats silently dropping artifacts from embed/index on cache hits.
+            raise NotImplementedError(
+                "multi-artifact wikify output requires the PR-05 cache-to-artifacts mapping"
+            )
         artifacts: list[KnowledgeArtifact] = []
         for draft in drafts:
             artifact = KnowledgeArtifact(
@@ -248,7 +305,7 @@ class BuildRunner:
             )
             self._session.add(artifact)
             artifacts.append(artifact)
-            run.artifacts_created += 1
+            counters.artifacts_created += 1
         # flush artifacts BEFORE recording the cache row (same transaction) so a
         # cache row can never exist without its output artifact.
         await self._session.flush()
@@ -265,7 +322,7 @@ class BuildRunner:
         return artifact_ids
 
     async def _graphify_gated(
-        self, run: KbBuildRun, fetched: NormalizedContent, artifact_ids: Sequence[uuid.UUID]
+        self, fetched: NormalizedContent, artifact_ids: Sequence[uuid.UUID]
     ) -> None:
         ref = fetched.source
         cache_key = code_graph_cache_key(
@@ -301,7 +358,7 @@ class BuildRunner:
             output_artifact_id=None,
         )
 
-    async def _embed_gated(self, run: KbBuildRun, artifact_id: uuid.UUID) -> None:
+    async def _embed_gated(self, counters: _Counters, artifact_id: uuid.UUID) -> None:
         artifact = await self._session.get(KnowledgeArtifact, artifact_id)
         if artifact is None or artifact.body_text is None:
             return
@@ -314,7 +371,7 @@ class BuildRunner:
         if hit is not None:
             return
         embedding_hash = await self._embedder.embed(artifact.body_text)
-        run.embedding_calls += 1
+        counters.embedding_calls += 1
         await self._embedding_gate.record(
             artifact_id=artifact_id,
             text_hash=text_hash,

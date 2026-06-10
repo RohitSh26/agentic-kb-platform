@@ -100,11 +100,16 @@ def test_cache_keys_are_deterministic_and_distinct() -> None:
 @pytest.fixture(scope="module")
 def migrated_db() -> Iterator[None]:
     assert TEST_DATABASE_URL is not None
+    previous = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
     cfg = Config(str(ALEMBIC_INI))
     command.upgrade(cfg, "head")
     yield
     command.downgrade(cfg, "base")
+    if previous is None:
+        os.environ.pop("DATABASE_URL", None)
+    else:
+        os.environ["DATABASE_URL"] = previous
 
 
 @pytest.fixture
@@ -247,6 +252,9 @@ async def test_first_build_processes_then_unchanged_build_skips_everything(
     assert run1.embedding_calls == 1
     assert (wikifier.calls, graphifier.calls, embedder.calls, indexer.calls) == (1, 1, 1, 1)
 
+    seen_before = (await session.execute(select(SourceItem.last_seen_at))).scalar_one()
+    assert seen_before is not None
+
     runner2, wikifier2, graphifier2, embedder2, indexer2 = _runner(session, "v-test.2")
     run2 = await runner2.run([_connector("x = 1\n")])
     await session.commit()
@@ -256,6 +264,9 @@ async def test_first_build_processes_then_unchanged_build_skips_everything(
     assert run2.embedding_calls == 0
     # unchanged content_hash => chunk/wikify/graphify/embed/index all skipped
     assert (wikifier2.calls, graphifier2.calls, embedder2.calls, indexer2.calls) == (0, 0, 0, 0)
+    # but the skip path still refreshes last_seen_at for deletion sweeps
+    seen_after = (await session.execute(select(SourceItem.last_seen_at))).scalar_one()
+    assert seen_after is not None and seen_after > seen_before
 
 
 @requires_db
@@ -308,7 +319,9 @@ async def test_cache_hit_prevents_model_calls_even_when_source_looks_changed(
 
 
 @requires_db
-async def test_failed_wikify_leaves_no_cache_row_or_artifacts(session: AsyncSession) -> None:
+async def test_failed_wikify_leaves_no_cache_row_or_artifacts_but_audit_row_survives(
+    session: AsyncSession,
+) -> None:
     runner = BuildRunner(
         session,
         kb_version="v-test.1",
@@ -319,9 +332,43 @@ async def test_failed_wikify_leaves_no_cache_row_or_artifacts(session: AsyncSess
     )
     with pytest.raises(RuntimeError, match="model exploded"):
         await runner.run([_connector("x = 1\n")])
-    await session.rollback()
+    # partial work was rolled back by the runner...
     assert await _count(session, GenerationCache) == 0
     assert await _count(session, KnowledgeArtifact) == 0
+    assert await _count(session, SourceItem) == 0
+    # ...but the build failure is recorded, never silent
+    failed_run = (await session.execute(select(KbBuildRun))).scalar_one()
+    assert failed_run.status == "failed"
+    assert failed_run.error_summary is not None
+    assert "model exploded" in failed_run.error_summary
+    assert failed_run.completed_at is not None
+
+
+class MultiDraftWikifier(SpyWikifier):
+    async def wikify(self, content: NormalizedContent) -> Sequence[ArtifactDraft]:
+        self.calls += 1
+        return [
+            ArtifactDraft(artifact_type="chunk_summary", title="a", body_text="a"),
+            ArtifactDraft(artifact_type="chunk_summary", title="b", body_text="b"),
+        ]
+
+
+@requires_db
+async def test_multi_artifact_wikify_fails_loudly_until_pr05_contract(
+    session: AsyncSession,
+) -> None:
+    runner = BuildRunner(
+        session,
+        kb_version="v-test.1",
+        wikifier=MultiDraftWikifier(),
+        graphifier=SpyGraphifier(),
+        embedder=SpyEmbedder(),
+        indexer=SpyIndexer(),
+    )
+    with pytest.raises(NotImplementedError, match="PR-05"):
+        await runner.run([_connector("x = 1\n")])
+    assert await _count(session, KnowledgeArtifact) == 0
+    assert await _count(session, GenerationCache) == 0
 
 
 @requires_db

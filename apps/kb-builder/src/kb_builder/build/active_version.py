@@ -10,10 +10,11 @@ enforced in Postgres by the partial unique index uq_kb_build_run_single_active.
 import uuid
 from collections.abc import Awaitable, Callable
 
-from common.logging import get_logger
-from db.models import KbBuildRun
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from common.logging import get_logger
+from db.models import KbBuildRun
 
 logger = get_logger("kb_builder.build.active_version")
 
@@ -55,11 +56,11 @@ async def activate_kb_version(
     await session.execute(
         update(KbBuildRun)
         .where(KbBuildRun.status == "active")
-        .values(status="superseded", completed_at=func.coalesce(KbBuildRun.completed_at, func.now()))
+        .values(
+            status="superseded", completed_at=func.coalesce(KbBuildRun.completed_at, func.now())
+        )
     )
     run.status = "active"
     await session.flush()
-    logger.info(
-        "event=kb_version_activated build_id=%s kb_version=%s", build_id, run.kb_version
-    )
+    logger.info("event=kb_version_activated build_id=%s kb_version=%s", build_id, run.kb_version)
     return True

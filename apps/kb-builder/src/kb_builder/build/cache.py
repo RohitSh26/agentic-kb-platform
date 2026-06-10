@@ -9,11 +9,12 @@ retries never duplicate cache rows.
 import uuid
 from collections.abc import Sequence
 
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from common.hashing import content_hash
 from common.logging import get_logger
 from db.models import EmbeddingCache, GenerationCache
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger("kb_builder.build.cache")
 
@@ -90,9 +91,7 @@ class GenerationCacheGate:
 
     async def lookup(self, cache_key: str) -> GenerationCache | None:
         hit = await self._session.get(GenerationCache, cache_key)
-        logger.info(
-            "event=generation_cache_lookup cache_key=%s hit=%s", cache_key, hit is not None
-        )
+        logger.info("event=generation_cache_lookup cache_key=%s hit=%s", cache_key, hit is not None)
         return hit
 
     async def record(
