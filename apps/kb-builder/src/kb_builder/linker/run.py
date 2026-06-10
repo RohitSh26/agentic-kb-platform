@@ -29,6 +29,9 @@ async def run_linker(
     """Compute and persist linker edges; return (inserted, refreshed, deleted)."""
     artifacts = await _load_linkable_artifacts(session)
     drafts = find_deterministic_links(artifacts)
+    # With no provider the semantic pass is skipped, so its implements edges
+    # being absent from the computed set is not evidence they are stale.
+    protected = frozenset({"implements"}) if similarity is None else frozenset()
     if similarity is None:
         logger.info("event=linker_semantic_skipped reason=no_provider")
     else:
@@ -40,7 +43,9 @@ async def run_linker(
         ]
         existing_pairs = {(d.from_artifact_id, d.to_artifact_id, str(d.edge_type)) for d in drafts}
         drafts += await find_semantic_links(similarity, unlinked, existing_pairs=existing_pairs)
-    return await write_link_edges(session, kb_version=kb_version, drafts=drafts)
+    return await write_link_edges(
+        session, kb_version=kb_version, drafts=drafts, protected_edge_types=protected
+    )
 
 
 async def _load_linkable_artifacts(session: AsyncSession) -> list[LinkableArtifact]:

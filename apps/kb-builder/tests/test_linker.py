@@ -579,3 +579,61 @@ async def test_run_linker_semantic_edge_is_flagged_low_confidence(
     flagged = [r for r in caplog.records if "event=linker_low_confidence_edge" in r.getMessage()]
     assert len(flagged) == 1
     assert flagged[0].levelno == logging.WARNING
+
+
+@requires_db
+async def test_semantic_edge_survives_rerun_without_provider(
+    session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A degraded nightly (similarity=None) must not delete semantic implements edges."""
+    wiki = await _add_source(session, "azure_wiki", "wiki://ranking")
+    concept = await _add_artifact(
+        session,
+        source=wiki,
+        artifact_type="concept",
+        title="Vector Search Ranking",
+        body_text="How results are ordered before evidence packing.",
+    )
+    chunk = await _add_artifact(
+        session,
+        source=wiki,
+        artifact_type="chunk",
+        title="Ranking wiki section",
+        body_text="Vector Search Ranking decides result order.",
+    )
+    code = await _add_source(session, "github_code", "github://org/repo/src/search/ranker.py")
+    symbol = await _add_artifact(
+        session,
+        source=code,
+        artifact_type="code_symbol",
+        title="Ranker.score_documents",
+        body_text="def score_documents(self): ...",
+    )
+    provider = FakeSimilarityProvider(
+        {concept.artifact_id: [ScoredArtifact(artifact_id=symbol.artifact_id, similarity=0.85)]}
+    )
+    inserted, refreshed, deleted = await run_linker(
+        session, kb_version="v-sem.1", similarity=provider
+    )
+    assert (inserted, refreshed, deleted) == (2, 0, 0)  # semantic implements + documents
+
+    # the chunk no longer mentions the concept, so its documents edge is stale
+    await session.execute(
+        sa_update(KnowledgeArtifact)
+        .where(KnowledgeArtifact.artifact_id == chunk.artifact_id)
+        .values(body_text="This section was rewritten and covers something else.")
+    )
+
+    with caplog.at_level(logging.INFO, logger="kb_builder.linker.write_edges"):
+        inserted, refreshed, deleted = await run_linker(session, kb_version="v-sem.2")
+
+    # documents edge deleted (evidence gone); semantic implements edge protected
+    assert (inserted, refreshed, deleted) == (0, 0, 1)
+    assert any(
+        "event=linker_stale_deletion_skipped" in r.getMessage() and r.levelno == logging.WARNING
+        for r in caplog.records
+    )
+    edges = await _edge_tuples(session, source=EDGE_SOURCE)
+    assert edges == {
+        (symbol.artifact_id, concept.artifact_id, "implements", EDGE_SOURCE, "v-sem.1")
+    }

@@ -28,12 +28,19 @@ LOW_CONFIDENCE_THRESHOLD = 0.9
 
 
 async def write_link_edges(
-    session: AsyncSession, *, kb_version: str, drafts: Sequence[LinkEdgeDraft]
+    session: AsyncSession,
+    *,
+    kb_version: str,
+    drafts: Sequence[LinkEdgeDraft],
+    protected_edge_types: frozenset[str] = frozenset(),
 ) -> tuple[int, int, int]:
     """Reconcile linker edges with the computed set; return (inserted, refreshed, deleted).
 
     Drafts must be unique on (from, to, edge_type) — the linker run dedupes —
     because a single INSERT cannot update the same conflicting row twice.
+    protected_edge_types are exempt from stale deletion: when a pass that
+    produces them was skipped this run, their absence from the computed set is
+    not evidence they are gone.
     """
     inserted = 0
     refreshed = 0
@@ -70,7 +77,7 @@ async def write_link_edges(
             inserted += 1
         else:
             refreshed += 1
-    deleted = await _delete_stale(session, drafts)
+    deleted = await _delete_stale(session, drafts, protected_edge_types)
     await session.flush()
     logger.info(
         "event=linker_edges_written kb_version=%s inserted=%d refreshed=%d deleted=%d",
@@ -82,7 +89,11 @@ async def write_link_edges(
     return inserted, refreshed, deleted
 
 
-async def _delete_stale(session: AsyncSession, drafts: Sequence[LinkEdgeDraft]) -> int:
+async def _delete_stale(
+    session: AsyncSession,
+    drafts: Sequence[LinkEdgeDraft],
+    protected_edge_types: frozenset[str],
+) -> int:
     computed: set[tuple[uuid.UUID, uuid.UUID, str]] = {
         (d.from_artifact_id, d.to_artifact_id, str(d.edge_type)) for d in drafts
     }
@@ -95,8 +106,12 @@ async def _delete_stale(session: AsyncSession, drafts: Sequence[LinkEdgeDraft]) 
         ).where(KnowledgeEdge.source == EDGE_SOURCE)
     )
     stale_ids: list[uuid.UUID] = []
+    protected = 0
     for edge_id, from_id, to_id, edge_type in rows.tuples():
         if (from_id, to_id, edge_type) in computed:
+            continue
+        if edge_type in protected_edge_types:
+            protected += 1
             continue
         stale_ids.append(edge_id)
         logger.info(
@@ -105,6 +120,12 @@ async def _delete_stale(session: AsyncSession, drafts: Sequence[LinkEdgeDraft]) 
             from_id,
             to_id,
             edge_type,
+        )
+    if protected:
+        logger.warning(
+            "event=linker_stale_deletion_skipped reason=pass_skipped edge_types=%s count=%d",
+            sorted(protected_edge_types),
+            protected,
         )
     if not stale_ids:
         return 0

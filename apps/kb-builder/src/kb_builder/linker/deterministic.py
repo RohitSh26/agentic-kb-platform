@@ -94,8 +94,9 @@ def find_deterministic_links(artifacts: Sequence[LinkableArtifact]) -> list[Link
     for concept_matcher in concept_matchers:
         concept = concept_matcher.artifact
         concept_text = "\n".join(part for part in (concept.title, concept.body_text) if part)
+        concept_text_lower = concept_text.lower()
         for symbol_matcher in symbol_matchers:
-            if _matches(symbol_matcher, concept_text, concept_text.lower()):
+            if _matches(symbol_matcher, concept_text, concept_text_lower):
                 add(symbol_matcher.artifact, concept, "implements", IMPLEMENTS_CONFIDENCE)
 
     for doc in docs:
