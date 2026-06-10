@@ -1,0 +1,20 @@
+[project]
+name = "kb-builder"
+version = "0.1.0"
+description = "Nightly incremental KB build (build plane): connectors, wikify, graphify, linker, indexer"
+requires-python = ">=3.12"
+dependencies = [
+    "contracts",
+    "common",
+]
+
+[tool.uv.sources]
+contracts = { workspace = true }
+common = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kb_builder"]
