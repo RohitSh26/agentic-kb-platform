@@ -16,7 +16,7 @@ build.
 
 ## Consequences
 + Hermetic tests (interfaces let us fake Search/model); fast, reproducible tooling.
-+ Clear apps/ vs packages/ boundary; contracts and db are shared.
++ Clear service boundary — see ADR-0008 (self-contained services replaced the shared-packages workspace).
 - Ties V1 to the Python ecosystem; swapping the MCP framework later is a non-trivial change.
 
 ## Alternatives considered

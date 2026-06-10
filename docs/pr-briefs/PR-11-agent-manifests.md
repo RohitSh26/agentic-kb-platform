@@ -11,7 +11,8 @@ subagents — they are consumed by the product's MCP runtime.
 ## Files to create / confirm
 - `agents/orchestrator.md`, `agents/implementation.md`, `agents/test_layer.md`,
   `agents/code_reviewer.md`, `agents/delivery_planner.md` (templates already seeded — finalize).
-- `packages/contracts/agent_output_schemas/implementation_plan_v1.py` and peers.
+- `services/mcp-server/src/agentic_mcp_server/agent_output_schemas/implementation_plan_v1.py`
+  and peers, mirrored in `docs/contracts/agent-output-contracts.md`.
 
 ## Contracts
 Each manifest declares allowed_tools (context.*), max_context_calls, max_context_tokens,

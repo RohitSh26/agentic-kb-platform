@@ -1,4 +1,4 @@
-# Rule: Postgres Knowledge Registry (packages/db, apps/kb-builder)
+# Rule: Postgres Knowledge Registry (services/kb-builder)
 
 - Postgres is the source of truth. Azure AI Search is a derived projection that must be rebuildable
   from Postgres + source pointers. Never write truth only to Search.

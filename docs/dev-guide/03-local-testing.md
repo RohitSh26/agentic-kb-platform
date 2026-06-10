@@ -7,42 +7,55 @@
 
 ## Prerequisites
 
-- **uv** (manages Python 3.12 and the workspace): `brew install uv`
+- **uv** (manages Python 3.12 per service): `brew install uv`
 - **Postgres 16** running locally (Homebrew: `brew install postgresql@16 && brew services start
   postgresql@16`; or Docker: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres
   postgres:16`)
 
-One-time setup:
+One-time setup (each service is its own `uv` project — ADR-0008):
 
 ```sh
-uv sync                       # creates .venv and installs the whole workspace
+make sync                     # uv sync in services/kb-builder and services/mcp-server
 createdb agentic_kb_test      # dedicated test database (any name works)
 ```
 
 ## The verify gate
 
-This is the definition of "done" for any change. CI (`.github/workflows/ci.yml`) runs exactly the
-same four steps against a Postgres 16 service container:
+This is the definition of "done" for any change. CI (`.github/workflows/ci.yml`) runs one job per
+service with the same steps against a Postgres 16 service container:
+
+```sh
+make verify                   # lint + types + tests for both services
+make verify-kb-builder        # or just one
+make verify-mcp-server
+```
+
+Or by hand, inside a service directory (`services/kb-builder` or `services/mcp-server`):
 
 ```sh
 uv run ruff check . --fix && uv run ruff format .          # lint + format
-uv run pyright                                              # types (strict on packages/)
+uv run pyright                                              # types (strict on domain/infrastructure/tool schemas)
 uv run env TEST_DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/agentic_kb_test pytest -q
 ```
 
 Adjust the URL for your auth (CI uses `postgres:postgres@localhost:5432/postgres`). The driver
 **must** be `postgresql+asyncpg://` — everything is async SQLAlchemy.
 
+One asymmetry to know: **mcp-server never runs migrations** (kb-builder owns the schema), so its
+DB-backed tests expect an already-migrated database. Run `make migrate-test-db` once (it executes
+kb-builder's Alembic migrations against `TEST_DATABASE_URL`); if the schema is missing, those
+tests skip with a message telling you exactly that.
+
 ## How DB tests work
 
 - Tests read `TEST_DATABASE_URL` (falling back to `DATABASE_URL`). If neither is set, DB-backed
   tests **skip gracefully** with a clear reason — pure unit tests still run, so `uv run pytest`
   with no env gives you a fast partial signal.
-- DB-backed modules (`apps/kb-builder/tests/test_build_engine.py`, `test_linker.py`,
-  `test_indexer.py`, `packages/db/tests/test_registry_roundtrip.py`) run **Alembic migrations to
-  head** in a module
-  fixture against your test DB and **downgrade to base on teardown** — every migration's
-  downgrade is therefore exercised on every test run.
+- kb-builder's DB-backed modules (`services/kb-builder/tests/integration/test_build_engine.py`,
+  `test_linker.py`, `test_indexing.py`, `test_registry_roundtrip.py`) run **Alembic migrations to
+  head** in a module fixture against your test DB and **downgrade to base on teardown** — every
+  migration's downgrade is therefore exercised on every test run. mcp-server's DB-backed tests do
+  *not* migrate (see above) — they only read/write `kb_build_run` via raw SQL.
 - Between tests, a session fixture deletes table contents in FK-safe order; tests own their data.
 - Caveat: Alembic's `fileConfig()` disables already-imported loggers, so tests that assert on log
   records re-enable the specific loggers they capture after running migrations (see
@@ -51,23 +64,26 @@ Adjust the URL for your auth (CI uses `postgres:postgres@localhost:5432/postgres
 Running migrations by hand (useful when developing a revision):
 
 ```sh
+cd services/kb-builder
 export DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/agentic_kb_test
-uv run alembic -c packages/db/alembic.ini upgrade head
-uv run alembic -c packages/db/alembic.ini downgrade -1    # verify the rollback
-uv run alembic -c packages/db/alembic.ini upgrade head
+uv run alembic upgrade head
+uv run alembic downgrade -1    # verify the rollback
+uv run alembic upgrade head
 ```
 
 ## Where the fakes are — and what they replace
 
 | Real system (V1 target) | Interface (Protocol) | Defined in | Fake used in tests |
 |---|---|---|---|
-| GitHub / Azure Wiki / ADO APIs | `FetchBackend` | `kb_builder/connectors/base.py` | in-test backends returning canned text (`test_connectors.py`, `test_build_engine.py`) |
-| Azure OpenAI (wikify) | `ModelClient` / `Wikifier` | `kb_builder/wikify/model_client.py`, `build/runner.py` | spy wikifiers returning canned `WikifyGeneration` (`test_build_engine.py`) |
-| Code parser | `Graphifier` | `build/runner.py` | spies returning fixture `FileGraph`s |
-| Azure OpenAI embeddings | `Embedder` | `build/runner.py` | fake returning a deterministic `embedding_hash` |
-| Azure AI Search (upsert) | `SearchIndexer` | `build/runner.py` | `SpyIndexer` counting received artifact ids |
-| Azure AI Search (index) | `SearchClient` | `common/search/client.py` | `FakeSearchClient` — a real in-memory index holding full `SearchDoc`s; tests inject drift/orphans by mutating `.docs` (`test_indexer.py`) |
-| Azure AI Search (similarity) | `SimilarityProvider` | `kb_builder/linker/semantic.py` | `FakeSimilarityProvider` with canned scores (`test_linker.py`) |
+| GitHub / Azure Wiki / ADO APIs | `FetchBackend` | `connectors/source_connector.py` | in-test backends returning canned text (`test_connectors.py`, `test_build_engine.py`) |
+| Azure OpenAI (wikify) | `ModelClient` / `Wikifier` | `infrastructure/azure_openai/model_client.py`, `application/build_runner.py` | spy wikifiers returning canned `WikifyGeneration` (`test_build_engine.py`) |
+| Code parser | `Graphifier` | `application/build_runner.py` | spies returning fixture `FileGraph`s |
+| Azure OpenAI embeddings | `Embedder` | `application/build_runner.py` | fake returning a deterministic `embedding_hash` |
+| Azure AI Search (upsert) | `SearchIndexer` | `application/build_runner.py` | `SpyIndexer` counting received artifact ids |
+| Azure AI Search (index) | `SearchClient` | `infrastructure/azure_search/search_client.py` | `FakeSearchClient` — a real in-memory index holding full `SearchDoc`s; tests inject drift/orphans by mutating `.docs` (`test_indexing.py`) |
+| Azure AI Search (similarity) | `SimilarityProvider` | `linker/semantic.py` | `FakeSimilarityProvider` with canned scores (`test_linker.py`) |
+
+(Paths are relative to `services/kb-builder/src/agentic_kb_builder/`.)
 
 The pattern for every fake is the same: implement the Protocol in the test module, record calls
 and arguments, return deterministic canned data. If you add a new external dependency, add a
@@ -84,8 +100,9 @@ embed (cache-gated) → index → edges → linker → run accounting → activa
 To watch a full build happen, run one test verbosely with log output:
 
 ```sh
+cd services/kb-builder
 uv run env TEST_DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/agentic_kb_test \
-  pytest apps/kb-builder/tests/test_build_engine.py -k "first_build" -v --log-cli-level=INFO
+  pytest tests/integration/test_build_engine.py -k "first_build" -v --log-cli-level=INFO
 ```
 
 The structured `event=...` log lines (source upserts, cache lookups/hits, wikify/graphify writes,
@@ -105,15 +122,21 @@ select kb_version, status, llm_calls, embedding_calls from kb_build_run;
 
 ## What each test file covers
 
+All under `services/kb-builder/tests/`:
+
 | File | Covers |
 |---|---|
-| `apps/kb-builder/tests/test_build_engine.py` | cache-key determinism; first build vs unchanged-skip; **cache hit ⇒ no model call** (invariant 4); idempotent re-runs; failed-wikify rollback (audit row survives, no orphan cache rows); cross-file graphify edges; validation-gated activation (invariant 5) |
-| `apps/kb-builder/tests/test_linker.py` | deterministic matching + precision guards; semantic threshold and dedupe; reconcile-in-place (rerun refresh, new-version refresh, stale deletion); protected-edge survival without a provider; low-confidence flagging |
-| `apps/kb-builder/tests/test_indexer.py` | projection field mapping + stale-embedding exclusion; changed-docs-only upsert (no duplicates on rerun); orphan-doc deletion; consistency check passing on a mirrored index and failing on each injected drift class |
-| `apps/kb-builder/tests/test_wikify.py` | chunker determinism and packing; draft kind/type validation |
-| `apps/kb-builder/tests/test_graphify_adapter.py` | parse validation; key round-trips; exact spans; span-past-EOF rejection; edge confidences |
-| `apps/kb-builder/tests/test_connectors.py` | normalize+hash pipeline determinism per source type |
-| `packages/db/tests/test_registry_roundtrip.py` | migrations up/down + model round-trips |
+| `integration/test_build_engine.py` | cache-key determinism; first build vs unchanged-skip; **cache hit ⇒ no model call** (invariant 4); idempotent re-runs; failed-wikify rollback (audit row survives, no orphan cache rows); cross-file graphify edges; validation-gated activation (invariant 5) |
+| `integration/test_linker.py` | deterministic matching + precision guards; semantic threshold and dedupe; reconcile-in-place (rerun refresh, new-version refresh, stale deletion); protected-edge survival without a provider; low-confidence flagging |
+| `integration/test_indexing.py` | projection field mapping + stale-embedding exclusion; changed-docs-only upsert (no duplicates on rerun); orphan-doc deletion; consistency check passing on a mirrored index and failing on each injected drift class |
+| `integration/test_wikify.py` | chunker determinism and packing; draft kind/type validation |
+| `integration/test_graphify.py` | parse validation; key round-trips; exact spans; span-past-EOF rejection; edge confidences |
+| `integration/test_registry_roundtrip.py` | migrations up/down + model round-trips |
+| `unit/test_connectors.py` | normalize+hash pipeline determinism per source type |
+| `contract/test_import_boundaries.py` | no cross-service or legacy root-package imports (ADR-0008) |
+
+mcp-server's suite mirrors the same split (`services/mcp-server/tests/{unit,integration,contract}`)
+— see doc 02 §10 for what each layer exercises.
 
 Write new tests in the same spirit: budgets, dedupe, cache hits, idempotency, and failure paths —
 not just happy-path success (see CLAUDE.md "Tests ship in the same PR").
@@ -122,7 +145,8 @@ not just happy-path success (see CLAUDE.md "Tests ship in the same PR").
 
 - Since **PR-08**, `FakeSearchClient` is the local stand-in for the *whole* index: projection,
   changed-only upsert, orphan deletion, and the drift consistency check all run offline. Azure is
-  only ever touched by the one `common/search/azure.py` module behind the interface.
+  only ever touched by the one `agentic_kb_builder/infrastructure/azure_search/azure_search_client.py`
+  module behind the interface.
 - **PR-09/10** (MCP server + Context Broker) follow the same rule: fastmcp tools tested against
   the fakes + local Postgres; budgets and ledger assertions never need cloud resources.
 - Real Azure resources enter the picture only for deployment (infra/) and the nightly GitHub

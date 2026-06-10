@@ -8,8 +8,10 @@ description: >
 
 # Write a reversible migration
 
-1. Make the model change in `packages/db/models/` first.
-2. `uv run alembic revision --autogenerate -m "<short scope>"`.
+1. Make the model change in
+   `services/kb-builder/src/agentic_kb_builder/infrastructure/postgres/models/` first.
+   (kb-builder owns the schema; mcp-server never runs migrations.)
+2. From `services/kb-builder`: `uv run alembic revision --autogenerate -m "<short scope>"`.
 3. **Hand-edit** the generated file. Autogenerate misses: index changes, server defaults, enum
    alterations, and column type narrowing. Make `upgrade()` minimal and correct.
 4. Write a real `downgrade()` that fully reverses `upgrade()`. Never leave `pass`.

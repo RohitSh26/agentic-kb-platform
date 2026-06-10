@@ -7,60 +7,70 @@
 ## Layout at a glance
 
 ```
-packages/contracts   schemas everything else is written against (frozen pydantic, versioned)
-packages/db          SQLAlchemy models + Alembic migrations (the Knowledge Registry)
-packages/common      hashing, structured logging, token budgeting
-apps/kb-builder      the nightly build: connectors → build engine → wikify/graphify → linker
-apps/mcp-server      fastmcp server base: auth, telemetry, stub tools, health (broker logic: PR-10)
+services/kb-builder  the nightly build: connectors → build engine → wikify/graphify → linker →
+                     indexing. Owns the registry: SQLAlchemy models + Alembic migrations.
+services/mcp-server  fastmcp server base: auth, telemetry, tool contracts, health (broker: PR-10)
+docs/contracts/      markdown cross-service contracts — the only thing the services share
 agents/              product runtime agent manifests (served later by MCP; not Claude Code agents)
 evals/               empty case directories; harness lands in PR-12
 infra/               README describing the lean Azure footprint; no IaC yet
 ```
 
-Dependency direction is one-way: `apps` depend on `packages`, never the reverse.
+Each service is a self-contained `uv` project (ADR-0008). There is no shared Python code: the
+services never import each other, and import-boundary contract tests in each service fail on any
+cross-service or legacy root-package import.
 
-## 1. Contracts (`packages/contracts/src/contracts/`)
+## 1. Contracts (`docs/contracts/` + each service's schema modules)
 
 Every boundary exchanges **frozen pydantic models** (`ConfigDict(frozen=True, extra="forbid")`)
-carrying an explicit `schema_version`. Version constants live in `contracts/versions.py`:
-`OUTPUT_SCHEMA_VERSION`, `MCP_SCHEMA_VERSION`, `PROMPT_VERSION`, `CHUNKER_VERSION`,
-`GRAPHIFY_VERSION` (1.1.0 — bumped when artifact emission changed in PR-06),
+carrying an explicit `schema_version`. Build-plane version constants live in
+`agentic_kb_builder/domain/schema_versions.py`: `OUTPUT_SCHEMA_VERSION`, `PROMPT_VERSION`,
+`CHUNKER_VERSION`, `GRAPHIFY_VERSION` (1.1.0 — bumped when artifact emission changed in PR-06),
 `PARSER_CONFIG_VERSION`. These constants are *cache-key inputs*: bumping one deliberately
-invalidates the relevant generation cache.
+invalidates the relevant generation cache. (`MCP_SCHEMA_VERSION` lives in the runtime plane:
+`agentic_mcp_server/mcp/tool_schemas/base.py`.)
 
-- `artifact_schemas/sources.py` — `SourceType` (github_code | github_doc | azure_wiki | ado_card),
+Build-plane schemas, all under `services/kb-builder/src/agentic_kb_builder/`:
+
+- `domain/source_records.py` — `SourceType` (github_code | github_doc | azure_wiki | ado_card),
   `SourceRef` (mirrors `source_item`: uri, version, repo/branch/path/external_id), and
   `NormalizedContent` (source + normalized text + `content_hash`; same source state must hash
   identically on any machine).
-- `artifact_schemas/wikify.py` — `Chunk`, `ConceptDraft`, `SourceBackedFactDraft`,
+- `domain/wiki_artifacts.py` — `Chunk`, `ConceptDraft`, `SourceBackedFactDraft`,
   `WikifyGeneration` (the ModelClient response shape), and `WikifyArtifactDraft` with a validator
   forcing `knowledge_kind` to match the artifact type (chunks/facts are `source_backed`;
   summaries/concepts are `interpreted`).
-- `artifact_schemas/graphify.py` — `FileGraph` (parsed code file: symbols, endpoints, tests,
+- `domain/graph_artifacts.py` — `FileGraph` (parsed code file: symbols, endpoints, tests,
   imports, calls), `CodeArtifactDraft` (symbolic `key`, optional snippet + 1-based inclusive
   `span_start`/`span_end`), `CodeEdgeDraft` (symbolic from/to keys + `CodeEdgeType`).
-- `artifact_schemas/linker.py` — `LinkEdgeDraft` (UUID from/to, `LinkerEdgeType` ∈ documents |
+- `domain/link_records.py` — `LinkEdgeDraft` (UUID from/to, `LinkerEdgeType` ∈ documents |
   implements | requests | mentions, confidence, `strategy` ∈ deterministic | semantic). The
   docstring records the subject-verb-object direction convention.
-- `search_schemas/` — the Search projection contract: `SearchDoc` (one index document; identity is
+- `indexing/search_document.py` — the Search projection contract (mirrored in
+  `docs/contracts/azure-ai-search-index.md`): `SearchDoc` (one index document; identity is
   `doc_id = str(artifact_id)`, stable across rebuilds; carries `artifact_hash` for drift
   comparison and the optional embedding vector), `IndexState` (doc_id → artifact_hash snapshot of
   the live index), and `PROJECTABLE_ARTIFACT_TYPES` (artifacts with body text — pointer-only code
   artifacts are reachable via graph edges, not search).
-- `mcp_schemas/` — the Context Broker tool contracts (PR-09). `base.py` holds `McpModel`
+Runtime-plane schemas, under `services/mcp-server/src/agentic_mcp_server/mcp/`:
+
+- `tool_schemas/` — the Context Broker tool contracts (PR-09), mirrored in
+  `docs/contracts/mcp-tools-contract.md`. `base.py` holds `McpModel`
   (frozen, `extra="forbid"`, pinned `schema_version`); `context.py` / `graph.py` / `ledger.py`
   define request+response pairs for all six V1 tools; `evidence.py` defines `EvidenceCard`
   (L0/L1 handle: id, type, title, summary, confidence, authority, `tokens_if_expanded`) and
   `AgentRole`. Policy is encoded in the schema itself: `RequestMoreRequest` requires
   question/why_needed/decision_needed/already_checked/max_tokens (a bare `{"query": ...}`
   fails validation before any broker code runs), denied responses must carry `denial_reason`,
-  and `OpenEvidenceResponse` names its payload `untrusted_content`. `registry.py` exposes
+  and `OpenEvidenceResponse` names its payload `untrusted_content`. `tool_registry.py` exposes
   `TOOL_SCHEMAS`, the authoritative tool-name → schema table the server registers from.
-- `agent_output_schemas/` — base model only (`AgentOutputModel`); populated with PR-11.
+- Agent output contracts: rules in `docs/contracts/agent-output-contracts.md`; concrete schemas
+  land with PR-11.
 
-## 2. The registry (`packages/db`)
+## 2. The registry (`services/kb-builder` — infrastructure/postgres + migrations)
 
-Models in `src/db/models/`, one file per table, deterministic constraint naming via
+Models in `src/agentic_kb_builder/infrastructure/postgres/models/`, one file per table,
+deterministic constraint naming via
 `base.py` so migrations are stable. Tables:
 
 | Table | Purpose | Notable constraints |
@@ -74,29 +84,33 @@ Models in `src/db/models/`, one file per table, deterministic constraint naming 
 | `kb_build_run` | Build audit + version lifecycle | `uq_kb_build_run_single_active` partial unique on status='active' (invariant 5) |
 | `retrieval_event` | Runtime ledger (used from PR-10) | indexes on run_id, normalized_query, kb_version |
 
-Migrations (`packages/db/alembic/versions/`): `0001` creates the registry; `0002` adds source
+Migrations (`services/kb-builder/migrations/versions/`): `0001` creates the registry; `0002` adds source
 identity + single-active-build; `0003` adds `generation_cache_artifact` + `knowledge_kind`
 (with a backfill of pre-existing cache rows); `0004` adds code spans; `0005` adds the linker
 partial unique index; `0006` adds the `embedding_cache.embedding` vector column. Every migration
 has a tested downgrade.
 
-## 3. Common (`packages/common`)
+## 3. Service-local utilities (the former shared `packages/common`)
 
-- `hashing` — `content_hash` (SHA-256 hex), `normalize_text` (NFC, CRLF→LF, strip trailing
-  whitespace/blank edges, exactly one trailing newline), `normalize_code` (line endings **only** —
-  code evidence must stay an exact snippet), `normalized_content_hash`. Determinism here is what
-  makes the whole incremental build trustworthy.
-- `logging` — `get_logger(name)` returns a `key=value` structured logger; handlers are cached;
-  bare prints are banned.
-- `token_budgeting` — `TokenBudget` dataclass (`max_tokens`, `used_tokens`, `can_spend`). The
-  Context Broker (PR-10) enforces it; prompts never do.
-- `search/` — the `SearchClient` Protocol (`upsert_docs`, `delete_docs`, `fetch_index_state`),
-  the in-memory `FakeSearchClient` (stores full `SearchDoc`s; tests inject drift by mutating it),
-  and `azure.py` — the **only** module in the repo allowed to import `azure-search-documents`.
+Self-contained services mean these are deliberately duplicated where needed (ADR-0008):
 
-## 4. Connectors (`apps/kb-builder/src/kb_builder/connectors/`)
+- `agentic_kb_builder/domain/content_hasher.py` — `content_hash` (SHA-256 hex), `normalize_text`
+  (NFC, CRLF→LF, strip trailing whitespace/blank edges, exactly one trailing newline),
+  `normalize_code` (line endings **only** — code evidence must stay an exact snippet),
+  `normalized_content_hash`. Determinism here is what makes the whole incremental build
+  trustworthy.
+- `structured_logging.py` (one copy per service) — `get_logger(name)` returns a `key=value`
+  structured logger; handlers are cached; bare prints are banned.
+- `agentic_mcp_server/domain/token_budget.py` — `TokenBudget` dataclass (`max_tokens`,
+  `used_tokens`, `can_spend`). The Context Broker (PR-10) enforces it; prompts never do.
+- `agentic_kb_builder/infrastructure/azure_search/` — the `SearchClient` Protocol
+  (`upsert_docs`, `delete_docs`, `fetch_index_state`), the in-memory `FakeSearchClient` (stores
+  full `SearchDoc`s; tests inject drift by mutating it), and `azure_search_client.py` — the
+  **only** module in the repo allowed to import `azure-search-documents`.
 
-`base.py` defines two seams:
+## 4. Connectors (`services/kb-builder/src/agentic_kb_builder/connectors/`)
+
+`source_connector.py` defines two seams:
 
 - `FetchBackend` (Protocol) — `list_sources()` + `fetch_text(source)`; must decode UTF-8 strictly
   so hashes never diverge. Real network backends do not exist yet — they are injected, which is
@@ -110,11 +124,11 @@ Concrete connectors are thin subclasses: `GitHubCodeConnector` (version = commit
 revision; the backend renders card fields deterministically — cards mutate, so we snapshot
 normalized fields, per the raw-storage policy).
 
-## 5. Build engine (`apps/kb-builder/src/kb_builder/build/`)
+## 5. Build engine (`services/kb-builder/src/agentic_kb_builder/application/`)
 
 The heart of the platform. Three files:
 
-**`cache.py`** — deterministic cache keys (`\x1f`-joined inputs, SHA-256): `chunk_summary_cache_key`
+**`cache_gates.py`** — deterministic cache keys (`\x1f`-joined inputs, SHA-256): `chunk_summary_cache_key`
 (source content hash + chunker/prompt/model/schema versions), `code_graph_cache_key` (repo +
 commit + path + file hash + graphify/parser versions), `concept_rollup_cache_key` (future).
 `GenerationCacheGate.lookup_artifact_ids` reads the ordered mapping table;
@@ -122,14 +136,14 @@ commit + path + file hash + graphify/parser versions), `concept_rollup_cache_key
 miss is resolved by the unique constraint — the loser aborts rather than double-writing.
 `EmbeddingCacheGate` is the same pattern keyed on (artifact_id, text_hash, embedding_model).
 
-**`runner.py`** — `BuildRunner.run(connectors)` implements architecture §7:
+**`build_runner.py`** — `BuildRunner.run(connectors)` implements architecture §7:
 
 1. Insert the `kb_build_run` audit row and **commit it immediately** — a failed build still leaves
    an audit trail.
 2. Per source: compute hash → `_is_unchanged()` → skip entirely, or `_process_changed_source()`:
    upsert `source_item` (on the natural-identity constraint) → `_wikify_gated` → `_graphify_gated`
    (github_code only) → `_embed_gated` per artifact → `indexer.upsert_documents` (a `SearchIndexer`
-   Protocol; the real implementation is `kb_builder/indexer/upsert.py`'s `SearchDocUpserter`).
+   Protocol; the real implementation is `agentic_kb_builder/indexing/upsert.py`'s `SearchDocUpserter`).
 3. `_write_pending_edges()` — graphify edges are held until all files in the run are flushed, so
    cross-file references resolve; unresolvable symbolic keys **drop the edge with a warning**
    rather than fabricating a node (invariant 7).
@@ -146,12 +160,13 @@ run to `active` *only if* the `ValidationHook` returns True, demoting the previo
 `superseded`; on False the run is marked `validation_failed` and the previous version keeps
 serving. The real hook (index-vs-registry consistency) arrives with PR-08.
 
-## 6. Wikify (`apps/kb-builder/src/kb_builder/wikify/`)
+## 6. Wikify (`services/kb-builder/src/agentic_kb_builder/wikify/`)
 
 - `chunker.py` — deterministic paragraph-packing chunker, `MAX_CHUNK_CHARS = 4000`; any behavior
   change must bump `CHUNKER_VERSION` because chunk output feeds the cache key.
-- `model_client.py` — the `ModelClient` Protocol (`model_name`, `model_params_hash`,
-  `generate_wikify(chunks, prompt_version) → WikifyGeneration`). No SDK import anywhere.
+- `infrastructure/azure_openai/model_client.py` — the `ModelClient` Protocol (`model_name`,
+  `model_params_hash`, `generate_wikify(chunks, prompt_version) → WikifyGeneration`). No SDK
+  import anywhere.
 - `generate.py` — `WikifyGenerator.wikify(content)` → drafts. Seed scores: chunks 1.0, facts 0.8,
   concepts 0.6, summaries 0.5 (authority — interpreted knowledge ranks below source-backed);
   freshness 1.0 at build time. **Invariant-7 guard**: a `source_backed_fact` whose supporting
@@ -161,7 +176,7 @@ serving. The real hook (index-vs-registry consistency) arrives with PR-08.
   (ids assigned) but never commits; the runner owns the transaction and records the cache row
   *after* a successful write, so a failed write cannot leave a cache entry pointing at nothing.
 
-## 7. Graphify adapter (`apps/kb-builder/src/kb_builder/graphify_adapter/`)
+## 7. Graphify adapter (`services/kb-builder/src/agentic_kb_builder/graphify/`)
 
 The parser itself is external/deterministic; this adapter validates and persists its output.
 
@@ -178,7 +193,7 @@ The parser itself is external/deterministic; this adapter validates and persists
   repo-relative, so the repo is part of the key); `write_code_edges` resolves keys to UUIDs and
   drops unresolved edges with a warning, returning `(inserted, dropped)`.
 
-## 8. Linker (`apps/kb-builder/src/kb_builder/linker/`)
+## 8. Linker (`services/kb-builder/src/agentic_kb_builder/linker/`)
 
 Connects Wikify concepts to Graphify code. Precision-biased by design — over-linking is the
 brief's explicit failure mode.
@@ -207,7 +222,7 @@ brief's explicit failure mode.
 - `run.py` — orchestration. Scans **all** non-deleted artifacts (not just this build's), because
   cache-hit artifacts keep their original kb_version. Returns `(inserted, refreshed, deleted)`.
 
-## 9. Search indexer (`apps/kb-builder/src/kb_builder/indexer/`)
+## 9. Search indexer (`services/kb-builder/src/agentic_kb_builder/indexing/`)
 
 Projects the registry into Azure AI Search and keeps the projection honest (invariant 1: Search is
 derived, never truth).
@@ -229,12 +244,12 @@ derived, never truth).
   `ValidationHook` shape `activate_kb_version` expects — this is the real validation gate behind
   invariant 5.
 
-## 10. MCP server base (`apps/mcp-server/src/mcp_server/`)
+## 10. MCP server base (`services/mcp-server/src/agentic_mcp_server/`)
 
 The runtime plane's skeleton (PR-09): everything *around* the broker, so PR-10 can drop broker
 logic into an already-secured, already-observable server.
 
-- `server.py` — `build_server(auth=..., session_factory=...)` assembles the FastMCP app. The
+- `mcp/server.py` — `build_server(auth=..., session_factory=...)` assembles the FastMCP app. The
   tool surface is registered **exclusively from `TOOL_SCHEMAS`** — a tool cannot exist at the
   boundary without a versioned contract. Each tool is a stub: fastmcp validates the request
   against the contract model (so a bare `{"query": ...}` already dies here), then the stub
@@ -255,11 +270,13 @@ logic into an already-secured, already-observable server.
 - `config.py` — env-only configuration (`DATABASE_URL`, `MCP_ENTRA_TENANT_ID`,
   `MCP_ENTRA_AUDIENCE`). Identifiers, not secrets.
 
-Tests (`apps/mcp-server/tests/`) exercise the boundary at the right layer: auth tests go through
-the real HTTP app in-process (httpx ASGI transport — the in-process MCP client would bypass
-auth), tool/telemetry tests use the in-process client, and health tests run migrations against
-local Postgres. `mcp_test_support.asgi_http_client` is a context manager rather than a fixture
-because the app lifespan's anyio cancel scope must enter/exit in one task.
+Tests (`services/mcp-server/tests/`) exercise the boundary at the right layer: auth tests
+(`tests/integration/`) go through the real HTTP app in-process (httpx ASGI transport — the
+in-process MCP client would bypass auth), tool/telemetry/schema tests (`tests/contract/`) use the
+in-process client, and health tests need a Postgres that kb-builder's migrations have already
+been run against (`make migrate-test-db`) — mcp-server itself never runs migrations.
+`mcp_test_support.asgi_http_client` is a context manager rather than a fixture because the app
+lifespan's anyio cancel scope must enter/exit in one task.
 
 ## 11. What does not exist yet
 
@@ -272,7 +289,9 @@ because the app lifespan's anyio cancel scope must enter/exit in one task.
 
 1. `docs/architecture/00-overview.md` (15 min) — the blueprint.
 2. This guide's doc 01 — the invariants and why.
-3. `packages/contracts/src/contracts/artifact_schemas/` — the vocabulary.
-4. `apps/kb-builder/src/kb_builder/build/runner.py` top-to-bottom — the spine everything hangs on.
+3. `services/kb-builder/src/agentic_kb_builder/domain/` — the vocabulary.
+4. `services/kb-builder/src/agentic_kb_builder/application/build_runner.py` top-to-bottom — the
+   spine everything hangs on.
 5. One enrichment layer end-to-end (suggest wikify: chunker → generate → write → its tests).
-6. `apps/kb-builder/tests/test_build_engine.py` — the executable spec for the engine's guarantees.
+6. `services/kb-builder/tests/integration/test_build_engine.py` — the executable spec for the
+   engine's guarantees.

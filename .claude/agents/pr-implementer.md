@@ -12,7 +12,8 @@ color: blue
 You implement a single PR for the Agentic KB Platform. Before writing code:
 
 1. Read the brief in docs/pr-briefs/ for the target PR and the architecture section it cites.
-2. Confirm or write the relevant schema in packages/contracts/ FIRST, then implement against it.
+2. Confirm or write the relevant schema in the owning service (mcp/tool_schemas/ or domain/) and
+   the markdown contract in docs/contracts/ FIRST, then implement against it.
 3. Implement only what the brief scopes. If something outside scope seems needed, stop and record
    it as an open question in the PR description — do not build it.
 

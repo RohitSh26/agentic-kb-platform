@@ -8,11 +8,13 @@ broker logic yet.
 docs/architecture §8, §12. .claude/rules/mcp-tools.md. ADR-0001, ADR-0006.
 
 ## Files to create
-- `apps/mcp-server/src/server.py` (fastmcp app, health), `src/auth/` (Entra ID / managed identity
-  boundary), `src/telemetry/` (structured logs + metrics), `src/config.py`.
+- `services/mcp-server/src/agentic_mcp_server/mcp/server.py` (fastmcp app, health), `auth/`
+  (Entra ID / managed identity boundary), `telemetry/` (structured logs + metrics), `config.py`.
 
 ## Contracts
-Tool registration reads request/response schemas from packages/contracts/mcp_schemas (tools stubbed).
+Tool registration reads request/response schemas from
+`services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/` (tools stubbed), mirrored in
+`docs/contracts/mcp-tools-contract.md`.
 
 ## Acceptance criteria
 - Health endpoint returns active kb_version.

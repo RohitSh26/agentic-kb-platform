@@ -9,7 +9,8 @@ description: >
 # Define an MCP tool (contract first)
 
 1. **Schema before code.** Add a versioned request and response schema to
-   `packages/contracts/mcp_schemas/`. No implementation until the schema is reviewed.
+   `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/` and update
+   `docs/contracts/mcp-tools-contract.md`. No implementation until the schema is reviewed.
 2. **Budgets are server-side.** The tool enforces per-run and per-agent token budgets itself. A
    prompt asking nicely is not enforcement.
 3. **Evidence by handle.** Return L0/L1 evidence cards first. Raw chunks (L2+) only when a handle is

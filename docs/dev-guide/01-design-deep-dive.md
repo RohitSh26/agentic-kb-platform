@@ -17,18 +17,19 @@ subagents through one shared, budgeted **Evidence Pack**. The pattern is *not* "
 access" — it is **"many controlled specialists using one shared Evidence Pack governed by an MCP
 Context Broker."**
 
-Canonical reference: `docs/architecture/00-overview.md`. Decisions: `docs/adr/0001`–`0007`.
+Canonical reference: `docs/architecture/00-overview.md`. Decisions: `docs/adr/0001`–`0008`.
 Build units: `docs/pr-briefs/PR-01`–`PR-13`.
 
 ## The two planes
 
 | Plane | What it does | Where it lives | Status |
 |---|---|---|---|
-| **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation | `apps/kb-builder` | Implemented through PR-08 (connectors → build engine → wikify → graphify → linker → search indexer) |
-| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, graph traversal, retrieval ledger | `apps/mcp-server` | Not yet built (PR-09/PR-10) |
+| **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation | `services/kb-builder` | Implemented through PR-08 (connectors → build engine → wikify → graphify → linker → search indexer) |
+| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, graph traversal, retrieval ledger | `services/mcp-server` | Server base implemented (PR-09: auth, telemetry, tool contracts, health); broker logic lands with PR-10 |
 
-Shared between them: `packages/contracts` (the schema boundary), `packages/db` (the registry),
-`packages/common` (hashing, logging, token budgeting).
+Nothing is shared at runtime (ADR-0008): each service is a self-contained `uv` project, and the
+only cross-service agreements are the markdown contracts in `docs/contracts/`, pinned by contract
+tests on both sides. kb-builder owns the Postgres schema and all Alembic migrations.
 
 ## Why Postgres-first (ADR-0002, ADR-0003)
 
@@ -61,7 +62,7 @@ not a prompt suggestion.
 ## kb_version lifecycle (invariant 5)
 
 Every build run gets a `kb_version`. A version becomes **active** only after validation passes
-(`apps/kb-builder/src/kb_builder/build/active_version.py` — `activate_kb_version` takes a
+(`services/kb-builder/src/agentic_kb_builder/application/active_version.py` — `activate_kb_version` takes a
 `ValidationHook`; on failure the run is marked `validation_failed` and the *previous* active
 version keeps serving). MCP always serves the last successful active version. A partial unique
 index on `kb_build_run` guarantees at most one active run at a time.
@@ -127,12 +128,15 @@ Concept "User Embeddings"
 
 ## The contract boundary
 
-`packages/contracts` is the schema boundary between everything. Build stages exchange **frozen
-pydantic models** (`extra="forbid"`, explicit `schema_version`), not loose dicts: connector output
-(`NormalizedContent`), wikify/graphify/linker drafts (`*Draft` models), and later the MCP
-request/response schemas. The rule is **contracts before code**: any new tool or artifact gets its
-schema written/confirmed in contracts first, then implemented against it. This is what keeps the
-two planes and the future MCP clients honest with each other.
+Contracts live in two layers. *Within* a service, build stages exchange **frozen pydantic
+models** (`extra="forbid"`, explicit `schema_version`), not loose dicts: connector output
+(`NormalizedContent`) and wikify/graphify/linker drafts (`*Draft` models) in
+`agentic_kb_builder/domain/`, and the MCP request/response schemas in
+`agentic_mcp_server/mcp/tool_schemas/`. *Between* the services, the contract is markdown:
+`docs/contracts/` records the registry tables, the search index shape, the Evidence Pack, the
+MCP tool surface, and agent output rules — and contract tests in each service pin their code to
+those documents. The rule is **contracts before code**: any new tool or artifact gets its schema
+written/confirmed first, then implemented against it.
 
 ## External systems sit behind interfaces
 
@@ -141,8 +145,9 @@ is a `Protocol` the caller owns:
 
 - `ModelClient` — Azure OpenAI (wikify generation)
 - `Embedder` — embedding endpoint
-- `SearchIndexer` / `SearchClient` — Azure AI Search (`common/search/azure.py` is the *only*
-  module allowed to import the SDK; `FakeSearchClient` is the in-memory stand-in)
+- `SearchIndexer` / `SearchClient` — Azure AI Search
+  (`agentic_kb_builder/infrastructure/azure_search/azure_search_client.py` is the *only* module
+  allowed to import the SDK; `FakeSearchClient` is the in-memory stand-in)
 - `SimilarityProvider` — vector similarity for the linker's semantic pass
 
 Two payoffs: tests are hermetic (in-memory fakes, no cloud), and each backend is swappable via ADR
@@ -158,7 +163,7 @@ never an invention (invariant 7 — this is also why the linker deletes edges wh
 rather than serving them).
 
 Since PR-09 the first layer is real: every MCP request must carry an Entra ID bearer token,
-verified against the tenant's public JWKS keys (`mcp_server/auth/entra.py`) — the server stores no
+verified against the tenant's public JWKS keys (`agentic_mcp_server/auth/entra.py`) — the server stores no
 client secret. Telemetry attributes each call to the *verified* token subject, never to a
 client-asserted field, and the contracts encode policy directly: `context.request_more` requires a
 full justification (a bare `{"query": ...}` fails schema validation), and expanded evidence is
@@ -176,10 +181,10 @@ via a new ADR. Default answer is no.
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| 1 | Postgres is truth; Search is a projection | ADR-0002; `kb_builder/indexer/consistency.py` drift check gates activation; embedding vectors stored in `embedding_cache` so the index rebuilds without re-embedding |
+| 1 | Postgres is truth; Search is a projection | ADR-0002; `agentic_kb_builder/indexing/consistency.py` drift check gates activation; embedding vectors stored in `embedding_cache` so the index rebuilds without re-embedding |
 | 2 | Graph in Postgres, behavior via MCP tools | `knowledge_edge` table; `graph.get_neighbors` contract + registered stub (PR-09), broker logic PR-10 |
 | 3 | Token saving enforced by the broker, not prompts | Context Broker budgets + ledger (PR-10); `.claude/rules/token-budgets.md` |
-| 4 | Incremental build; cache hit ⇒ no model call | `GenerationCacheGate` / `EmbeddingCacheGate` in `apps/kb-builder/src/kb_builder/build/cache.py`; content-hash skip in `build/runner.py` |
-| 5 | kb_version active only after validation | `build/active_version.py` + unique partial index on `kb_build_run` |
-| 6 | Agents never touch stores/secrets; retrieved text untrusted | Entra JWKS auth boundary + schema-encoded policy in `contracts/mcp_schemas` (PR-09); hardening PR-13 |
+| 4 | Incremental build; cache hit ⇒ no model call | `GenerationCacheGate` / `EmbeddingCacheGate` in `agentic_kb_builder/application/cache_gates.py`; content-hash skip in `application/build_runner.py` |
+| 5 | kb_version active only after validation | `application/active_version.py` + unique partial index on `kb_build_run` |
+| 6 | Agents never touch stores/secrets; retrieved text untrusted | Entra JWKS auth boundary + schema-encoded policy in `agentic_mcp_server/mcp/tool_schemas` (PR-09); hardening PR-13 |
 | 7 | Every claim cites evidence; no fabrication | Evidence-ID discipline (PR-10/11); linker stale-edge deletion in `linker/write_edges.py` |

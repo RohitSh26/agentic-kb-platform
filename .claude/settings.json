@@ -44,7 +44,7 @@
       "Read(./**/secrets/**)",
       "Read(./**/*.pem)",
       "Edit(./.env)",
-      "Edit(./packages/db/alembic/versions/*_applied_*.py)"
+      "Edit(./services/kb-builder/migrations/versions/*_applied_*.py)"
     ]
   },
   "hooks": {

@@ -1,4 +1,4 @@
-# Rule: MCP Context Broker (apps/mcp-server, packages/contracts/mcp_schemas)
+# Rule: MCP Context Broker (services/mcp-server)
 
 - The MCP server is the Context Broker — policy, retrieval, dedupe, evidence, and budget layer. It is
   NOT a thin wrapper over Azure AI Search.
