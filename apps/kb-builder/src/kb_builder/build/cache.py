@@ -204,28 +204,26 @@ class EmbeddingCacheGate:
         embedding: list[float] | None = None,
         azure_search_doc_id: str | None = None,
     ) -> None:
-        statement = (
-            insert(EmbeddingCache)
-            .values(
-                artifact_id=artifact_id,
-                text_hash=text_hash,
-                embedding_model=embedding_model,
-                embedding_hash=embedding_hash,
-                embedding=embedding,
-                azure_search_doc_id=azure_search_doc_id,
-            )
-            # do_update (not do_nothing) so a pre-existing vectorless row is
-            # backfilled; azure_search_doc_id and any stored vector are never
-            # overwritten by a vectorless call.
-            .on_conflict_do_update(
-                index_elements=["artifact_id", "text_hash", "embedding_model"],
-                set_=(
-                    {"embedding_hash": embedding_hash, "embedding": embedding}
-                    if embedding is not None
-                    else {"embedding_hash": embedding_hash}
-                ),
-            )
+        key = ["artifact_id", "text_hash", "embedding_model"]
+        base = insert(EmbeddingCache).values(
+            artifact_id=artifact_id,
+            text_hash=text_hash,
+            embedding_model=embedding_model,
+            embedding_hash=embedding_hash,
+            embedding=embedding,
+            azure_search_doc_id=azure_search_doc_id,
         )
+        # A vector-bearing record backfills a pre-existing vectorless row
+        # (hash + vector updated together so they never diverge); a vectorless
+        # record never touches an existing row, and azure_search_doc_id is
+        # never overwritten on conflict.
+        if embedding is not None:
+            statement = base.on_conflict_do_update(
+                index_elements=key,
+                set_={"embedding_hash": embedding_hash, "embedding": embedding},
+            )
+        else:
+            statement = base.on_conflict_do_nothing(index_elements=key)
         await self._session.execute(statement)
         logger.info(
             "event=embedding_cache_record artifact_id=%s text_hash=%s model=%s",

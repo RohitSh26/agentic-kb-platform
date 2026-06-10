@@ -284,22 +284,23 @@ async def test_vectorless_cache_row_is_miss_and_backfills(session: AsyncSession)
     (never duplicating the row, never erasing it on a vectorless call)."""
     concept = await _seed_concept(session)
     assert concept.body_text is not None
+    artifact_id = concept.artifact_id
     text_hash = content_hash(concept.body_text)
     gate = EmbeddingCacheGate(session)
     await gate.record(
-        artifact_id=concept.artifact_id,
+        artifact_id=artifact_id,
         text_hash=text_hash,
         embedding_model=EMBEDDING_MODEL,
         embedding_hash="ehash:old",
     )
 
     miss = await gate.lookup(
-        artifact_id=concept.artifact_id, text_hash=text_hash, embedding_model=EMBEDDING_MODEL
+        artifact_id=artifact_id, text_hash=text_hash, embedding_model=EMBEDDING_MODEL
     )
     assert miss is None  # vectorless row must not be a hit
 
     await gate.record(
-        artifact_id=concept.artifact_id,
+        artifact_id=artifact_id,
         text_hash=text_hash,
         embedding_model=EMBEDDING_MODEL,
         embedding_hash="ehash:new",
@@ -308,17 +309,21 @@ async def test_vectorless_cache_row_is_miss_and_backfills(session: AsyncSession)
     rows = (await session.execute(select(EmbeddingCache))).scalars().all()
     assert len(rows) == 1 and rows[0].embedding == VECTOR
 
-    # a later vectorless record must not erase the stored vector
+    # a later vectorless record must leave the row untouched — neither the
+    # vector nor its hash may change (hash and vector always move together)
     await gate.record(
-        artifact_id=concept.artifact_id,
+        artifact_id=artifact_id,
         text_hash=text_hash,
         embedding_model=EMBEDDING_MODEL,
         embedding_hash="ehash:newer",
     )
+    session.expire_all()
     refreshed = await gate.lookup(
-        artifact_id=concept.artifact_id, text_hash=text_hash, embedding_model=EMBEDDING_MODEL
+        artifact_id=artifact_id, text_hash=text_hash, embedding_model=EMBEDDING_MODEL
     )
-    assert refreshed is not None and refreshed.embedding == VECTOR
+    assert refreshed is not None
+    assert refreshed.embedding == VECTOR
+    assert refreshed.embedding_hash == "ehash:new"
 
 
 @requires_db
