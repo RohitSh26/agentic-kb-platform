@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from common.hashing import content_hash
 from common.search.client import FakeSearchClient
 from db.models import EmbeddingCache, KnowledgeArtifact, SourceItem
+from kb_builder.build import EmbeddingCacheGate
 from kb_builder.indexer import (
     SearchDocUpserter,
     delete_orphaned_docs,
@@ -247,6 +248,77 @@ async def test_upsert_writes_only_requested_artifacts(session: AsyncSession) -> 
     # rerun with the same ids replaces in place — never duplicates
     assert await upserter.upsert_documents([changed.artifact_id]) == 1
     assert len(client.docs) == 1
+
+
+@requires_db
+async def test_upsert_partial_failure_fails_the_run(session: AsyncSession) -> None:
+    """A doc the index silently dropped would wedge validation on every later
+    build, so an incomplete upsert must raise (the runner then marks the run
+    failed and the unchanged-skip never commits — next build retries)."""
+
+    class DroppingSearchClient(FakeSearchClient):
+        async def upsert_docs(self, docs):  # type: ignore[no-untyped-def]
+            await super().upsert_docs(docs)
+            return len(docs) - 1
+
+    concept = await _seed_concept(session)
+    await _add_embedding(session, concept, embedding=VECTOR)
+
+    upserter = SearchDocUpserter(session, DroppingSearchClient())
+    with pytest.raises(RuntimeError, match="search upsert incomplete"):
+        await upserter.upsert_documents([concept.artifact_id])
+
+    # the failed batch must not be stamped as indexed
+    row = (
+        await session.execute(
+            select(EmbeddingCache).where(EmbeddingCache.artifact_id == concept.artifact_id)
+        )
+    ).scalar_one()
+    assert row.azure_search_doc_id is None
+
+
+@requires_db
+async def test_vectorless_cache_row_is_miss_and_backfills(session: AsyncSession) -> None:
+    """Pre-0006 rows have no stored vector and cannot serve an index rebuild:
+    the gate treats them as misses and the re-record fills the vector in place
+    (never duplicating the row, never erasing it on a vectorless call)."""
+    concept = await _seed_concept(session)
+    assert concept.body_text is not None
+    text_hash = content_hash(concept.body_text)
+    gate = EmbeddingCacheGate(session)
+    await gate.record(
+        artifact_id=concept.artifact_id,
+        text_hash=text_hash,
+        embedding_model=EMBEDDING_MODEL,
+        embedding_hash="ehash:old",
+    )
+
+    miss = await gate.lookup(
+        artifact_id=concept.artifact_id, text_hash=text_hash, embedding_model=EMBEDDING_MODEL
+    )
+    assert miss is None  # vectorless row must not be a hit
+
+    await gate.record(
+        artifact_id=concept.artifact_id,
+        text_hash=text_hash,
+        embedding_model=EMBEDDING_MODEL,
+        embedding_hash="ehash:new",
+        embedding=VECTOR,
+    )
+    rows = (await session.execute(select(EmbeddingCache))).scalars().all()
+    assert len(rows) == 1 and rows[0].embedding == VECTOR
+
+    # a later vectorless record must not erase the stored vector
+    await gate.record(
+        artifact_id=concept.artifact_id,
+        text_hash=text_hash,
+        embedding_model=EMBEDDING_MODEL,
+        embedding_hash="ehash:newer",
+    )
+    refreshed = await gate.lookup(
+        artifact_id=concept.artifact_id, text_hash=text_hash, embedding_model=EMBEDDING_MODEL
+    )
+    assert refreshed is not None and refreshed.embedding == VECTOR
 
 
 @requires_db

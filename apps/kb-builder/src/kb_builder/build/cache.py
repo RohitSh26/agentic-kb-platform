@@ -172,6 +172,19 @@ class EmbeddingCacheGate:
         self, *, artifact_id: uuid.UUID, text_hash: str, embedding_model: str
     ) -> EmbeddingCache | None:
         hit = await self._session.get(EmbeddingCache, (artifact_id, text_hash, embedding_model))
+        if hit is not None and hit.embedding is None:
+            # A row without its vector (pre-0006) cannot serve an index rebuild;
+            # treat it as a miss so the vector is backfilled exactly once.
+            # Expunge the stale instance so post-backfill reads in this session
+            # see the stored vector instead of the identity-map copy.
+            logger.info(
+                "event=embedding_cache_vectorless_row artifact_id=%s text_hash=%s model=%s",
+                artifact_id,
+                text_hash,
+                embedding_model,
+            )
+            self._session.expunge(hit)
+            hit = None
         logger.info(
             "event=embedding_cache_lookup artifact_id=%s text_hash=%s model=%s hit=%s",
             artifact_id,
@@ -201,7 +214,17 @@ class EmbeddingCacheGate:
                 embedding=embedding,
                 azure_search_doc_id=azure_search_doc_id,
             )
-            .on_conflict_do_nothing(index_elements=["artifact_id", "text_hash", "embedding_model"])
+            # do_update (not do_nothing) so a pre-existing vectorless row is
+            # backfilled; azure_search_doc_id and any stored vector are never
+            # overwritten by a vectorless call.
+            .on_conflict_do_update(
+                index_elements=["artifact_id", "text_hash", "embedding_model"],
+                set_=(
+                    {"embedding_hash": embedding_hash, "embedding": embedding}
+                    if embedding is not None
+                    else {"embedding_hash": embedding_hash}
+                ),
+            )
         )
         await self._session.execute(statement)
         logger.info(

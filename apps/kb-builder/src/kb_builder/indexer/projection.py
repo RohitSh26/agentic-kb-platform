@@ -92,7 +92,11 @@ async def _load_embeddings(
     rows = (
         (
             await session.execute(
-                select(EmbeddingCache).where(EmbeddingCache.artifact_id.in_(artifact_ids))
+                select(EmbeddingCache)
+                .where(EmbeddingCache.artifact_id.in_(artifact_ids))
+                # deterministic winner when several models embedded the same
+                # text: the projection must be a pure function of registry state
+                .order_by(EmbeddingCache.embedding_model)
             )
         )
         .scalars()

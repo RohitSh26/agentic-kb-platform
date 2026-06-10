@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.hashing import content_hash
 from common.logging import get_logger
 from common.search.client import SearchClient
 from contracts.search_schemas import SearchDoc
@@ -37,6 +38,14 @@ class SearchDocUpserter:
             logger.info("event=indexer_upsert_skipped reason=no_projectable_artifacts")
             return 0
         upserted = await self._client.upsert_docs(docs)
+        if upserted != len(docs):
+            # A silently missing doc would wedge consistency validation on every
+            # later build (the orphan sweep repairs orphans, nothing repairs
+            # missing); failing the run keeps the source unchanged-skip from
+            # committing, so the next build retries the upsert.
+            raise RuntimeError(
+                f"search upsert incomplete: {upserted}/{len(docs)} documents accepted"
+            )
         await self._record_doc_ids(docs)
         logger.info(
             "event=indexer_docs_upserted requested=%d upserted=%d", len(artifact_ids), upserted
@@ -47,7 +56,7 @@ class SearchDocUpserter:
         return await delete_orphaned_docs(self._session, self._client)
 
     async def _record_doc_ids(self, docs: Sequence[SearchDoc]) -> None:
-        """Stamp azure_search_doc_id on the embedding rows behind each doc."""
+        """Stamp azure_search_doc_id on the embedding row behind each doc."""
         for doc in docs:
             if doc.embedding is None:
                 continue
@@ -55,7 +64,8 @@ class SearchDocUpserter:
                 update(EmbeddingCache)
                 .where(
                     EmbeddingCache.artifact_id == doc.artifact_id,
-                    EmbeddingCache.azure_search_doc_id.is_(None),
+                    EmbeddingCache.text_hash == content_hash(doc.body_text),
+                    EmbeddingCache.embedding_model == doc.embedding_model,
                 )
                 .values(azure_search_doc_id=doc.doc_id)
             )
