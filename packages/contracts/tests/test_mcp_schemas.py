@@ -42,6 +42,18 @@ def test_request_more_requires_full_justification() -> None:
         )
 
 
+def test_run_id_rejects_log_injection_charsets() -> None:
+    for bad in ("run 1", "run\nstatus=ok", "run=1", 'run"1', "x" * 129):
+        with pytest.raises(ValidationError):
+            CreatePackRequest(
+                run_id=bad,
+                task="t",
+                approved_context_plan="p",
+                retrieval_profile="default",
+                budget_tokens=8000,
+            )
+
+
 def test_denied_status_requires_denial_reason() -> None:
     with pytest.raises(ValidationError, match="denial_reason"):
         RequestMoreResponse.model_validate(

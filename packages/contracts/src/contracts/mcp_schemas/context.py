@@ -13,9 +13,13 @@ from pydantic import Field, model_validator
 from contracts.mcp_schemas.base import McpModel
 from contracts.mcp_schemas.evidence import AgentRole, EvidenceCard
 
+# run ids land verbatim in key=value audit logs; the charset constraint makes
+# log-line forgery (spaces/newlines smuggling fake fields) impossible
+RUN_ID_PATTERN = r"^[A-Za-z0-9._-]{1,128}$"
+
 
 class CreatePackRequest(McpModel):
-    run_id: str = Field(min_length=1)
+    run_id: str = Field(pattern=RUN_ID_PATTERN)
     task: str = Field(min_length=1)
     approved_context_plan: str = Field(min_length=1)
     retrieval_profile: str = Field(min_length=1)
@@ -58,6 +62,13 @@ RequestMoreStatus = Literal["reused", "approved", "denied", "needs_human_approva
 
 
 class RequestMoreRequest(McpModel):
+    """Justified follow-up retrieval.
+
+    `agent_name` is correlation metadata only; budget and authorization
+    identity bind to the authenticated MCP session, exactly as with
+    ReadPackRequest.role.
+    """
+
     context_pack_id: str = Field(min_length=1)
     agent_name: str = Field(min_length=1)
     question: str = Field(min_length=1)

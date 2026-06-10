@@ -1,5 +1,6 @@
 """Structured request telemetry: one log line per tool call, no silent failures."""
 
+import re
 import time
 from typing import Any
 
@@ -19,16 +20,23 @@ def _agent_identity() -> str:
     return token.subject or token.client_id or "unknown"
 
 
-def _run_id(arguments: dict[str, Any] | None) -> str | None:
+# mirrors contracts' RUN_ID_PATTERN; this middleware logs *before* contract
+# validation runs, so it must not trust the value (log-injection guard)
+_SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+def _run_id(arguments: dict[str, Any] | None) -> str:
     # tools take a single contract model argument named "request"; run-scoped
-    # requests carry run_id inside it
+    # requests carry run_id inside it ("-" = not run-scoped)
     if not arguments:
-        return None
+        return "-"
     request = arguments.get("request")
     if isinstance(request, dict):
         run_id = request.get("run_id")  # pyright: ignore[reportUnknownMemberType]
-        return run_id if isinstance(run_id, str) else None
-    return None
+        if not isinstance(run_id, str):
+            return "-"
+        return run_id if _SAFE_RUN_ID.fullmatch(run_id) else "<unsafe-run-id>"
+    return "-"
 
 
 class TelemetryMiddleware(Middleware):

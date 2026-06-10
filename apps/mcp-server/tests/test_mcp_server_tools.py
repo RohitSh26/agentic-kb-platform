@@ -64,13 +64,14 @@ async def test_bare_query_is_rejected_by_the_schema(server: FastMCP) -> None:
             await client.call_tool(
                 "context.request_more", {"request": {"query": "give me everything"}}
             )
-    assert "not implemented" not in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "not implemented" not in message  # rejected before the stub ran
+    assert "why_needed" in message  # validation names the missing justification
 
 
 async def test_telemetry_emits_structured_line_per_request(
     server: FastMCP, caplog: pytest.LogCaptureFixture
 ) -> None:
-    logging.getLogger("mcp_server.telemetry").disabled = False  # see dev-guide 03, Alembic caveat
     with caplog.at_level(logging.INFO, logger="mcp_server.telemetry"):
         async with Client(server) as client:
             with pytest.raises(ToolError, match="not implemented"):
@@ -83,3 +84,18 @@ async def test_telemetry_emits_structured_line_per_request(
     assert "agent=" in line
     assert "latency_ms=" in line
     assert "status=error" in line
+
+
+async def test_telemetry_never_logs_an_unsafe_run_id(
+    server: FastMCP, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The middleware logs before contract validation, so it must sanitize itself."""
+    forged = "x status=ok agent=spoofed\nevent=mcp_request forged=line"
+    with caplog.at_level(logging.INFO, logger="mcp_server.telemetry"):
+        async with Client(server) as client:
+            with pytest.raises(ToolError):
+                await client.call_tool("ledger.list_retrievals", {"request": {"run_id": forged}})
+    lines = [r.getMessage() for r in caplog.records if "event=mcp_request" in r.getMessage()]
+    assert len(lines) == 1
+    assert "run_id=<unsafe-run-id>" in lines[0]
+    assert "spoofed" not in lines[0]

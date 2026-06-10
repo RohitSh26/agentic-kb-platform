@@ -83,7 +83,6 @@ async def test_authenticated_tool_call_logs_agent_identity(
         headers={"Authorization": f"Bearer {VALID_TOKEN}"},
         httpx_client_factory=client_factory,
     )
-    logging.getLogger("mcp_server.telemetry").disabled = False  # see dev-guide 03, Alembic caveat
     async with app.router.lifespan_context(app):
         with caplog.at_level(logging.INFO, logger="mcp_server.telemetry"):
             async with Client(transport) as client:

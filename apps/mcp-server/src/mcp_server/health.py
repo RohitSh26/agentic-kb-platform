@@ -9,9 +9,13 @@ the route maps that to 503, not an error.
 from typing import TypedDict
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from common.logging import get_logger
 from db.models import KbBuildRun
+
+logger = get_logger("mcp_server.health")
 
 
 class HealthPayload(TypedDict):
@@ -21,11 +25,19 @@ class HealthPayload(TypedDict):
 
 
 async def health(session_factory: async_sessionmaker[AsyncSession]) -> HealthPayload:
-    async with session_factory() as session:
-        result = await session.execute(
-            select(KbBuildRun.kb_version).where(KbBuildRun.status == "active")
-        )
-        active = result.scalar_one_or_none()
+    try:
+        async with session_factory() as session:
+            result = await session.execute(
+                select(KbBuildRun.kb_version).where(KbBuildRun.status == "active")
+            )
+            active = result.scalar_one_or_none()
+    except SQLAlchemyError as exc:
+        logger.error("event=health_registry_unreachable error=%s", type(exc).__name__)
+        return {
+            "status": "registry_unreachable",
+            "service": "mcp-server",
+            "active_kb_version": None,
+        }
     return {
         "status": "ok" if active is not None else "no_active_kb_version",
         "service": "mcp-server",

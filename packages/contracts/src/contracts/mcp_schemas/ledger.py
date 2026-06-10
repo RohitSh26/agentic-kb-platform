@@ -10,10 +10,11 @@ from datetime import datetime
 from pydantic import Field
 
 from contracts.mcp_schemas.base import McpModel
+from contracts.mcp_schemas.context import RUN_ID_PATTERN
 
 
 class ListRetrievalsRequest(McpModel):
-    run_id: str = Field(min_length=1)
+    run_id: str = Field(pattern=RUN_ID_PATTERN)
 
 
 class RetrievalEventRecord(McpModel):
