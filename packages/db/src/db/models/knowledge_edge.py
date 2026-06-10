@@ -33,4 +33,12 @@ class KnowledgeEdge(Base):
         Index("ix_knowledge_edge_kb_version", "kb_version"),
         Index("ix_knowledge_edge_from_artifact_id", "from_artifact_id"),
         Index("ix_knowledge_edge_to_artifact_id", "to_artifact_id"),
+        Index(
+            "uq_knowledge_edge_linker",
+            "from_artifact_id",
+            "to_artifact_id",
+            "edge_type",
+            unique=True,
+            postgresql_where=text("source = 'linker'"),
+        ),
     )

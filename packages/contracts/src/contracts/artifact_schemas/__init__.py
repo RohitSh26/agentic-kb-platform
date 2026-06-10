@@ -36,6 +36,11 @@ from contracts.artifact_schemas.graphify import (  # noqa: E402
     ParsedTest,
     SymbolKind,
 )
+from contracts.artifact_schemas.linker import (  # noqa: E402
+    LinkEdgeDraft,
+    LinkerEdgeType,
+    LinkStrategy,
+)
 from contracts.artifact_schemas.sources import (  # noqa: E402
     NormalizedContent,
     SourceRef,
@@ -63,6 +68,9 @@ __all__ = [
     "FileGraph",
     "GraphifyResult",
     "KnowledgeKind",
+    "LinkEdgeDraft",
+    "LinkStrategy",
+    "LinkerEdgeType",
     "NormalizedContent",
     "ParsedCall",
     "ParsedEndpoint",
