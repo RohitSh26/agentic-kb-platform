@@ -13,6 +13,8 @@ __pycache__/
 .env.mcp
 *.pem
 **/secrets/
+# templates carry no secrets and document required configuration
+!.env.example
 
 # Build / OS
 dist/
@@ -21,3 +23,4 @@ dist/
 
 # Claude Code session state
 .claude/cadence/
+.claude/scheduled_tasks.lock
