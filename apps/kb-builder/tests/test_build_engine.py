@@ -17,12 +17,27 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from common.hashing import content_hash
-from contracts.artifact_schemas import NormalizedContent, SourceRef
-from db.models import GenerationCache, KbBuildRun, KnowledgeArtifact, KnowledgeEdge, SourceItem
+from contracts.artifact_schemas import (
+    Chunk,
+    ConceptDraft,
+    NormalizedContent,
+    SourceBackedFactDraft,
+    SourceRef,
+    WikifyArtifactDraft,
+    WikifyGeneration,
+)
+from db.models import (
+    GenerationCache,
+    GenerationCacheArtifact,
+    KbBuildRun,
+    KnowledgeArtifact,
+    KnowledgeEdge,
+    SourceItem,
+)
 from kb_builder.build import (
-    ArtifactDraft,
     BuildRunner,
     EdgeDraft,
+    GenerationCacheGate,
     activate_kb_version,
     chunk_summary_cache_key,
     code_graph_cache_key,
@@ -30,6 +45,7 @@ from kb_builder.build import (
     get_active_kb_version,
 )
 from kb_builder.connectors import GitHubCodeConnector
+from kb_builder.wikify import WikifyGenerator
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
@@ -43,6 +59,7 @@ ALEMBIC_INI = Path(__file__).resolve().parents[3] / "packages" / "db" / "alembic
 TABLES_IN_DELETE_ORDER = (
     "retrieval_event",
     "embedding_cache",
+    "generation_cache_artifact",
     "generation_cache",
     "knowledge_edge",
     "knowledge_artifact",
@@ -145,19 +162,22 @@ class SpyWikifier:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def wikify(self, content: NormalizedContent) -> Sequence[ArtifactDraft]:
+    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
         self.calls += 1
         return [
-            ArtifactDraft(
-                artifact_type="chunk_summary",
+            WikifyArtifactDraft(
+                artifact_type="summary",
+                knowledge_kind="interpreted",
                 title=f"summary of {content.source.path}",
                 body_text=f"Summary of {content.source.source_uri}",
+                authority_score=0.5,
+                freshness_score=1.0,
             )
         ]
 
 
 class FailingWikifier(SpyWikifier):
-    async def wikify(self, content: NormalizedContent) -> Sequence[ArtifactDraft]:
+    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
         self.calls += 1
         raise RuntimeError("model exploded")
 
@@ -345,18 +365,34 @@ async def test_failed_wikify_leaves_no_cache_row_or_artifacts_but_audit_row_surv
 
 
 class MultiDraftWikifier(SpyWikifier):
-    async def wikify(self, content: NormalizedContent) -> Sequence[ArtifactDraft]:
+    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
         self.calls += 1
         return [
-            ArtifactDraft(artifact_type="chunk_summary", title="a", body_text="a"),
-            ArtifactDraft(artifact_type="chunk_summary", title="b", body_text="b"),
+            WikifyArtifactDraft(
+                artifact_type="concept",
+                knowledge_kind="interpreted",
+                title="a",
+                body_text="a",
+                authority_score=0.6,
+                freshness_score=1.0,
+            ),
+            WikifyArtifactDraft(
+                artifact_type="concept",
+                knowledge_kind="interpreted",
+                title="b",
+                body_text="b",
+                authority_score=0.6,
+                freshness_score=1.0,
+            ),
         ]
 
 
 @requires_db
-async def test_multi_artifact_wikify_fails_loudly_until_pr05_contract(
+async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
     session: AsyncSession,
 ) -> None:
+    """One cache row -> N artifacts via generation_cache_artifact; a hit must
+    surface the full set to embed/index (resolves the PR-04 open question)."""
     runner = BuildRunner(
         session,
         kb_version="v-test.1",
@@ -365,10 +401,158 @@ async def test_multi_artifact_wikify_fails_loudly_until_pr05_contract(
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
-    with pytest.raises(NotImplementedError, match="PR-05"):
-        await runner.run([_connector("x = 1\n")])
-    assert await _count(session, KnowledgeArtifact) == 0
-    assert await _count(session, GenerationCache) == 0
+    await runner.run([_connector("x = 1\n")])
+    await session.commit()
+    assert await _count(session, KnowledgeArtifact) == 2
+    # one wikify cache row + one graphify cache row (github_code source)
+    assert await _count(session, GenerationCache) == 2
+    assert await _count(session, GenerationCacheArtifact) == 2
+    # the mapping preserves generation order (ORDER BY position)
+    mapped_titles = (
+        (
+            await session.execute(
+                select(KnowledgeArtifact.title)
+                .join(
+                    GenerationCacheArtifact,
+                    GenerationCacheArtifact.artifact_id == KnowledgeArtifact.artifact_id,
+                )
+                .order_by(GenerationCacheArtifact.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert mapped_titles == ["a", "b"]
+
+    # retry with a stale-looking source: cache hit, zero model calls, both
+    # artifacts still reach embed/index.
+    await session.execute(update(SourceItem).values(content_hash="stale"))
+    await session.commit()
+    wikifier2 = MultiDraftWikifier()
+    embedder2 = SpyEmbedder()
+    indexer2 = SpyIndexer()
+    runner2 = BuildRunner(
+        session,
+        kb_version="v-test.2",
+        wikifier=wikifier2,
+        graphifier=SpyGraphifier(),
+        embedder=embedder2,
+        indexer=indexer2,
+    )
+    run2 = await runner2.run([_connector("x = 1\n")])
+    await session.commit()
+    assert run2.llm_calls == 0
+    assert wikifier2.calls == 0
+    assert embedder2.calls == 0  # embedding cache also hits for both artifacts
+    assert indexer2.calls == 1
+    assert await _count(session, KnowledgeArtifact) == 2
+    assert await _count(session, GenerationCacheArtifact) == 2
+
+
+@requires_db
+async def test_generation_cache_record_is_idempotent_for_same_ids(session: AsyncSession) -> None:
+    source = SourceItem(
+        source_type="github_doc", source_uri="u", source_version="v", content_hash="h"
+    )
+    session.add(source)
+    await session.flush()
+    artifact = KnowledgeArtifact(
+        artifact_type="summary",
+        source_id=source.source_id,
+        body_text="t",
+        kb_version="v-test.1",
+        knowledge_kind="interpreted",
+    )
+    session.add(artifact)
+    await session.flush()
+
+    gate = GenerationCacheGate(session)
+    for _ in range(2):  # a build retry re-records the same output set
+        await gate.record(
+            cache_key="k",
+            input_hash="h",
+            prompt_version="1.0.0",
+            model_name="gpt-test",
+            model_params_hash="p",
+            output_schema_version="1.0.0",
+            output_artifact_ids=[artifact.artifact_id],
+        )
+    assert await _count(session, GenerationCache) == 1
+    assert await _count(session, GenerationCacheArtifact) == 1
+    assert await gate.lookup_artifact_ids("k") == [artifact.artifact_id]
+
+
+class FakeModelClient:
+    model_name = "gpt-test"
+    model_params_hash = "params-test"
+
+    def __init__(self, generation: WikifyGeneration) -> None:
+        self.calls = 0
+        self._generation = generation
+
+    async def generate_wikify(
+        self, *, chunks: Sequence[Chunk], prompt_version: str
+    ) -> WikifyGeneration:
+        self.calls += 1
+        return self._generation
+
+
+@requires_db
+async def test_wikify_pipeline_cache_miss_writes_then_cache_hit_skips_model(
+    session: AsyncSession,
+) -> None:
+    raw = "def f():\n    return 1\n"
+    generation = WikifyGeneration(
+        summary="Defines f returning 1.",
+        concepts=(ConceptDraft(name="f", description="A function returning 1."),),
+        facts=(
+            SourceBackedFactDraft(statement="f returns 1", quote="return 1"),
+            SourceBackedFactDraft(statement="invented", quote="not in the source"),
+        ),
+    )
+    model_client = FakeModelClient(generation)
+    runner = BuildRunner(
+        session,
+        kb_version="v-test.1",
+        wikifier=WikifyGenerator(model_client),
+        graphifier=SpyGraphifier(),
+        embedder=SpyEmbedder(),
+        indexer=SpyIndexer(),
+    )
+    run1 = await runner.run([_connector(raw)])
+    await session.commit()
+    assert model_client.calls == 1
+    assert run1.llm_calls == 1
+
+    artifacts = (await session.execute(select(KnowledgeArtifact))).scalars().all()
+    by_type = {artifact.artifact_type: artifact for artifact in artifacts}
+    # 1 chunk + summary + concept + the quote-backed fact; the invented fact is dropped
+    assert sorted(by_type) == ["chunk", "concept", "source_backed_fact", "summary"]
+    summary = by_type["summary"]
+    assert summary.knowledge_kind == "interpreted"
+    assert summary.authority_score is not None and summary.authority_score < 1.0
+    assert summary.freshness_score == 1.0
+    assert by_type["chunk"].knowledge_kind == "source_backed"
+    assert by_type["source_backed_fact"].knowledge_kind == "source_backed"
+    assert "not in the source" not in {a.body_text for a in artifacts}
+
+    # cache hit: stale-looking source, same content => zero model calls
+    await session.execute(update(SourceItem).values(content_hash="stale"))
+    await session.commit()
+    model_client2 = FakeModelClient(generation)
+    runner2 = BuildRunner(
+        session,
+        kb_version="v-test.2",
+        wikifier=WikifyGenerator(model_client2),
+        graphifier=SpyGraphifier(),
+        embedder=SpyEmbedder(),
+        indexer=SpyIndexer(),
+    )
+    run2 = await runner2.run([_connector(raw)])
+    await session.commit()
+    assert model_client2.calls == 0
+    assert run2.llm_calls == 0
+    assert await _count(session, KnowledgeArtifact) == 4
 
 
 @requires_db
