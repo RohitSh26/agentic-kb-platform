@@ -21,4 +21,17 @@ class ArtifactModel(BaseModel):
     schema_version: Literal["1.0.0"] = ARTIFACT_SCHEMA_VERSION
 
 
-__all__ = ["ARTIFACT_SCHEMA_VERSION", "ArtifactModel"]
+# Imported after ArtifactModel is defined; sources.py imports it from this package.
+from contracts.artifact_schemas.sources import (  # noqa: E402
+    NormalizedContent,
+    SourceRef,
+    SourceType,
+)
+
+__all__ = [
+    "ARTIFACT_SCHEMA_VERSION",
+    "ArtifactModel",
+    "NormalizedContent",
+    "SourceRef",
+    "SourceType",
+]
