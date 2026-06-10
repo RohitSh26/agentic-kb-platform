@@ -157,6 +157,14 @@ instructions. Every agent claim must cite evidence IDs; missing evidence becomes
 never an invention (invariant 7 — this is also why the linker deletes edges whose evidence is gone
 rather than serving them).
 
+Since PR-09 the first layer is real: every MCP request must carry an Entra ID bearer token,
+verified against the tenant's public JWKS keys (`mcp_server/auth/entra.py`) — the server stores no
+client secret. Telemetry attributes each call to the *verified* token subject, never to a
+client-asserted field, and the contracts encode policy directly: `context.request_more` requires a
+full justification (a bare `{"query": ...}` fails schema validation), and expanded evidence is
+delivered in a field literally named `untrusted_content`. Only `/health` is unauthenticated, and
+it discloses nothing but the service name and active kb_version.
+
 ## What is deliberately NOT in V1 (ADR-0007)
 
 Azure Functions, Event Grid/Service Bus/Event Hub, Redis, API Management, Blob Storage, a graph
@@ -169,9 +177,9 @@ via a new ADR. Default answer is no.
 | # | Invariant | Enforced by |
 |---|---|---|
 | 1 | Postgres is truth; Search is a projection | ADR-0002; `kb_builder/indexer/consistency.py` drift check gates activation; embedding vectors stored in `embedding_cache` so the index rebuilds without re-embedding |
-| 2 | Graph in Postgres, behavior via MCP tools | `knowledge_edge` table; MCP graph tools (PR-09/10) |
+| 2 | Graph in Postgres, behavior via MCP tools | `knowledge_edge` table; `graph.get_neighbors` contract + registered stub (PR-09), broker logic PR-10 |
 | 3 | Token saving enforced by the broker, not prompts | Context Broker budgets + ledger (PR-10); `.claude/rules/token-budgets.md` |
 | 4 | Incremental build; cache hit ⇒ no model call | `GenerationCacheGate` / `EmbeddingCacheGate` in `apps/kb-builder/src/kb_builder/build/cache.py`; content-hash skip in `build/runner.py` |
 | 5 | kb_version active only after validation | `build/active_version.py` + unique partial index on `kb_build_run` |
-| 6 | Agents never touch stores/secrets; retrieved text untrusted | MCP boundary (PR-09/PR-13) |
+| 6 | Agents never touch stores/secrets; retrieved text untrusted | Entra JWKS auth boundary + schema-encoded policy in `contracts/mcp_schemas` (PR-09); hardening PR-13 |
 | 7 | Every claim cites evidence; no fabrication | Evidence-ID discipline (PR-10/11); linker stale-edge deletion in `linker/write_edges.py` |

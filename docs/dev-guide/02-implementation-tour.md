@@ -1,4 +1,4 @@
-# 02 — Implementation tour (build plane, PR-01 → PR-08)
+# 02 — Implementation tour (PR-01 → PR-09)
 
 > A guided walk through the code as it exists today. Read
 > [01 — Design deep dive](01-design-deep-dive.md) first for the *why*; this document is the *how*
@@ -11,7 +11,7 @@ packages/contracts   schemas everything else is written against (frozen pydantic
 packages/db          SQLAlchemy models + Alembic migrations (the Knowledge Registry)
 packages/common      hashing, structured logging, token budgeting
 apps/kb-builder      the nightly build: connectors → build engine → wikify/graphify → linker
-apps/mcp-server      health stub only — real server lands in PR-09/10
+apps/mcp-server      fastmcp server base: auth, telemetry, stub tools, health (broker logic: PR-10)
 agents/              product runtime agent manifests (served later by MCP; not Claude Code agents)
 evals/               empty case directories; harness lands in PR-12
 infra/               README describing the lean Azure footprint; no IaC yet
@@ -47,8 +47,16 @@ invalidates the relevant generation cache.
   comparison and the optional embedding vector), `IndexState` (doc_id → artifact_hash snapshot of
   the live index), and `PROJECTABLE_ARTIFACT_TYPES` (artifacts with body text — pointer-only code
   artifacts are reachable via graph edges, not search).
-- `mcp_schemas/` and `agent_output_schemas/` — base models only (`McpModel`,
-  `AgentOutputModel`); populated from PR-09 onward.
+- `mcp_schemas/` — the Context Broker tool contracts (PR-09). `base.py` holds `McpModel`
+  (frozen, `extra="forbid"`, pinned `schema_version`); `context.py` / `graph.py` / `ledger.py`
+  define request+response pairs for all six V1 tools; `evidence.py` defines `EvidenceCard`
+  (L0/L1 handle: id, type, title, summary, confidence, authority, `tokens_if_expanded`) and
+  `AgentRole`. Policy is encoded in the schema itself: `RequestMoreRequest` requires
+  question/why_needed/decision_needed/already_checked/max_tokens (a bare `{"query": ...}`
+  fails validation before any broker code runs), denied responses must carry `denial_reason`,
+  and `OpenEvidenceResponse` names its payload `untrusted_content`. `registry.py` exposes
+  `TOOL_SCHEMAS`, the authoritative tool-name → schema table the server registers from.
+- `agent_output_schemas/` — base model only (`AgentOutputModel`); populated with PR-11.
 
 ## 2. The registry (`packages/db`)
 
@@ -221,12 +229,46 @@ derived, never truth).
   `ValidationHook` shape `activate_kb_version` expects — this is the real validation gate behind
   invariant 5.
 
-## 10. What does not exist yet
+## 10. MCP server base (`apps/mcp-server/src/mcp_server/`)
 
-- `apps/mcp-server` — a health stub. Context Broker, MCP tools, budgets, ledger: PR-09/PR-10.
+The runtime plane's skeleton (PR-09): everything *around* the broker, so PR-10 can drop broker
+logic into an already-secured, already-observable server.
+
+- `server.py` — `build_server(auth=..., session_factory=...)` assembles the FastMCP app. The
+  tool surface is registered **exclusively from `TOOL_SCHEMAS`** — a tool cannot exist at the
+  boundary without a versioned contract. Each tool is a stub: fastmcp validates the request
+  against the contract model (so a bare `{"query": ...}` already dies here), then the stub
+  raises `ToolError("... not implemented ... PR-10")`. `create_app()` is the production
+  entrypoint (Entra verifier + engine from env config).
+- `auth/entra.py` — the only module that knows Entra ID specifics. Bearer tokens are verified
+  via the tenant's public **JWKS** endpoint (fastmcp's `JWTVerifier`), so the server holds no
+  client secret at all. The test seam is fastmcp's `TokenVerifier` base class: tests inject a
+  `FakeVerifier`; fastmcp wraps the `/mcp` endpoint in `RequireAuthMiddleware`, so requests
+  without a valid token get 401 before any tool or middleware runs.
+- `telemetry/middleware.py` — one structured line per tool call:
+  `event=mcp_request tool=... agent=... run_id=... latency_ms=... status=ok|error`. The agent is
+  the verified token's subject (never a client-asserted field); `run_id` is read from the
+  request payload when present. Errors are logged and re-raised — no silent failures.
+- `health.py` + the `/health` custom route — deliberately unauthenticated readiness:
+  200 + the active `kb_version` (invariant 5: MCP serves the last successful active version),
+  or 503 with `active_kb_version: null` when no build has been activated yet.
+- `config.py` — env-only configuration (`DATABASE_URL`, `MCP_ENTRA_TENANT_ID`,
+  `MCP_ENTRA_AUDIENCE`). Identifiers, not secrets.
+
+Tests (`apps/mcp-server/tests/`) exercise the boundary at the right layer: auth tests go through
+the real HTTP app in-process (httpx ASGI transport — the in-process MCP client would bypass
+auth), tool/telemetry tests use the in-process client, and health tests run migrations against
+local Postgres. `mcp_test_support.asgi_http_client` is a context manager rather than a fixture
+because the app lifespan's anyio cancel scope must enter/exit in one task.
+
+## 11. What does not exist yet
+
+- Context Broker logic (packs, budgets, ledger writes, evidence expansion): PR-10. Until then
+  every MCP tool validates its contract and returns "not implemented"; stub calls emit the
+  telemetry line but no `retrieval_event` row (deliberate — the ledger write lands with PR-10).
 - Real connector backends (network I/O), agent manifests' runtime, eval harness, IaC.
 
-## 11. Reading order for a new dev
+## 12. Reading order for a new dev
 
 1. `docs/architecture/00-overview.md` (15 min) — the blueprint.
 2. This guide's doc 01 — the invariants and why.
