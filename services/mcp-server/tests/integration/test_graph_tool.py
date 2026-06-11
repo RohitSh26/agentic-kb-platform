@@ -23,6 +23,7 @@ from mcp_test_support import TEST_DATABASE_URL, make_session_factory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerSettings
 from agentic_mcp_server.context_broker.graph import NO_RUN_SENTINEL, get_neighbors
 from agentic_mcp_server.infrastructure.search.search_client import FakeSearchClient
@@ -34,6 +35,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 SUBJECT = "impl-agent"
+REQUESTER = Requester(subject=SUBJECT, teams=frozenset())
 
 
 @pytest.fixture()
@@ -71,7 +73,7 @@ async def test_depth_one_returns_both_directions_with_metadata(
         a, b, c, _ = await _seed_graph(session)
     deps = make_broker_deps(factory, FakeSearchClient())
 
-    response = await get_neighbors(deps, GetNeighborsRequest(artifact_id=a, depth=1), SUBJECT)
+    response = await get_neighbors(deps, GetNeighborsRequest(artifact_id=a, depth=1), REQUESTER)
 
     assert response.kb_version == KB_VERSION
     by_id = {n.artifact_id: n for n in response.neighbors}
@@ -89,7 +91,7 @@ async def test_depth_two_reaches_transitive_neighbors_once(
         a, b, c, d = await _seed_graph(session)
     deps = make_broker_deps(factory, FakeSearchClient())
 
-    response = await get_neighbors(deps, GetNeighborsRequest(artifact_id=a, depth=2), SUBJECT)
+    response = await get_neighbors(deps, GetNeighborsRequest(artifact_id=a, depth=2), REQUESTER)
 
     distances = {n.artifact_id: n.distance for n in response.neighbors}
     assert distances == {b: 1, c: 1, d: 2}
@@ -105,7 +107,7 @@ async def test_edge_type_filter_limits_the_traversal(
     deps = make_broker_deps(factory, FakeSearchClient())
 
     response = await get_neighbors(
-        deps, GetNeighborsRequest(artifact_id=a, edge_types=["calls"], depth=2), SUBJECT
+        deps, GetNeighborsRequest(artifact_id=a, edge_types=["calls"], depth=2), REQUESTER
     )
 
     assert {n.artifact_id for n in response.neighbors} == {b, d}
@@ -120,7 +122,7 @@ async def test_fan_out_is_capped_by_settings(
         factory, FakeSearchClient(), settings=BrokerSettings(max_graph_neighbors=1)
     )
 
-    response = await get_neighbors(deps, GetNeighborsRequest(artifact_id=a, depth=3), SUBJECT)
+    response = await get_neighbors(deps, GetNeighborsRequest(artifact_id=a, depth=3), REQUESTER)
 
     assert len(response.neighbors) == 1
 
@@ -132,7 +134,7 @@ async def test_every_lookup_writes_a_ledger_row_with_the_run_sentinel(
         a, *_ = await _seed_graph(session)
     deps = make_broker_deps(factory, FakeSearchClient())
 
-    await get_neighbors(deps, GetNeighborsRequest(artifact_id=a, depth=1), SUBJECT)
+    await get_neighbors(deps, GetNeighborsRequest(artifact_id=a, depth=1), REQUESTER)
 
     async with factory() as session:
         rows = await fetch_ledger_rows(session, NO_RUN_SENTINEL)
@@ -148,4 +150,4 @@ async def test_no_active_kb_version_errors(factory: async_sessionmaker[AsyncSess
     deps = make_broker_deps(factory, FakeSearchClient())
 
     with pytest.raises(ToolError, match="no active kb_version"):
-        await get_neighbors(deps, GetNeighborsRequest(artifact_id=uuid.uuid4(), depth=1), SUBJECT)
+        await get_neighbors(deps, GetNeighborsRequest(artifact_id=uuid.uuid4(), depth=1), REQUESTER)

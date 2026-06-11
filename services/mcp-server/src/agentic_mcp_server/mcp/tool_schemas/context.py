@@ -11,7 +11,11 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
-from agentic_mcp_server.mcp.tool_schemas.evidence import AgentRole, EvidenceCard
+from agentic_mcp_server.mcp.tool_schemas.evidence import (
+    AgentRole,
+    AuthorizationDecision,
+    EvidenceCard,
+)
 
 # run ids land verbatim in key=value audit logs; the charset constraint makes
 # log-line forgery (spaces/newlines smuggling fake fields) impossible
@@ -33,6 +37,7 @@ class CreatePackResponse(McpModel):
     evidence_cards: list[EvidenceCard]
     open_questions: list[str]
     budget_used_tokens: int = Field(ge=0)
+    authorization: AuthorizationDecision
 
 
 class ReadPackRequest(McpModel):
@@ -56,6 +61,7 @@ class ReadPackResponse(McpModel):
     evidence_cards: list[EvidenceCard]
     open_questions: list[str]
     budget_remaining_tokens: int = Field(ge=0)
+    authorization: AuthorizationDecision
 
 
 RequestMoreStatus = Literal["reused", "approved", "denied", "needs_human_approval"]
@@ -84,6 +90,7 @@ class RequestMoreResponse(McpModel):
     new_evidence_cards: list[EvidenceCard]
     tokens_returned: int = Field(ge=0)
     budget_remaining_tokens: int = Field(ge=0)
+    authorization: AuthorizationDecision
     denial_reason: str | None = None
 
     @model_validator(mode="after")
@@ -108,3 +115,8 @@ class OpenEvidenceResponse(McpModel):
     tokens_used: int = Field(ge=0)
     budget_remaining_tokens: int = Field(ge=0)
     source_uri: str | None = None
+    authorization: AuthorizationDecision
+    # advisory markers from the broker's deterministic injection scan; the
+    # content above is verbatim — flagging never rewrites retrieved text
+    injection_flagged: bool = False
+    injection_signals: list[str] = Field(default_factory=list)

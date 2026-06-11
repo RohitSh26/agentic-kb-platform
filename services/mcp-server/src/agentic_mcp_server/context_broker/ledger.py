@@ -7,6 +7,7 @@ never includes the listing call itself, but the call is still audited.
 import logging
 import time
 
+from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_kb_version
 from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
@@ -26,7 +27,7 @@ _TOOL_NAME = "ledger.list_retrievals"
 
 
 async def list_retrievals(
-    deps: BrokerDeps, request: ListRetrievalsRequest, subject: str
+    deps: BrokerDeps, request: ListRetrievalsRequest, requester: Requester
 ) -> ListRetrievalsResponse:
     started = time.monotonic()
     async with deps.session_factory() as session:
@@ -36,7 +37,7 @@ async def list_retrievals(
             session,
             RetrievalEventInsert(
                 run_id=request.run_id,
-                agent_name=subject,
+                agent_name=requester.subject,
                 tool_name=_TOOL_NAME,
                 status="approved",
                 kb_version=kb_version,
@@ -46,7 +47,7 @@ async def list_retrievals(
     logger.info(
         "broker.list_retrievals run_id=%s subject=%s events=%d",
         request.run_id,
-        subject,
+        requester.subject,
         len(rows),
     )
     return ListRetrievalsResponse(

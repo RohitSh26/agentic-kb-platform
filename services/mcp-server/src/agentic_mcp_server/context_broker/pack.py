@@ -11,9 +11,14 @@ import uuid
 
 from fastmcp.exceptions import ToolError
 
-from agentic_mcp_server.context_broker.audit import write_error_event
+from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
-from agentic_mcp_server.context_broker.retrieval import card_tokens, retrieve_cards
+from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.retrieval import (
+    authorization_decision,
+    card_tokens,
+    retrieve_cards,
+)
 from agentic_mcp_server.context_broker.state import (
     EvidencePackState,
     UnknownPackError,
@@ -21,6 +26,7 @@ from agentic_mcp_server.context_broker.state import (
 )
 from agentic_mcp_server.domain.query_text import normalize_query
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_kb_version
+from agentic_mcp_server.infrastructure.postgres.artifacts import fetch_artifacts
 from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
     RetrievalEventInsert,
     insert_event,
@@ -32,6 +38,7 @@ from agentic_mcp_server.mcp.tool_schemas.context import (
     ReadPackResponse,
 )
 from agentic_mcp_server.mcp.tool_schemas.evidence import EvidenceCard
+from agentic_mcp_server.telemetry.audit import audit_context_access
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +51,7 @@ def _summary(run_id: str, cards: list[EvidenceCard]) -> str:
 
 
 async def create_pack(
-    deps: BrokerDeps, request: CreatePackRequest, subject: str
+    deps: BrokerDeps, request: CreatePackRequest, requester: Requester
 ) -> CreatePackResponse:
     started = time.monotonic()
     query = f"{request.task} {request.approved_context_plan}"
@@ -54,37 +61,45 @@ async def create_pack(
         await write_error_event(
             deps,
             tool_name="context.create_pack",
-            subject=subject,
+            subject=requester.subject,
             run_id=request.run_id,
             query_text=query,
         )
         raise ToolError("no active kb_version; the knowledge base has not been built yet")
 
-    cards, _ = await retrieve_cards(deps, query=query, kb_version=kb_version, subject=subject)
+    cards, _ = await retrieve_cards(
+        deps,
+        query=query,
+        kb_version=kb_version,
+        requester=requester,
+        tool="context.create_pack",
+    )
     used_tokens = sum(card_tokens(card) for card in cards)
     open_questions = [] if cards else [f"No evidence found for: {request.task}"]
 
+    # the run budget is a server-side control: the requested value is clamped,
+    # never trusted (token-budgets rule)
+    budget_tokens = min(request.budget_tokens, deps.settings.max_run_budget_tokens)
     pack = EvidencePackState(
         context_pack_id=new_pack_id(),
         run_id=request.run_id,
         kb_version=kb_version,
         retrieval_profile=request.retrieval_profile,
         summary=_summary(request.run_id, cards),
-        budget_tokens=request.budget_tokens,
+        budget_tokens=budget_tokens,
         used_run_tokens=used_tokens,
         cards={card.evidence_id: card for card in cards},
         open_questions=open_questions,
     )
     normalized = normalize_query(query)
     pack.history.record(normalized, [card.evidence_id for card in cards])
-    deps.packs.create(pack)
 
     async with deps.session_factory() as session:
         await insert_event(
             session,
             RetrievalEventInsert(
                 run_id=request.run_id,
-                agent_name=subject,
+                agent_name=requester.subject,
                 tool_name="context.create_pack",
                 status="approved",
                 kb_version=kb_version,
@@ -98,11 +113,14 @@ async def create_pack(
                 latency_ms=int((time.monotonic() - started) * 1000),
             ),
         )
+    # store the pack only after the ledger write succeeds: no orphan packs
+    # without a create_pack ledger row
+    deps.packs.create(pack)
     logger.info(
         "broker.create_pack run_id=%s context_pack_id=%s subject=%s cards=%d tokens=%d",
         request.run_id,
         pack.context_pack_id,
-        subject,
+        requester.subject,
         len(cards),
         used_tokens,
     )
@@ -113,10 +131,13 @@ async def create_pack(
         evidence_cards=cards,
         open_questions=pack.open_questions,
         budget_used_tokens=used_tokens,
+        authorization=authorization_decision(deps),
     )
 
 
-async def read_pack(deps: BrokerDeps, request: ReadPackRequest, subject: str) -> ReadPackResponse:
+async def read_pack(
+    deps: BrokerDeps, request: ReadPackRequest, requester: Requester
+) -> ReadPackResponse:
     started = time.monotonic()
     try:
         pack = deps.packs.get(request.context_pack_id)
@@ -124,18 +145,38 @@ async def read_pack(deps: BrokerDeps, request: ReadPackRequest, subject: str) ->
         await write_error_event(
             deps,
             tool_name="context.read_pack",
-            subject=subject,
+            subject=requester.subject,
             query_text=request.context_pack_id,
         )
         raise ToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
 
-    cards = list(pack.cards.values())
+    # a pack handle is not a grant: cards were filtered against the creator's
+    # teams, so re-apply the ACL for the reading requester before serving them
+    all_cards = list(pack.cards.values())
+    async with deps.session_factory() as session:
+        artifacts = await fetch_artifacts(
+            session, [card.artifact_id for card in all_cards], pack.kb_version
+        )
+    allowed_ids = {
+        artifact.artifact_id
+        for artifact in deps.authorization.filter_artifacts(requester, artifacts)
+    }
+    cards = [card for card in all_cards if card.artifact_id in allowed_ids]
+    audit_context_access(
+        tool="context.read_pack",
+        requester=requester,
+        kb_version=pack.kb_version,
+        artifact_ids=[card.artifact_id for card in cards],
+        suppressed_artifact_ids=[
+            card.artifact_id for card in all_cards if card.artifact_id not in allowed_ids
+        ],
+    )
     async with deps.session_factory() as session:
         await insert_event(
             session,
             RetrievalEventInsert(
                 run_id=pack.run_id,
-                agent_name=subject,
+                agent_name=requester.subject,
                 tool_name="context.read_pack",
                 status="reused",
                 kb_version=pack.kb_version,
@@ -149,7 +190,7 @@ async def read_pack(deps: BrokerDeps, request: ReadPackRequest, subject: str) ->
     logger.info(
         "broker.read_pack context_pack_id=%s subject=%s role=%s cards=%d",
         pack.context_pack_id,
-        subject,
+        requester.subject,
         request.role,
         len(cards),
     )
@@ -157,8 +198,11 @@ async def read_pack(deps: BrokerDeps, request: ReadPackRequest, subject: str) ->
         context_pack_id=pack.context_pack_id,
         kb_version=pack.kb_version,
         role=request.role,
-        summary=pack.summary,
+        # recomputed from the filtered cards: the stored summary names every
+        # title the creator could see
+        summary=_summary(pack.run_id, cards),
         evidence_cards=cards,
         open_questions=pack.open_questions,
         budget_remaining_tokens=pack.run_remaining_tokens,
+        authorization=authorization_decision(deps),
     )

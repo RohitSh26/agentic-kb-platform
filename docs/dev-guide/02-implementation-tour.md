@@ -1,4 +1,4 @@
-# 02 — Implementation tour (PR-01 → PR-12)
+# 02 — Implementation tour (PR-01 → PR-13)
 
 > A guided walk through the code as it exists today. Read
 > [01 — Design deep dive](01-design-deep-dive.md) first for the *why*; this document is the *how*
@@ -365,12 +365,51 @@ requires Azure.
 - Case success = expected-doc recall 1.0 **and** no ledger row with status `error`; broker
   denials are contractual outcomes, not failures.
 
-## 14. What does not exist yet
+## 14. Security hardening (PR-13)
+
+The runtime plane's trust boundary, contract in `docs/contracts/mcp-tools-contract.md`
+(`MCP_SCHEMA_VERSION` 1.1.0). Three layers, all server-side — prompts enforce nothing:
+
+- **`auth/rbac.py`** — `Requester` (subject + frozen team set, derived solely from the verified
+  token's `groups`/`roles` claims via `teams_from_claims`; request-body fields can never name an
+  identity) and `TeamAclAuthorization` (`team_acl_v1`): an artifact with empty `acl_teams`
+  (migration `0008`, kb-builder) is org-public to any *authenticated* subject; non-empty requires
+  a team intersection. `current_requester` **fails closed** — no session token is a `ToolError`,
+  never a synthesized anonymous identity. Filtering applies at *every* surface: card retrieval,
+  `read_pack` (re-filters the cached cards per reading requester and recomputes the summary),
+  `request_more` reuse (reused ids are re-filtered; a fully-suppressed reuse falls through to a
+  fresh filtered retrieval), `open_evidence` (re-hydrates from Postgres and re-filters — a pack
+  handle is not a grant), and graph traversal (root node + each BFS hop filtered *before*
+  expanding the frontier, so a restricted node is never returned nor transited through).
+  Existence-oracle discipline: responses carry an `authorization` decision but **no filtered
+  count**; an ACL-denied, missing, or never-in-pack `open_evidence` id all raise the identical
+  "evidence not available" error; an unauthorized graph root returns the same empty result as an
+  unknown id. The run budget requested by `create_pack` is clamped to a server-side maximum
+  (18k) — the request value is not an escape hatch.
+- **`domain/untrusted.py`** — deterministic regex injection scan (instruction overrides, role
+  markers, chat-template tokens, secret-exfiltration asks, unicode direction/zero-width tricks)
+  over card titles/summaries and expanded bodies. Advisory only: `injection_flagged` +
+  `injection_signals` on the response, content returned **verbatim**, never rewritten, and never
+  able to alter broker policy.
+- **`telemetry/audit.py`** — `audit_context_access` emits one structured line per context
+  expansion on the `agentic_mcp_server.audit` logger: subject + teams, tool, returned /
+  ACL-suppressed / injection-flagged artifact ids. Ids and metadata only — never `body_text`;
+  claim-derived values are sanitized so token contents cannot forge audit fields.
+
+Secrets posture: the server's config remains identifiers only (`config.py` — DB URL, tenant,
+audience; JWKS verification means no client secret exists), asserted by
+`tests/unit/test_secret_surface.py`. Executable specs: `tests/integration/test_security.py`
+(every ACL surface against real Postgres, audit suppression lines, verbatim injection e2e),
+`tests/unit/test_rbac.py`, `test_untrusted.py`, `test_audit.py`.
+
+## 15. What does not exist yet
 
 - Real connector backends (network I/O), the orchestrator runtime that executes the manifests,
-  security hardening (real ACL policy, PR-13), IaC.
+  IaC. Recorded follow-ups from PR-13: connector ACL ingestion (every artifact is org-public
+  until kb-builder populates `acl_teams`), Entra `groupMembershipClaims` configuration, and
+  run-scoped ledger authorization.
 
-## 15. Reading order for a new dev
+## 16. Reading order for a new dev
 
 1. `docs/architecture/00-overview.md` (15 min) — the blueprint.
 2. This guide's doc 01 — the invariants and why.

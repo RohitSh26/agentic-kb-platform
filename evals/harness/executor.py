@@ -17,6 +17,7 @@ from agentic_mcp_server.agent_output_schemas import (
     ImplementationStep,
     validate_evidence_references,
 )
+from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.budgets import AgentAllowance, BudgetPolicy
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.evidence import open_evidence
@@ -44,6 +45,11 @@ from harness.records import LedgerEvent, RunRecord
 logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_SUBJECT = "orchestrator"
+
+
+def _requester(subject: str) -> Requester:
+    return Requester(subject=subject, teams=frozenset())
+
 
 # manifest allowances from .claude/rules/token-budgets.md, keyed by the agent
 # names case scripts use as broker subjects
@@ -87,7 +93,7 @@ async def execute_case(
             retrieval_profile="default",
             budget_tokens=case.budget_tokens,
         ),
-        ORCHESTRATOR_SUBJECT,
+        _requester(ORCHESTRATOR_SUBJECT),
     )
     corpus_parts.append(pack.summary)
     corpus_parts += [f"{card.title} {card.summary}" for card in pack.evidence_cards]
@@ -108,7 +114,7 @@ async def execute_case(
                     ],
                     max_tokens=step.max_tokens,
                 ),
-                step.agent,
+                _requester(step.agent),
             )
             corpus_parts += [f"{card.title} {card.summary}" for card in response.new_evidence_cards]
             logger.info(
@@ -172,7 +178,7 @@ async def _open_evidence_step(
                 evidence_id=str(key_to_id[step.evidence]),
                 max_tokens=step.max_tokens,
             ),
-            step.agent,
+            _requester(step.agent),
         )
     except ToolError as error:
         # denial paths raise by contract; the ledger row carries the outcome

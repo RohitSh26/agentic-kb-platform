@@ -26,6 +26,7 @@ from mcp_test_support import TEST_DATABASE_URL, make_session_factory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.budgets import AgentAllowance, BudgetPolicy
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.evidence import open_evidence
@@ -48,6 +49,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 SUBJECT = "impl-agent"
+REQUESTER = Requester(subject=SUBJECT, teams=frozenset())
 RUN_ID = "run-1"
 GENEROUS_POLICY = BudgetPolicy(
     allowances={SUBJECT: AgentAllowance(max_requests=5, max_tokens=100_000)}
@@ -108,7 +110,7 @@ async def test_create_pack_returns_cards_and_writes_approved_ledger_row(
         artifact_id = await _seed_payment_artifact(session, search)
     deps = make_broker_deps(factory, search)
 
-    response = await create_pack(deps, _create_pack_request(), SUBJECT)
+    response = await create_pack(deps, _create_pack_request(), REQUESTER)
 
     assert response.kb_version == KB_VERSION
     assert [card.evidence_id for card in response.evidence_cards] == [str(artifact_id)]
@@ -136,7 +138,7 @@ async def test_create_pack_without_active_kb_version_errors(
     deps = make_broker_deps(factory, FakeSearchClient())
 
     with pytest.raises(ToolError, match="no active kb_version"):
-        await create_pack(deps, _create_pack_request(), SUBJECT)
+        await create_pack(deps, _create_pack_request(), REQUESTER)
 
 
 async def test_create_pack_with_no_hits_records_an_open_question(
@@ -144,7 +146,7 @@ async def test_create_pack_with_no_hits_records_an_open_question(
 ) -> None:
     deps = make_broker_deps(factory, FakeSearchClient())
 
-    response = await create_pack(deps, _create_pack_request(), SUBJECT)
+    response = await create_pack(deps, _create_pack_request(), REQUESTER)
 
     assert response.evidence_cards == []
     assert response.open_questions == ["No evidence found for: payment validation"]
@@ -178,7 +180,7 @@ async def test_create_pack_ranks_source_backed_above_interpreted(
     )
     deps = make_broker_deps(factory, search)
 
-    response = await create_pack(deps, _create_pack_request(), SUBJECT)
+    response = await create_pack(deps, _create_pack_request(), REQUESTER)
 
     assert [card.evidence_id for card in response.evidence_cards] == [
         str(source_backed),
@@ -193,12 +195,12 @@ async def test_read_pack_is_free_and_writes_reused_row(
     async with factory() as session:
         await _seed_payment_artifact(session, search)
     deps = make_broker_deps(factory, search)
-    created = await create_pack(deps, _create_pack_request(), SUBJECT)
+    created = await create_pack(deps, _create_pack_request(), REQUESTER)
 
     response = await read_pack(
         deps,
         ReadPackRequest(context_pack_id=created.context_pack_id, role="test"),
-        "test-agent",
+        Requester(subject="test-agent", teams=frozenset()),
     )
 
     assert response.role == "test"
@@ -219,7 +221,7 @@ async def test_read_pack_is_free_and_writes_reused_row(
 async def test_read_pack_unknown_pack_errors(factory: async_sessionmaker[AsyncSession]) -> None:
     deps = make_broker_deps(factory, FakeSearchClient())
     with pytest.raises(ToolError, match="unknown context_pack_id"):
-        await read_pack(deps, ReadPackRequest(context_pack_id="missing", role="test"), SUBJECT)
+        await read_pack(deps, ReadPackRequest(context_pack_id="missing", role="test"), REQUESTER)
 
 
 async def _pack_with_refund_follow_up(
@@ -239,7 +241,7 @@ async def _pack_with_refund_follow_up(
         )
     search.seed("refund", [SearchHit(artifact_id=refund_id, score=2.0)])
     deps = make_broker_deps(factory, search, budget_policy=budget_policy)
-    created = await create_pack(deps, _create_pack_request(budget_tokens), SUBJECT)
+    created = await create_pack(deps, _create_pack_request(budget_tokens), REQUESTER)
     return deps, created.context_pack_id, refund_id
 
 
@@ -252,14 +254,14 @@ async def test_request_more_charges_new_evidence_then_reuses_exact_repeat(
     question = "how does refund processing work in checkout"
 
     first = await request_more(
-        deps, _request_more(question).model_copy(update={"context_pack_id": pack_id}), SUBJECT
+        deps, _request_more(question).model_copy(update={"context_pack_id": pack_id}), REQUESTER
     )
     assert first.status == "approved"
     assert [c.evidence_id for c in first.new_evidence_cards] == [str(refund_id)]
     assert first.tokens_returned > 0
 
     second = await request_more(
-        deps, _request_more(question).model_copy(update={"context_pack_id": pack_id}), SUBJECT
+        deps, _request_more(question).model_copy(update={"context_pack_id": pack_id}), REQUESTER
     )
     assert second.status == "reused"
     assert second.reused_evidence_ids == [str(refund_id)]
@@ -287,14 +289,14 @@ async def test_request_more_semantic_near_duplicate_is_reused(
         _request_more("how does refund processing work in checkout").model_copy(
             update={"context_pack_id": pack_id}
         ),
-        SUBJECT,
+        REQUESTER,
     )
     response = await request_more(
         deps,
         _request_more("how does refund processing work in checkout service").model_copy(
             update={"context_pack_id": pack_id}
         ),
-        SUBJECT,
+        REQUESTER,
     )
 
     assert response.status == "reused"
@@ -317,7 +319,7 @@ async def test_request_more_denied_when_request_allowance_is_exhausted(
         _request_more("how does refund processing work in checkout", max_tokens=500).model_copy(
             update={"context_pack_id": pack_id}
         ),
-        SUBJECT,
+        REQUESTER,
     )
     assert first.status == "approved"
 
@@ -326,7 +328,7 @@ async def test_request_more_denied_when_request_allowance_is_exhausted(
         _request_more("where are webhook signatures verified", max_tokens=500).model_copy(
             update={"context_pack_id": pack_id}
         ),
-        SUBJECT,
+        REQUESTER,
     )
     assert second.status == "denied"
     assert second.denial_reason is not None
@@ -349,7 +351,7 @@ async def test_request_more_denied_when_token_allowance_would_be_exceeded(
         _request_more("how does refund processing work", max_tokens=3000).model_copy(
             update={"context_pack_id": pack_id}
         ),
-        SUBJECT,
+        REQUESTER,
     )
 
     assert response.status == "denied"
@@ -369,7 +371,7 @@ async def test_request_more_escalates_when_run_budget_is_too_small(
         _request_more("how does refund processing work", max_tokens=3000).model_copy(
             update={"context_pack_id": pack_id}
         ),
-        SUBJECT,
+        REQUESTER,
     )
 
     assert response.status == "needs_human_approval"
@@ -391,7 +393,7 @@ async def test_request_more_budgets_are_tracked_per_agent_subject(
         _request_more("how does refund processing work in checkout", max_tokens=500).model_copy(
             update={"context_pack_id": pack_id}
         ),
-        SUBJECT,
+        REQUESTER,
     )
     assert first.status == "approved"
 
@@ -400,7 +402,7 @@ async def test_request_more_budgets_are_tracked_per_agent_subject(
         _request_more("where are webhook signatures verified", max_tokens=500).model_copy(
             update={"context_pack_id": pack_id}
         ),
-        "review-agent",
+        Requester(subject="review-agent", teams=frozenset()),
     )
     assert other_subject.status == "approved"
 
@@ -418,14 +420,14 @@ async def test_request_more_concurrent_calls_cannot_both_pass_the_allowance_chec
             _request_more("how does refund processing work in checkout", max_tokens=500).model_copy(
                 update={"context_pack_id": pack_id}
             ),
-            SUBJECT,
+            REQUESTER,
         ),
         request_more(
             deps,
             _request_more("where are webhook signatures verified", max_tokens=500).model_copy(
                 update={"context_pack_id": pack_id}
             ),
-            SUBJECT,
+            REQUESTER,
         ),
     )
 
@@ -451,7 +453,7 @@ async def test_request_more_excludes_already_checked_evidence(
                 "already_checked_evidence_ids": [str(refund_id)],
             }
         ),
-        SUBJECT,
+        REQUESTER,
     )
 
     assert response.status == "approved"
@@ -466,7 +468,7 @@ async def test_request_more_unknown_pack_writes_error_row(
 
     with pytest.raises(ToolError, match="unknown context_pack_id"):
         await request_more(
-            deps, _request_more("how does refund processing work in checkout"), SUBJECT
+            deps, _request_more("how does refund processing work in checkout"), REQUESTER
         )
 
     async with factory() as session:
@@ -490,7 +492,7 @@ async def test_create_pack_caps_cards_at_the_retrieval_maximum(
     search.seed("payment", hits)
     deps = make_broker_deps(factory, search)
 
-    response = await create_pack(deps, _create_pack_request(), SUBJECT)
+    response = await create_pack(deps, _create_pack_request(), REQUESTER)
 
     assert len(response.evidence_cards) == 5
 
@@ -502,7 +504,7 @@ async def test_open_evidence_returns_untrusted_content_and_charges_the_run(
     async with factory() as session:
         artifact_id = await _seed_payment_artifact(session, search)
     deps = make_broker_deps(factory, search)
-    created = await create_pack(deps, _create_pack_request(), SUBJECT)
+    created = await create_pack(deps, _create_pack_request(), REQUESTER)
     body = "Validation lives in checkout/validators.py and rejects negative amounts."
 
     response = await open_evidence(
@@ -512,7 +514,7 @@ async def test_open_evidence_returns_untrusted_content_and_charges_the_run(
             evidence_id=str(artifact_id),
             max_tokens=1000,
         ),
-        SUBJECT,
+        REQUESTER,
     )
 
     assert response.level == "L2"
@@ -536,7 +538,7 @@ async def test_open_evidence_truncates_to_the_token_cap(
         artifact_id = await insert_artifact(session, title="Payment long doc", body_text="x" * 4000)
     search.seed("payment", [SearchHit(artifact_id=artifact_id, score=1.0)])
     deps = make_broker_deps(factory, search)
-    created = await create_pack(deps, _create_pack_request(), SUBJECT)
+    created = await create_pack(deps, _create_pack_request(), REQUESTER)
 
     response = await open_evidence(
         deps,
@@ -545,7 +547,7 @@ async def test_open_evidence_truncates_to_the_token_cap(
             evidence_id=str(artifact_id),
             max_tokens=5,
         ),
-        SUBJECT,
+        REQUESTER,
     )
 
     assert response.tokens_used == 5
@@ -559,9 +561,9 @@ async def test_open_evidence_unknown_handle_errors_and_writes_error_row(
     async with factory() as session:
         await _seed_payment_artifact(session, search)
     deps = make_broker_deps(factory, search)
-    created = await create_pack(deps, _create_pack_request(), SUBJECT)
+    created = await create_pack(deps, _create_pack_request(), REQUESTER)
 
-    with pytest.raises(ToolError, match="unknown evidence_id"):
+    with pytest.raises(ToolError, match="evidence not available"):
         await open_evidence(
             deps,
             OpenEvidenceRequest(
@@ -569,7 +571,7 @@ async def test_open_evidence_unknown_handle_errors_and_writes_error_row(
                 evidence_id=str(uuid.uuid4()),
                 max_tokens=100,
             ),
-            SUBJECT,
+            REQUESTER,
         )
 
     async with factory() as session:
@@ -588,7 +590,7 @@ async def test_open_evidence_over_agent_allowance_writes_denied_row_and_errors(
         )
     search.seed("payment", [SearchHit(artifact_id=artifact_id, score=1.0)])
     deps = make_broker_deps(factory, search)
-    created = await create_pack(deps, _create_pack_request(), SUBJECT)
+    created = await create_pack(deps, _create_pack_request(), REQUESTER)
 
     with pytest.raises(ToolError, match="agent token allowance exceeded"):
         await open_evidence(
@@ -598,7 +600,7 @@ async def test_open_evidence_over_agent_allowance_writes_denied_row_and_errors(
                 evidence_id=str(artifact_id),
                 max_tokens=3000,
             ),
-            SUBJECT,
+            REQUESTER,
         )
 
     async with factory() as session:
@@ -618,7 +620,7 @@ async def test_open_evidence_over_run_budget_writes_denied_row_and_errors(
         artifact_id = await insert_artifact(session, title="Payment long doc", body_text="x" * 4000)
     search.seed("payment", [SearchHit(artifact_id=artifact_id, score=1.0)])
     deps = make_broker_deps(factory, search)
-    created = await create_pack(deps, _create_pack_request(budget_tokens=30), SUBJECT)
+    created = await create_pack(deps, _create_pack_request(budget_tokens=30), REQUESTER)
 
     with pytest.raises(ToolError, match="run budget exceeded"):
         await open_evidence(
@@ -628,7 +630,7 @@ async def test_open_evidence_over_run_budget_writes_denied_row_and_errors(
                 evidence_id=str(artifact_id),
                 max_tokens=1000,
             ),
-            SUBJECT,
+            REQUESTER,
         )
 
     async with factory() as session:
@@ -653,7 +655,7 @@ async def test_injection_style_document_is_data_only_and_changes_nothing(
         artifact_id = await insert_artifact(session, title="Payment notes", body_text=injection)
     search.seed("payment", [SearchHit(artifact_id=artifact_id, score=1.0)])
     deps = make_broker_deps(factory, search)
-    created = await create_pack(deps, _create_pack_request(), SUBJECT)
+    created = await create_pack(deps, _create_pack_request(), REQUESTER)
 
     opened = await open_evidence(
         deps,
@@ -662,7 +664,7 @@ async def test_injection_style_document_is_data_only_and_changes_nothing(
             evidence_id=str(artifact_id),
             max_tokens=1000,
         ),
-        SUBJECT,
+        REQUESTER,
     )
     # the document comes back verbatim, as data, in the untrusted slot only
     assert opened.untrusted_content == injection
@@ -674,7 +676,7 @@ async def test_injection_style_document_is_data_only_and_changes_nothing(
         _request_more("where are webhook signatures verified", max_tokens=500).model_copy(
             update={"context_pack_id": created.context_pack_id}
         ),
-        SUBJECT,
+        REQUESTER,
     )
     assert first.status == "approved"
     second = await request_more(
@@ -682,7 +684,7 @@ async def test_injection_style_document_is_data_only_and_changes_nothing(
         _request_more("how are invoices archived after checkout", max_tokens=500).model_copy(
             update={"context_pack_id": created.context_pack_id}
         ),
-        SUBJECT,
+        REQUESTER,
     )
     assert second.status == "denied"
 
@@ -698,19 +700,19 @@ async def test_list_retrievals_returns_events_and_audits_itself(
     async with factory() as session:
         await _seed_payment_artifact(session, search)
     deps = make_broker_deps(factory, search)
-    created = await create_pack(deps, _create_pack_request(), SUBJECT)
+    created = await create_pack(deps, _create_pack_request(), REQUESTER)
     await read_pack(
-        deps, ReadPackRequest(context_pack_id=created.context_pack_id, role="test"), SUBJECT
+        deps, ReadPackRequest(context_pack_id=created.context_pack_id, role="test"), REQUESTER
     )
 
-    first = await list_retrievals(deps, ListRetrievalsRequest(run_id=RUN_ID), SUBJECT)
+    first = await list_retrievals(deps, ListRetrievalsRequest(run_id=RUN_ID), REQUESTER)
     assert [(e.tool, e.status) for e in first.events] == [
         ("context.create_pack", "approved"),
         ("context.read_pack", "reused"),
     ]
     assert all(e.agent_name == SUBJECT for e in first.events)
 
-    second = await list_retrievals(deps, ListRetrievalsRequest(run_id=RUN_ID), SUBJECT)
+    second = await list_retrievals(deps, ListRetrievalsRequest(run_id=RUN_ID), REQUESTER)
     assert [(e.tool, e.status) for e in second.events] == [
         ("context.create_pack", "approved"),
         ("context.read_pack", "reused"),

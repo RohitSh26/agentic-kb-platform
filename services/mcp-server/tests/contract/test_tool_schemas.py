@@ -11,6 +11,7 @@ from agentic_mcp_server.mcp.tool_schemas import (
     MCP_SCHEMA_VERSION,
     CreatePackRequest,
     EvidenceCard,
+    ListRetrievalsRequest,
     OpenEvidenceResponse,
     RequestMoreRequest,
     RequestMoreResponse,
@@ -60,6 +61,16 @@ def test_run_id_rejects_log_injection_charsets() -> None:
             )
 
 
+def test_ledger_rejects_the_non_run_sentinel() -> None:
+    """run_id "-" aggregates all subjects' non-run activity — operator-only."""
+    with pytest.raises(ValidationError):
+        ListRetrievalsRequest(run_id="-")
+    assert ListRetrievalsRequest(run_id="run-1").run_id == "run-1"
+
+
+AUTHORIZATION = {"policy": "team_acl_v1", "decision": "allowed"}
+
+
 def test_denied_status_requires_denial_reason() -> None:
     with pytest.raises(ValidationError, match="denial_reason"):
         RequestMoreResponse.model_validate(
@@ -69,6 +80,7 @@ def test_denied_status_requires_denial_reason() -> None:
                 "new_evidence_cards": [],
                 "tokens_returned": 0,
                 "budget_remaining_tokens": 100,
+                "authorization": AUTHORIZATION,
             }
         )
 
@@ -125,6 +137,7 @@ def test_open_evidence_exposes_raw_text_only_as_untrusted_content() -> None:
                 "untrusted_content": "raw chunk text",
                 "tokens_used": 10,
                 "budget_remaining_tokens": 90,
+                "authorization": AUTHORIZATION,
             }
         )
         assert response.level == level
@@ -136,5 +149,6 @@ def test_open_evidence_exposes_raw_text_only_as_untrusted_content() -> None:
                 "untrusted_content": "raw chunk text",
                 "tokens_used": 10,
                 "budget_remaining_tokens": 90,
+                "authorization": AUTHORIZATION,
             }
         )

@@ -14,17 +14,24 @@ from typing import Literal
 
 from fastmcp.exceptions import ToolError
 
-from agentic_mcp_server.context_broker.audit import write_error_event
+from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
-from agentic_mcp_server.context_broker.retrieval import card_tokens, retrieve_cards
+from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.retrieval import (
+    authorization_decision,
+    card_tokens,
+    retrieve_cards,
+)
 from agentic_mcp_server.context_broker.state import EvidencePackState, UnknownPackError
 from agentic_mcp_server.domain.query_text import normalize_query
+from agentic_mcp_server.infrastructure.postgres.artifacts import fetch_artifacts
 from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
     RetrievalEventInsert,
     insert_event,
 )
 from agentic_mcp_server.mcp.tool_schemas.context import RequestMoreRequest, RequestMoreResponse
 from agentic_mcp_server.mcp.tool_schemas.evidence import EvidenceCard
+from agentic_mcp_server.telemetry.audit import audit_context_access
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +39,17 @@ _TOOL_NAME = "context.request_more"
 
 
 async def request_more(
-    deps: BrokerDeps, request: RequestMoreRequest, subject: str
+    deps: BrokerDeps, request: RequestMoreRequest, requester: Requester
 ) -> RequestMoreResponse:
     started = time.monotonic()
     try:
         pack = deps.packs.get(request.context_pack_id)
     except UnknownPackError:
         await write_error_event(
-            deps, tool_name=_TOOL_NAME, subject=subject, query_text=request.context_pack_id
+            deps,
+            tool_name=_TOOL_NAME,
+            subject=requester.subject,
+            query_text=request.context_pack_id,
         )
         raise ToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
 
@@ -61,7 +71,7 @@ async def request_more(
                 session,
                 RetrievalEventInsert(
                     run_id=pack.run_id,
-                    agent_name=subject,
+                    agent_name=requester.subject,
                     tool_name=_TOOL_NAME,
                     status=status,
                     kb_version=pack.kb_version,
@@ -82,7 +92,7 @@ async def request_more(
             "broker.request_more context_pack_id=%s subject=%s status=%s "
             "cache_hit=%s semantic_reuse=%s tokens=%d",
             pack.context_pack_id,
-            subject,
+            requester.subject,
             status,
             cache_hit,
             semantic_reuse,
@@ -90,41 +100,52 @@ async def request_more(
         )
 
     async with pack.lock:
+        # reuse crosses requesters within a run, so reused ids are re-filtered
+        # for the caller; if the ACL suppresses every id, fall through to a
+        # fresh (already-filtered) retrieval instead of leaking their existence
         exact = pack.history.find_exact(normalized)
         if exact is not None:
             reused = list(exact.evidence_ids)
-            await write_ledger("reused", reused=reused, cache_hit=True)
-            return _reuse_response(pack, reused)
+            allowed = await _authorized_reuse(deps, pack, requester, reused)
+            if allowed or not reused:
+                await write_ledger("reused", reused=allowed, cache_hit=True)
+                return _reuse_response(deps, pack, allowed)
 
         semantic = pack.history.find_semantic(normalized, deps.settings.semantic_reuse_threshold)
         if semantic is not None:
             reused = list(semantic.evidence_ids)
-            await write_ledger("reused", reused=reused, semantic_reuse=True)
-            return _reuse_response(pack, reused)
+            allowed = await _authorized_reuse(deps, pack, requester, reused)
+            if allowed or not reused:
+                await write_ledger("reused", reused=allowed, semantic_reuse=True)
+                return _reuse_response(deps, pack, allowed)
 
-        allowance = deps.budget_policy.allowance_for(subject)
-        usage = pack.usage_for(subject)
+        allowance = deps.budget_policy.allowance_for(requester.subject)
+        usage = pack.usage_for(requester.subject)
         if usage.requests + 1 > allowance.max_requests:
             reason = (
                 f"agent request allowance exhausted: {usage.requests}/{allowance.max_requests} "
                 "requests used"
             )
             await write_ledger("denied")
-            return _refusal_response(pack, "denied", reason)
+            return _refusal_response(deps, pack, "denied", reason)
         if usage.tokens + request.max_tokens > allowance.max_tokens:
             reason = (
                 f"agent token allowance exceeded: {usage.tokens} used + {request.max_tokens} "
                 f"requested > {allowance.max_tokens} allowed"
             )
             await write_ledger("denied")
-            return _refusal_response(pack, "denied", reason)
+            return _refusal_response(deps, pack, "denied", reason)
 
         if request.max_tokens > pack.run_remaining_tokens:
             await write_ledger("needs_human_approval")
-            return _refusal_response(pack, "needs_human_approval", None)
+            return _refusal_response(deps, pack, "needs_human_approval", None)
 
         cards, _ = await retrieve_cards(
-            deps, query=request.question, kb_version=pack.kb_version, subject=subject
+            deps,
+            query=request.question,
+            kb_version=pack.kb_version,
+            requester=requester,
+            tool=_TOOL_NAME,
         )
         excluded = set(request.already_checked_evidence_ids) | set(pack.cards)
         new_cards: list[EvidenceCard] = []
@@ -138,7 +159,7 @@ async def request_more(
             new_cards.append(card)
             tokens += cost
 
-        pack.charge(subject, tokens)
+        pack.charge(requester.subject, tokens)
         usage.requests += 1
         for card in new_cards:
             pack.cards[card.evidence_id] = card
@@ -152,20 +173,48 @@ async def request_more(
         new_evidence_cards=new_cards,
         tokens_returned=tokens,
         budget_remaining_tokens=pack.run_remaining_tokens,
+        authorization=authorization_decision(deps),
     )
 
 
-def _reuse_response(pack: EvidencePackState, reused: list[str]) -> RequestMoreResponse:
+async def _authorized_reuse(
+    deps: BrokerDeps, pack: EvidencePackState, requester: Requester, reused: list[str]
+) -> list[str]:
+    if not reused:
+        return []
+    async with deps.session_factory() as session:
+        artifacts = await fetch_artifacts(
+            session, [uuid.UUID(evidence_id) for evidence_id in reused], pack.kb_version
+        )
+    allowed = {
+        str(artifact.artifact_id)
+        for artifact in deps.authorization.filter_artifacts(requester, artifacts)
+    }
+    audit_context_access(
+        tool=_TOOL_NAME,
+        requester=requester,
+        kb_version=pack.kb_version,
+        artifact_ids=[uuid.UUID(e) for e in reused if e in allowed],
+        suppressed_artifact_ids=[uuid.UUID(e) for e in reused if e not in allowed],
+    )
+    return [evidence_id for evidence_id in reused if evidence_id in allowed]
+
+
+def _reuse_response(
+    deps: BrokerDeps, pack: EvidencePackState, reused: list[str]
+) -> RequestMoreResponse:
     return RequestMoreResponse(
         status="reused",
         reused_evidence_ids=reused,
         new_evidence_cards=[],
         tokens_returned=0,
         budget_remaining_tokens=pack.run_remaining_tokens,
+        authorization=authorization_decision(deps),
     )
 
 
 def _refusal_response(
+    deps: BrokerDeps,
     pack: EvidencePackState,
     status: Literal["denied", "needs_human_approval"],
     denial_reason: str | None,
@@ -176,5 +225,6 @@ def _refusal_response(
         new_evidence_cards=[],
         tokens_returned=0,
         budget_remaining_tokens=pack.run_remaining_tokens,
+        authorization=authorization_decision(deps),
         denial_reason=denial_reason,
     )

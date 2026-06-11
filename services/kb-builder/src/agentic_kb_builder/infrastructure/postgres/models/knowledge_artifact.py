@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, Text, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agentic_kb_builder.infrastructure.postgres.models.base import Base
@@ -32,6 +32,11 @@ class KnowledgeArtifact(Base):
     # source_item.path); lets L2 evidence return precise snippets at a source version.
     span_start: Mapped[int | None] = mapped_column(Integer)
     span_end: Mapped[int | None] = mapped_column(Integer)
+    # team-based ACL: empty = org-public; non-empty = visible only to requesters
+    # whose team set intersects. Enforced by the mcp-server Context Broker (PR-13).
+    acl_teams: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

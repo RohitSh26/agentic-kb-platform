@@ -25,7 +25,7 @@ Build units: `docs/pr-briefs/PR-01`–`PR-13`.
 | Plane | What it does | Where it lives | Status |
 |---|---|---|---|
 | **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation | `services/kb-builder` | Implemented through PR-08 (connectors → build engine → wikify → graphify → linker → search indexer) |
-| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, graph traversal, retrieval ledger | `services/mcp-server` | Implemented (PR-09 server base: auth, telemetry, tool contracts, health; PR-10 Context Broker: packs, budgets, dedupe, evidence, graph, ledger; PR-11 agent manifests + output schemas) |
+| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, graph traversal, retrieval ledger | `services/mcp-server` | Implemented (PR-09 server base: auth, telemetry, tool contracts, health; PR-10 Context Broker: packs, budgets, dedupe, evidence, graph, ledger; PR-11 agent manifests + output schemas; PR-13 security hardening: `team_acl_v1` filtering, injection flagging, audit logging) |
 | **Benchmark layer** | Dev-only eval harness: runs the §13 benchmark cases through the real broker, computes token-cost metrics, diffs against a committed baseline | `evals/` | Implemented (PR-12; contract in `docs/contracts/evals-report.md`) |
 
 Nothing is shared at runtime (ADR-0008): each service is a self-contained `uv` project, and the
@@ -187,5 +187,5 @@ via a new ADR. Default answer is no.
 | 3 | Token saving enforced by the broker, not prompts | Context Broker budgets + ledger, enforced server-side under a per-pack lock (PR-10); `.claude/rules/token-budgets.md` |
 | 4 | Incremental build; cache hit ⇒ no model call | `GenerationCacheGate` / `EmbeddingCacheGate` in `agentic_kb_builder/application/cache_gates.py`; content-hash skip in `application/build_runner.py` |
 | 5 | kb_version active only after validation | `application/active_version.py` + unique partial index on `kb_build_run` |
-| 6 | Agents never touch stores/secrets; retrieved text untrusted | Entra JWKS auth boundary + schema-encoded policy in `agentic_mcp_server/mcp/tool_schemas` (PR-09); hardening PR-13 |
+| 6 | Agents never touch stores/secrets; retrieved text untrusted | Entra JWKS auth boundary + schema-encoded policy in `agentic_mcp_server/mcp/tool_schemas` (PR-09); `team_acl_v1` filtering at every retrieval surface, fail-closed identity, advisory injection flagging, and audit logging in `auth/rbac.py` / `domain/untrusted.py` / `telemetry/audit.py` (PR-13) |
 | 7 | Every claim cites evidence; no fabrication | Evidence cards by handle (PR-10); `agent_output_schemas` make unevidenced claims unconstructible and reject unknown evidence IDs (PR-11); linker stale-edge deletion in `linker/write_edges.py` |

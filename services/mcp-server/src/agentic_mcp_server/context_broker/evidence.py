@@ -13,9 +13,12 @@ import uuid
 
 from fastmcp.exceptions import ToolError
 
-from agentic_mcp_server.context_broker.audit import write_error_event
+from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
+from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.retrieval import authorization_decision
 from agentic_mcp_server.context_broker.state import UnknownPackError
+from agentic_mcp_server.context_broker.untrusted import scan_for_injection
 from agentic_mcp_server.domain.token_budget import CHARS_PER_TOKEN, estimate_tokens
 from agentic_mcp_server.infrastructure.postgres.artifacts import fetch_artifacts
 from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
@@ -23,6 +26,7 @@ from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
     insert_event,
 )
 from agentic_mcp_server.mcp.tool_schemas.context import OpenEvidenceRequest, OpenEvidenceResponse
+from agentic_mcp_server.telemetry.audit import audit_context_access
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +34,17 @@ _TOOL_NAME = "context.open_evidence"
 
 
 async def open_evidence(
-    deps: BrokerDeps, request: OpenEvidenceRequest, subject: str
+    deps: BrokerDeps, request: OpenEvidenceRequest, requester: Requester
 ) -> OpenEvidenceResponse:
     started = time.monotonic()
     try:
         pack = deps.packs.get(request.context_pack_id)
     except UnknownPackError:
         await write_error_event(
-            deps, tool_name=_TOOL_NAME, subject=subject, query_text=request.context_pack_id
+            deps,
+            tool_name=_TOOL_NAME,
+            subject=requester.subject,
+            query_text=request.context_pack_id,
         )
         raise ToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
 
@@ -45,7 +52,7 @@ async def open_evidence(
         await write_error_event(
             deps,
             tool_name=_TOOL_NAME,
-            subject=subject,
+            subject=requester.subject,
             run_id=pack.run_id,
             kb_version=pack.kb_version,
             context_pack_id=uuid.UUID(pack.context_pack_id),
@@ -55,15 +62,21 @@ async def open_evidence(
     card = pack.cards.get(request.evidence_id)
     if card is None:
         await write_audit_error()
-        raise ToolError(
-            f"unknown evidence_id for this pack: {request.evidence_id}; "
-            "evidence can only be opened by a handle the pack returned"
-        )
+        # same message as the ACL-denied branch: not-in-pack vs restricted
+        # must be indistinguishable to the caller
+        raise ToolError(f"evidence not available: {request.evidence_id}")
 
     async with deps.session_factory() as session:
         artifacts = await fetch_artifacts(session, [card.artifact_id], pack.kb_version)
-    allowed = deps.authorization.filter_artifacts(subject, artifacts)
+    allowed = deps.authorization.filter_artifacts(requester, artifacts)
     if not allowed:
+        audit_context_access(
+            tool=_TOOL_NAME,
+            requester=requester,
+            kb_version=pack.kb_version,
+            artifact_ids=[],
+            suppressed_artifact_ids=[card.artifact_id],
+        )
         await write_audit_error()
         raise ToolError(f"evidence not available: {request.evidence_id}")
     body = allowed[0].body_text or ""
@@ -76,7 +89,7 @@ async def open_evidence(
                 session,
                 RetrievalEventInsert(
                     run_id=pack.run_id,
-                    agent_name=subject,
+                    agent_name=requester.subject,
                     tool_name=_TOOL_NAME,
                     status=status,
                     kb_version=pack.kb_version,
@@ -91,7 +104,7 @@ async def open_evidence(
         logger.info(
             "broker.open_evidence context_pack_id=%s subject=%s evidence_id=%s status=%s tokens=%d",
             pack.context_pack_id,
-            subject,
+            requester.subject,
             request.evidence_id,
             status,
             tokens_returned,
@@ -105,8 +118,8 @@ async def open_evidence(
                 f"but only {pack.run_remaining_tokens} remain"
             )
 
-        allowance = deps.budget_policy.allowance_for(subject)
-        usage = pack.usage_for(subject)
+        allowance = deps.budget_policy.allowance_for(requester.subject)
+        usage = pack.usage_for(requester.subject)
         if usage.tokens + cost > allowance.max_tokens:
             await write_ledger("denied", 0)
             raise ToolError(
@@ -115,9 +128,17 @@ async def open_evidence(
             )
 
         content = body[: request.max_tokens * CHARS_PER_TOKEN]
-        pack.charge(subject, cost)
+        pack.charge(requester.subject, cost)
         await write_ledger("approved", cost)
 
+    scan = scan_for_injection(content)
+    audit_context_access(
+        tool=_TOOL_NAME,
+        requester=requester,
+        kb_version=pack.kb_version,
+        artifact_ids=[card.artifact_id],
+        injection_flagged_ids=[card.artifact_id] if scan.flagged else [],
+    )
     return OpenEvidenceResponse(
         evidence_id=request.evidence_id,
         level="L2",
@@ -125,4 +146,7 @@ async def open_evidence(
         tokens_used=cost,
         budget_remaining_tokens=pack.run_remaining_tokens,
         source_uri=card.source_uri,
+        authorization=authorization_decision(deps),
+        injection_flagged=scan.flagged,
+        injection_signals=list(scan.signals),
     )

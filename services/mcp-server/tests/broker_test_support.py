@@ -58,6 +58,7 @@ async def insert_artifact(
     authority_score: float = 0.8,
     artifact_type: str = "doc_chunk",
     source_uri: str | None = None,
+    acl_teams: list[str] | None = None,
 ) -> uuid.UUID:
     source_id = uuid.uuid4()
     artifact_id = uuid.uuid4()
@@ -76,9 +77,10 @@ async def insert_artifact(
     await session.execute(
         text(
             "INSERT INTO knowledge_artifact (artifact_id, artifact_type, source_id, title,"
-            " body_text, kb_version, knowledge_kind, authority_score) VALUES"
+            " body_text, kb_version, knowledge_kind, authority_score, acl_teams) VALUES"
             " (CAST(:artifact_id AS uuid), :artifact_type, CAST(:source_id AS uuid), :title,"
-            " :body_text, :kb_version, :knowledge_kind, :authority_score)"
+            " :body_text, :kb_version, :knowledge_kind, :authority_score,"
+            " CAST(:acl_teams AS text[]))"
         ),
         {
             "artifact_id": str(artifact_id),
@@ -89,6 +91,7 @@ async def insert_artifact(
             "kb_version": kb_version,
             "knowledge_kind": knowledge_kind,
             "authority_score": authority_score,
+            "acl_teams": acl_teams or [],
         },
     )
     await session.commit()

@@ -36,8 +36,8 @@ and the migrations. Summary:
 
 | Table | Purpose | Written by |
 |---|---|---|
-| `source_item` | Source identity (`source_type`, `source_uri`, `source_version`, `content_hash`) + normalized text. Drives incremental skip. | kb-builder |
-| `knowledge_artifact` | Chunks, summaries, concepts, source-backed facts, code artifacts (with spans). `knowledge_kind` ∈ interpreted / source_backed. | kb-builder |
+| `source_item` | Source identity (`source_type`, `source_uri`, `source_version`, `content_hash`) + normalized text + `acl_teams`. Drives incremental skip. | kb-builder |
+| `knowledge_artifact` | Chunks, summaries, concepts, source-backed facts, code artifacts (with spans). `knowledge_kind` ∈ interpreted / source_backed. Carries `acl_teams`. | kb-builder |
 | `knowledge_edge` | Graph edges: `edge_type`, `confidence`, `source` (graphify/linker), `kb_version`. The V1 graph store — no graph DB. | kb-builder |
 | `generation_cache` / `generation_cache_artifact` | Cache key ⇒ generated outputs ⇒ produced artifacts. | kb-builder |
 | `embedding_cache` | Embedding call gate, keyed `(artifact_id, text_hash, embedding_model)`. The vector itself is stored as a float array (`ARRAY(double precision)` — no pgvector in V1), so the Search index rebuilds without re-embedding. | kb-builder |
@@ -49,6 +49,14 @@ and the migrations. Summary:
 - `kb_build_run.kb_version` (text), `kb_build_run.status` (text) — active-version
   lookup for `/health` and for serving evidence.
 - `retrieval_event` full row shape — written by the Context Broker (PR-10).
+- `knowledge_artifact.acl_teams` (`text[]`, NOT NULL, default `'{}'`; added by
+  kb-builder migration 0008, also on `source_item`) — the broker's
+  `team_acl_v1` filter input. Empty array = org-public (any authenticated
+  subject); non-empty = visible only to requesters whose team set intersects.
+  An artifact's effective ACL in V1 is its own `acl_teams`; connectors
+  propagate `source_item.acl_teams` onto derived artifacts at build time
+  (population is a kb-builder follow-up — the empty default keeps current
+  behavior until then).
 
 `ledger.list_retrievals` (see `mcp-tools-contract.md`) maps its response from this
 table: `tool` ← `tool_name`, `evidence_ids` ← `reused_evidence_ids` ∪

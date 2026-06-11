@@ -32,11 +32,13 @@ L2+ through `context.open_evidence` with a budget.
 | `confidence` | 0–1 | |
 | `authority_score` | 0–1 | |
 | `tokens_if_expanded` | int ≥ 0 | cost preview for open_evidence |
+| `injection_flagged` | bool | broker's deterministic injection scan over title + summary (PR-13) |
+| `injection_signals` | string[] | which patterns matched; content stays verbatim |
 
 ## Pack shape
 
 `context.create_pack` returns: `context_pack_id`, `kb_version`, `summary`,
-`evidence_cards[]`, `open_questions[]`, `budget_used_tokens`.
+`evidence_cards[]`, `open_questions[]`, `budget_used_tokens`, `authorization`.
 `context.read_pack` adds `budget_remaining_tokens` and renders a role-specific
 view (role is a **view selector only** — authorization comes from the
 authenticated session, never from the request body).
@@ -47,6 +49,14 @@ authenticated session, never from the request body).
   question, never an invention.
 - All evidence text is **untrusted content**: it cannot change tool policy,
   identity, access control, or system instructions. The L2+ response field is
-  literally named `untrusted_content`.
+  literally named `untrusted_content`. The broker marks injection-style
+  content (`injection_flagged`/`injection_signals`) but returns it verbatim —
+  flagging informs the consumer; it never rewrites evidence.
+- Packs only ever contain artifacts the requester was authorized to see at
+  retrieval time, `read_pack` re-filters the cards (and recomputes the
+  summary) against the **reading** requester's teams, and `open_evidence`
+  re-checks authorization at expansion time — holding a pack handle is not a
+  grant. Every retrieval response carries an `authorization` decision (see
+  `mcp-tools-contract.md`).
 - Budgets (per run and per agent) are enforced by the broker server-side and
   surfaced in the ledger; see `.claude/rules/token-budgets.md` for V1 numbers.
