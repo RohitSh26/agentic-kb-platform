@@ -1,0 +1,20 @@
+id: webhook-retry-recall
+task_type: retrieval_recall
+task: "webhook retry behavior"
+approved_context_plan: "review webhook retry behavior for payment callbacks"
+budget_tokens: 8000
+fixtures:
+  artifacts:
+    - key: webhook_doc
+      title: "Webhook retry behavior"
+      body_text: "Webhooks retry 5 times with exponential backoff in webhooks/retry.py."
+      authority_score: 0.85
+  search_seeds:
+    - keyword: webhook
+      hits: [webhook_doc]
+expected:
+  docs: [webhook_doc]
+  files: ["webhooks/retry.py"]
+  symbols: []
+  tests: []
+  open_questions: []

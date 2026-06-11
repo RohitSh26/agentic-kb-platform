@@ -24,3 +24,6 @@ dist/
 # Claude Code session state
 .claude/cadence/
 .claude/scheduled_tasks.lock
+
+# Generated eval output (baseline.json IS committed)
+evals/report.json
