@@ -5,9 +5,10 @@ externally migrated TEST_DATABASE_URL (kb-builder `make migrate-test-db`).
 """
 
 import uuid
+from typing import Any
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import Row, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_mcp_server.context_broker.budgets import BudgetPolicy
@@ -122,7 +123,7 @@ async def insert_edge(
     await session.commit()
 
 
-async def fetch_ledger_rows(session: AsyncSession, run_id: str) -> list[object]:
+async def fetch_ledger_rows(session: AsyncSession, run_id: str) -> list[Row[Any]]:
     result = await session.execute(
         text(
             "SELECT tool_name, status, cache_hit, semantic_reuse, tokens_returned, agent_name,"
