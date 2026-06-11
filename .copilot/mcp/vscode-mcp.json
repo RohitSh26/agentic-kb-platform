@@ -1,0 +1,18 @@
+{
+  "servers": {
+    "context-broker": {
+      "type": "http",
+      "url": "https://<your-broker-host>/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${input:context-broker-token}"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "id": "context-broker-token",
+      "type": "password",
+      "description": "Bearer token for the Context Broker MCP server"
+    }
+  ]
+}

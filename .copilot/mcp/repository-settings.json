@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "context-broker": {
+      "type": "http",
+      "url": "https://<your-broker-host>/mcp/",
+      "tools": [
+        "context.create_pack",
+        "context.read_pack",
+        "context.request_more",
+        "context.open_evidence",
+        "ledger.list_retrievals"
+      ],
+      "headers": {
+        "Authorization": "Bearer $COPILOT_MCP_CONTEXT_BROKER_TOKEN"
+      }
+    }
+  }
+}
