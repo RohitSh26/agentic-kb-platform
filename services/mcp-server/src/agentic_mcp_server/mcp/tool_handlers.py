@@ -1,26 +1,61 @@
-"""Tool handlers for the registered surface.
+"""Context Broker handlers for the registered tool surface.
 
-Every tool is a stub until the Context Broker lands (PR-10): requests are
-validated against the contract, then rejected with "not implemented".
+Each handler binds a tool name from TOOL_SCHEMAS to its broker implementation.
+Identity is resolved per call from the authenticated session (never from
+request fields), and fastmcp validates I/O against the versioned schemas via
+the annotations set here.
 """
 
 from collections.abc import Callable, Coroutine
-from typing import Any, NoReturn
+from typing import Any
 
-from fastmcp.exceptions import ToolError
-
-from agentic_mcp_server.mcp.tool_registry import ToolSchema
+from agentic_mcp_server.context_broker import evidence, graph, ledger, pack, request_more
+from agentic_mcp_server.context_broker.dependencies import BrokerDeps, current_subject
+from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
+from agentic_mcp_server.mcp.tool_schemas.context import (
+    CreatePackRequest,
+    OpenEvidenceRequest,
+    ReadPackRequest,
+    RequestMoreRequest,
+)
+from agentic_mcp_server.mcp.tool_schemas.graph import GetNeighborsRequest
+from agentic_mcp_server.mcp.tool_schemas.ledger import ListRetrievalsRequest
 
-StubFn = Callable[[McpModel], Coroutine[Any, Any, McpModel]]
+HandlerFn = Callable[..., Coroutine[Any, Any, McpModel]]
 
 
-def make_stub(tool_name: str, schema: ToolSchema) -> StubFn:
-    async def stub(request: McpModel) -> NoReturn:
-        raise ToolError(f"{tool_name} is not implemented yet; the Context Broker arrives in PR-10")
+def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
+    async def create_pack(request: CreatePackRequest) -> McpModel:
+        return await pack.create_pack(deps, request, current_subject())
 
-    stub.__name__ = tool_name.replace(".", "_")
-    # fastmcp derives the input/output schemas from these annotations, so the
-    # stub enforces the versioned contract even before the broker exists
-    stub.__annotations__ = {"request": schema.request, "return": schema.response}
-    return stub
+    async def read_pack(request: ReadPackRequest) -> McpModel:
+        return await pack.read_pack(deps, request, current_subject())
+
+    async def request_more_handler(request: RequestMoreRequest) -> McpModel:
+        return await request_more.request_more(deps, request, current_subject())
+
+    async def open_evidence(request: OpenEvidenceRequest) -> McpModel:
+        return await evidence.open_evidence(deps, request, current_subject())
+
+    async def get_neighbors(request: GetNeighborsRequest) -> McpModel:
+        return await graph.get_neighbors(deps, request, current_subject())
+
+    async def list_retrievals(request: ListRetrievalsRequest) -> McpModel:
+        return await ledger.list_retrievals(deps, request, current_subject())
+
+    handlers: dict[str, HandlerFn] = {
+        "context.create_pack": create_pack,
+        "context.read_pack": read_pack,
+        "context.request_more": request_more_handler,
+        "context.open_evidence": open_evidence,
+        "graph.get_neighbors": get_neighbors,
+        "ledger.list_retrievals": list_retrievals,
+    }
+    for tool_name, handler in handlers.items():
+        schema = TOOL_SCHEMAS[tool_name]
+        handler.__name__ = tool_name.replace(".", "_")
+        # fastmcp derives input/output schemas from these annotations, keeping
+        # the wire contract pinned to the versioned schema registry
+        handler.__annotations__ = {"request": schema.request, "return": schema.response}
+    return handlers

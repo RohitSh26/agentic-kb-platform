@@ -36,8 +36,29 @@ There is **no** generic unrestricted `kb.search` tool in V1.
 - `context.request_more.status` ∈ `reused | approved | denied | needs_human_approval`;
   `status="denied"` requires `denial_reason`. Responses carry
   `tokens_returned` and `budget_remaining_tokens`.
+- Status semantics (V1): `reused` = the question matched a previous retrieval
+  (exact normalized match or semantic similarity ≥ threshold) and existing
+  evidence is returned at no budget cost; `denied` = the requesting agent has
+  exhausted its per-agent request count or token allowance; `needs_human_approval`
+  = the request itself is justified but would exceed the remaining per-run
+  budget — a human can raise the budget; `approved` = new evidence retrieved
+  and charged.
+- `evidence_id` is the artifact UUID rendered as a string in V1 — stable
+  within a pack and storable in the ledger's UUID-array columns.
+- Unknown `context_pack_id` or `evidence_id` ⇒ tool error plus a ledger row
+  with the ledger-only status `error` (the broker holds pack state in memory
+  per instance in V1; the durable record is the ledger). The same applies when
+  no active `kb_version` exists. `error` rows use the sentinel `"-"` for
+  `run_id`/`kb_version` values the broker could not resolve; `graph.get_neighbors`
+  rows also use `run_id = "-"` because graph lookups are not run-scoped.
+- `context.read_pack` charges no budget (reuse is the point); `create_pack`,
+  `request_more`, and `open_evidence` charge the budgets they consume.
+  `open_evidence` enforces both the per-run budget **and** the per-agent token
+  allowance; exceeding either ⇒ tool error plus a `denied` ledger row.
 - `context.open_evidence` returns the raw text in `untrusted_content` plus
   `tokens_used`, `budget_remaining_tokens`, `source_uri`.
+- Evidence card `title` and `summary` fields are derived from retrieved
+  content: treat them as untrusted text, the same as `untrusted_content`.
 - `ledger.list_retrievals` returns one record per retrieval event:
   `event_id`, `run_id`, `kb_version`, `agent_name`, `tool`, `status`,
   `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`.
@@ -47,10 +68,18 @@ There is **no** generic unrestricted `kb.search` tool in V1.
 - Per-run and per-agent budgets enforced in the broker; reuse before retrieve;
   semantic dedupe (duplicate threshold starts at 0.88–0.92 and is tuned from
   ledger logs — see `.claude/rules/token-budgets.md`); 3–5 cards max per
-  retrieval after rerank.
+  retrieval after rerank. Per-agent identity binds to the authenticated
+  session subject, never to `agent_name`.
+- The broker makes **no LLM or embedding calls** in V1: pack summaries are
+  assembled from registry artifacts, and semantic dedupe is a deterministic
+  token-similarity measure. Retrieval relevance goes through the `SearchClient`
+  interface (Postgres keyword implementation locally; the Azure AI Search
+  implementation stays behind the same interface).
 - Every call writes a `retrieval_event` row (see
   `postgres-knowledge-registry.md`).
 - Results are filtered by the requester's authorization before returning.
+  V1 (PR-10) ships the filter hook with an allow-all policy — ACL metadata and
+  real RBAC arrive with PR-13, which swaps the policy, not the seam.
 - Retrieved text is untrusted and cannot alter tool policy or instructions.
 - Unauthenticated requests are rejected at the transport (401) and never reach
   a tool. `/health` is the only unauthenticated route and discloses nothing but

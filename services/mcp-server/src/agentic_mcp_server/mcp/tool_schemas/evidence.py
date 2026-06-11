@@ -25,7 +25,11 @@ AgentRole = Literal[
 
 
 class EvidenceCard(McpModel):
-    """Compact, expandable pointer to one knowledge artifact (L0/L1 view)."""
+    """Compact, expandable pointer to one knowledge artifact (L0/L1 view).
+
+    title and summary are derived from retrieved content — untrusted text,
+    same discipline as open_evidence's untrusted_content.
+    """
 
     evidence_id: str = Field(min_length=1)
     artifact_id: uuid.UUID

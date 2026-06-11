@@ -25,7 +25,7 @@ Build units: `docs/pr-briefs/PR-01`–`PR-13`.
 | Plane | What it does | Where it lives | Status |
 |---|---|---|---|
 | **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation | `services/kb-builder` | Implemented through PR-08 (connectors → build engine → wikify → graphify → linker → search indexer) |
-| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, graph traversal, retrieval ledger | `services/mcp-server` | Server base implemented (PR-09: auth, telemetry, tool contracts, health); broker logic lands with PR-10 |
+| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, graph traversal, retrieval ledger | `services/mcp-server` | Implemented (PR-09 server base: auth, telemetry, tool contracts, health; PR-10 Context Broker: packs, budgets, dedupe, evidence, graph, ledger) |
 
 Nothing is shared at runtime (ADR-0008): each service is a self-contained `uv` project, and the
 only cross-service agreements are the markdown contracts in `docs/contracts/`, pinned by contract
@@ -182,8 +182,8 @@ via a new ADR. Default answer is no.
 | # | Invariant | Enforced by |
 |---|---|---|
 | 1 | Postgres is truth; Search is a projection | ADR-0002; `agentic_kb_builder/indexing/consistency.py` drift check gates activation; embedding vectors stored in `embedding_cache` so the index rebuilds without re-embedding |
-| 2 | Graph in Postgres, behavior via MCP tools | `knowledge_edge` table; `graph.get_neighbors` contract + registered stub (PR-09), broker logic PR-10 |
-| 3 | Token saving enforced by the broker, not prompts | Context Broker budgets + ledger (PR-10); `.claude/rules/token-budgets.md` |
+| 2 | Graph in Postgres, behavior via MCP tools | `knowledge_edge` table; `graph.get_neighbors` bounded BFS in the broker (PR-10) |
+| 3 | Token saving enforced by the broker, not prompts | Context Broker budgets + ledger, enforced server-side under a per-pack lock (PR-10); `.claude/rules/token-budgets.md` |
 | 4 | Incremental build; cache hit ⇒ no model call | `GenerationCacheGate` / `EmbeddingCacheGate` in `agentic_kb_builder/application/cache_gates.py`; content-hash skip in `application/build_runner.py` |
 | 5 | kb_version active only after validation | `application/active_version.py` + unique partial index on `kb_build_run` |
 | 6 | Agents never touch stores/secrets; retrieved text untrusted | Entra JWKS auth boundary + schema-encoded policy in `agentic_mcp_server/mcp/tool_schemas` (PR-09); hardening PR-13 |

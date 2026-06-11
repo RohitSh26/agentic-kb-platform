@@ -2,7 +2,14 @@
 
 from dataclasses import dataclass
 
-__all__ = ["TokenBudget"]
+__all__ = ["CHARS_PER_TOKEN", "TokenBudget", "estimate_tokens"]
+
+CHARS_PER_TOKEN = 4
+
+
+def estimate_tokens(text: str) -> int:
+    """Deterministic ~4-chars-per-token estimate; budgets need consistency, not exactness."""
+    return (len(text) + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
 
 
 @dataclass(frozen=True)

@@ -86,8 +86,12 @@ async def test_authenticated_tool_call_logs_agent_identity(
     async with app.router.lifespan_context(app):
         with caplog.at_level(logging.INFO, logger="agentic_mcp_server.telemetry.middleware"):
             async with Client(transport) as client:
-                arguments: dict[str, Any] = {"request": {"run_id": "run-auth-e2e"}}
-                with pytest.raises(ToolError, match="not implemented"):
+                # the extra field fails contract validation deterministically
+                # (no DB); the middleware logs identity before validation
+                arguments: dict[str, Any] = {
+                    "request": {"run_id": "run-auth-e2e", "unexpected_field": True}
+                }
+                with pytest.raises(ToolError):
                     await client.call_tool("ledger.list_retrievals", arguments)
     lines = [r.getMessage() for r in caplog.records if "event=mcp_request" in r.getMessage()]
     assert any(f"agent={AGENT_SUBJECT}" in line and "run_id=run-auth-e2e" in line for line in lines)
