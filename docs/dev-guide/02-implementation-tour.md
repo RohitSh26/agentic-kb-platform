@@ -124,6 +124,25 @@ Concrete connectors are thin subclasses: `GitHubCodeConnector` (version = commit
 revision; the backend renders card fields deterministically — cards mutate, so we snapshot
 normalized fields, per the raw-storage policy).
 
+**Source configuration (PR-14)** — which sources the nightly build ingests is declared in a
+reviewed `sources.yaml` (contract: `docs/contracts/source-config.md`; pinned example:
+`services/kb-builder/sources.example.yaml`):
+
+- `domain/source_config.py` — the schema as a pydantic discriminated union on `type`
+  (`GithubCodeSourceSpec` / `GithubDocSourceSpec` / `AzureWikiSourceSpec` / `AdoCardSourceSpec`),
+  plus `PathFilter`: deterministic gitignore-style globs (`**` spans segments, `*` stays within
+  one, exclude wins, default include is everything). `AuthRef.token_env` validates as an
+  environment-variable *name* — a token value is unrepresentable in the schema.
+- `connectors/config_loader.py` — `load_source_config` (yaml.safe_load → validated models;
+  failures name the file and the offending source), `resolve_token` (os.environ at load time;
+  configured-but-unset is a hard error; the value lives only in a local handed to the backend
+  factory), `FilteredFetchBackend` (wraps any backend: excluded paths are never fetched, hashed,
+  or stored; stamps the source's `acl_teams` onto surviving refs), and
+  `connectors_from_config(config, backend_factory)` — the seam where the real API backends will
+  plug in. `acl_teams` flows config → `SourceRef` → `source_item` on insert and update; note it
+  has no runtime enforcement effect until artifact-level ACL propagation lands (the mcp-server
+  filters on `knowledge_artifact.acl_teams`, which stays org-public for now).
+
 ## 5. Build engine (`services/kb-builder/src/agentic_kb_builder/application/`)
 
 The heart of the platform. Three files:
@@ -404,10 +423,13 @@ audience; JWKS verification means no client secret exists), asserted by
 
 ## 15. What does not exist yet
 
-- Real connector backends (network I/O), the orchestrator runtime that executes the manifests,
-  IaC. Recorded follow-ups from PR-13: connector ACL ingestion (every artifact is org-public
-  until kb-builder populates `acl_teams`), Entra `groupMembershipClaims` configuration, and
-  run-scoped ledger authorization.
+- Real connector backends (network I/O) — the configured source set (`sources.yaml`, PR-14) and
+  the `connectors_from_config` factory seam exist; the GitHub/Azure Wiki/ADO API `FetchBackend`
+  implementations that plug into it do not. Also: the orchestrator runtime that executes the
+  manifests, IaC. Recorded follow-ups from PR-13: connector ACL ingestion from *source
+  permissions* (PR-14 lets config authors set `acl_teams` per source and lands them on
+  `source_item`, but artifacts stay org-public until artifact-level propagation), Entra
+  `groupMembershipClaims` configuration, and run-scoped ledger authorization.
 
 ## 16. Reading order for a new dev
 

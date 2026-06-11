@@ -236,13 +236,15 @@ class BuildRunner:
         )
 
     async def _touch_last_seen(self, fetched: NormalizedContent) -> None:
+        # acl_teams rides along: an ACL-only config change (an access
+        # revocation) must land even when content_hash is unchanged
         await self._session.execute(
             update(SourceItem)
             .where(
                 SourceItem.source_type == fetched.source.source_type,
                 SourceItem.source_uri == fetched.source.source_uri,
             )
-            .values(last_seen_at=func.now())
+            .values(last_seen_at=func.now(), acl_teams=list(fetched.source.acl_teams))
         )
 
     async def _is_unchanged(self, fetched: NormalizedContent) -> bool:
@@ -268,6 +270,7 @@ class BuildRunner:
                 branch=ref.branch,
                 path=ref.path,
                 external_id=ref.external_id,
+                acl_teams=list(ref.acl_teams),
                 content_hash=fetched.content_hash,
                 last_seen_at=text("now()"),
                 is_deleted=False,
@@ -276,6 +279,7 @@ class BuildRunner:
                 constraint="uq_source_item_source_type_source_uri",
                 set_={
                     "source_version": ref.source_version,
+                    "acl_teams": list(ref.acl_teams),
                     "content_hash": fetched.content_hash,
                     "last_seen_at": text("now()"),
                     "is_deleted": False,

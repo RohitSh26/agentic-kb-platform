@@ -2,6 +2,8 @@
 
 from typing import Literal
 
+from pydantic import Field
+
 from agentic_kb_builder.domain.artifact_model import ArtifactModel
 
 SourceType = Literal["github_code", "github_doc", "azure_wiki", "ado_card"]
@@ -22,6 +24,7 @@ class SourceRef(ArtifactModel):
     branch: str | None = None
     path: str | None = None
     external_id: str | None = None
+    acl_teams: list[str] = Field(default_factory=list)
 
 
 class NormalizedContent(ArtifactModel):
