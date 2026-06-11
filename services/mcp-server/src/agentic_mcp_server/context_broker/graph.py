@@ -3,7 +3,9 @@
 Graph behavior is exposed only through this tool (invariant 2). The traversal
 is depth- and fan-out-capped, returns titles and edge metadata — never raw
 text — and every call writes a ledger row (run_id sentinel "-": graph lookups
-are not run-scoped).
+are not run-scoped). ACL filtering happens per hop, before the frontier
+expands: a restricted node must not reveal its connectivity, and the
+traversal must not transit through it to authorized nodes beyond.
 """
 
 import logging
@@ -14,10 +16,12 @@ from typing import Literal
 
 from fastmcp.exceptions import ToolError
 
-from agentic_mcp_server.context_broker.audit import write_error_event
+from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
+from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.retrieval import authorization_decision
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_kb_version
-from agentic_mcp_server.infrastructure.postgres.artifacts import fetch_artifacts
+from agentic_mcp_server.infrastructure.postgres.artifacts import ArtifactRow, fetch_artifacts
 from agentic_mcp_server.infrastructure.postgres.edges import fetch_edges_touching
 from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
     RetrievalEventInsert,
@@ -28,6 +32,7 @@ from agentic_mcp_server.mcp.tool_schemas.graph import (
     GetNeighborsResponse,
     GraphNeighbor,
 )
+from agentic_mcp_server.telemetry.audit import audit_context_access
 
 logger = logging.getLogger(__name__)
 
@@ -46,16 +51,17 @@ class _Found:
 
 
 async def get_neighbors(
-    deps: BrokerDeps, request: GetNeighborsRequest, subject: str
+    deps: BrokerDeps, request: GetNeighborsRequest, requester: Requester
 ) -> GetNeighborsResponse:
     started = time.monotonic()
+    suppressed: list[uuid.UUID] = []
     async with deps.session_factory() as session:
         kb_version = await fetch_active_kb_version(session)
         if kb_version is None:
             await write_error_event(
                 deps,
                 tool_name=_TOOL_NAME,
-                subject=subject,
+                subject=requester.subject,
                 query_text=str(request.artifact_id),
             )
             raise ToolError("no active kb_version; the knowledge base has not been built yet")
@@ -65,16 +71,15 @@ async def get_neighbors(
         visited: set[uuid.UUID] = {request.artifact_id}
         frontier = [request.artifact_id]
         found: list[_Found] = []
+        rows_by_id: dict[uuid.UUID, ArtifactRow] = {}
 
         for distance in range(1, request.depth + 1):
             if not frontier or len(found) >= cap:
                 break
             edges = await fetch_edges_touching(session, frontier, kb_version, edge_types)
             frontier_set = set(frontier)
-            next_frontier: list[uuid.UUID] = []
+            candidates: list[_Found] = []
             for edge in edges:
-                if len(found) >= cap:
-                    break
                 if edge.from_artifact_id in frontier_set and edge.to_artifact_id not in visited:
                     neighbor, direction = edge.to_artifact_id, "out"
                 elif edge.to_artifact_id in frontier_set and edge.from_artifact_id not in visited:
@@ -82,8 +87,7 @@ async def get_neighbors(
                 else:
                     continue
                 visited.add(neighbor)
-                next_frontier.append(neighbor)
-                found.append(
+                candidates.append(
                     _Found(
                         artifact_id=neighbor,
                         edge_type=edge.edge_type,
@@ -93,17 +97,42 @@ async def get_neighbors(
                         distance=distance,
                     )
                 )
+            if not candidates:
+                frontier = []
+                continue
+
+            # filter each hop BEFORE expanding the frontier: an unauthorized
+            # node is neither returned nor traversed through
+            artifacts = await fetch_artifacts(
+                session, [candidate.artifact_id for candidate in candidates], kb_version
+            )
+            allowed_by_id = {
+                artifact.artifact_id: artifact
+                for artifact in deps.authorization.filter_artifacts(requester, artifacts)
+            }
+            suppressed.extend(
+                artifact.artifact_id
+                for artifact in artifacts
+                if artifact.artifact_id not in allowed_by_id
+            )
+
+            next_frontier: list[uuid.UUID] = []
+            for candidate in candidates:
+                row = allowed_by_id.get(candidate.artifact_id)
+                if row is None:
+                    continue
+                if len(found) >= cap:
+                    break
+                rows_by_id[candidate.artifact_id] = row
+                found.append(candidate)
+                next_frontier.append(candidate.artifact_id)
             frontier = next_frontier
 
-        artifacts = await fetch_artifacts(session, [f.artifact_id for f in found], kb_version)
-
-    allowed = deps.authorization.filter_artifacts(subject, artifacts)
-    by_id = {artifact.artifact_id: artifact for artifact in allowed}
     neighbors = [
         GraphNeighbor(
             artifact_id=f.artifact_id,
-            title=by_id[f.artifact_id].title or str(f.artifact_id),
-            artifact_type=by_id[f.artifact_id].artifact_type,
+            title=rows_by_id[f.artifact_id].title or str(f.artifact_id),
+            artifact_type=rows_by_id[f.artifact_id].artifact_type,
             edge_type=f.edge_type,
             direction=f.direction,
             confidence=f.confidence,
@@ -111,7 +140,6 @@ async def get_neighbors(
             distance=f.distance,
         )
         for f in found
-        if f.artifact_id in by_id
     ]
 
     async with deps.session_factory() as session:
@@ -119,7 +147,7 @@ async def get_neighbors(
             session,
             RetrievalEventInsert(
                 run_id=NO_RUN_SENTINEL,
-                agent_name=subject,
+                agent_name=requester.subject,
                 tool_name=_TOOL_NAME,
                 status="approved",
                 kb_version=kb_version,
@@ -128,15 +156,24 @@ async def get_neighbors(
                 latency_ms=int((time.monotonic() - started) * 1000),
             ),
         )
+    audit_context_access(
+        tool=_TOOL_NAME,
+        requester=requester,
+        kb_version=kb_version,
+        artifact_ids=[n.artifact_id for n in neighbors],
+        suppressed_artifact_ids=suppressed,
+    )
     logger.info(
-        "broker.get_neighbors artifact_id=%s subject=%s depth=%d neighbors=%d",
+        "broker.get_neighbors artifact_id=%s subject=%s depth=%d neighbors=%d suppressed=%d",
         request.artifact_id,
-        subject,
+        requester.subject,
         request.depth,
         len(neighbors),
+        len(suppressed),
     )
     return GetNeighborsResponse(
         artifact_id=request.artifact_id,
         kb_version=kb_version,
         neighbors=neighbors,
+        authorization=authorization_decision(deps),
     )

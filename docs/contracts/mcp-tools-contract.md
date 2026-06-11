@@ -3,7 +3,9 @@
 > Versioned tool surface served by mcp-server. Schema before code: every tool
 > has a frozen pydantic request/response model (`extra="forbid"`) in
 > `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`, registered in
-> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.0.0"`.
+> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.1.0"` (1.1.0 = PR-13:
+> `authorization` decision on every retrieval response, `injection_*` markers
+> on cards and expansions).
 
 ## The six V1 tools
 
@@ -59,6 +61,20 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   `tokens_used`, `budget_remaining_tokens`, `source_uri`.
 - Evidence card `title` and `summary` fields are derived from retrieved
   content: treat them as untrusted text, the same as `untrusted_content`.
+- Every retrieval response (`create_pack`, `read_pack`, `request_more`,
+  `open_evidence`, `get_neighbors`) carries an `authorization` decision:
+  `{policy, decision}` where `policy` names the active filter (V1:
+  `team_acl_v1`) and `decision` is always `allowed` — unauthorized artifacts
+  are silently removed before ranking, and the response deliberately carries
+  **no filtered count** (counts would leak the existence of restricted
+  artifacts). A fully-denied `open_evidence` is a tool error
+  (`evidence not available`), indistinguishable from a missing artifact.
+- Evidence cards carry `injection_flagged: bool` + `injection_signals: list[str]`
+  (scanned over title + summary); `open_evidence` responses carry the same pair
+  scanned over the expanded body. Flagging is advisory and deterministic
+  (regex, no model calls); flagged content is returned **verbatim**, never
+  rewritten — the consumer decides how to treat it, the broker never lets it
+  alter policy.
 - `ledger.list_retrievals` returns one record per retrieval event:
   `event_id`, `run_id`, `kb_version`, `agent_name`, `tool`, `status`,
   `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`.
@@ -77,10 +93,27 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   implementation stays behind the same interface).
 - Every call writes a `retrieval_event` row (see
   `postgres-knowledge-registry.md`).
-- Results are filtered by the requester's authorization before returning.
-  V1 (PR-10) ships the filter hook with an allow-all policy — ACL metadata and
-  real RBAC arrive with PR-13, which swaps the policy, not the seam.
+- Results are filtered by the requester's authorization before returning
+  (PR-13: `team_acl_v1`). The requester is the authenticated session subject
+  plus its team set, taken from the bearer token's `groups`/`roles` claims —
+  never from the request body. An artifact with empty `acl_teams` is
+  org-public (any authenticated subject); a non-empty `acl_teams` requires a
+  non-empty intersection with the requester's teams. Filtering applies at
+  every surface: card retrieval, evidence expansion (`open_evidence`
+  re-hydrates from Postgres and re-filters — a pack handle is not a grant),
+  and graph traversal, where each BFS hop filters **before** expanding the
+  frontier so restricted nodes never reveal their connectivity.
 - Retrieved text is untrusted and cannot alter tool policy or instructions.
+  The broker scans retrieved text for injection patterns (instruction
+  overrides, role markers, chat-template tokens, secret-exfiltration asks,
+  unicode direction/zero-width tricks) and marks matches via the
+  `injection_*` response fields; detections are audit-logged.
+- Every context expansion and source access is audit-logged to structured
+  stdout (`telemetry/audit.py`): requester subject + teams, tool, artifact
+  ids, ACL-suppressed artifact ids, and injection detections. Audit lines
+  carry ids and metadata only — never `body_text`. The audit stream is
+  operator telemetry; the Postgres `retrieval_event` ledger remains the
+  agent-visible durable record.
 - Unauthenticated requests are rejected at the transport (401) and never reach
   a tool. `/health` is the only unauthenticated route and discloses nothing but
   service name and active `kb_version`.

@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import Field
 
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
+from agentic_mcp_server.mcp.tool_schemas.evidence import AuthorizationDecision
 
 
 class GetNeighborsRequest(McpModel):
@@ -39,3 +40,4 @@ class GetNeighborsResponse(McpModel):
     artifact_id: uuid.UUID
     kb_version: str = Field(min_length=1)
     neighbors: list[GraphNeighbor]
+    authorization: AuthorizationDecision

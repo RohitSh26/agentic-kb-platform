@@ -60,6 +60,9 @@ def test_run_id_rejects_log_injection_charsets() -> None:
             )
 
 
+AUTHORIZATION = {"policy": "team_acl_v1", "decision": "allowed"}
+
+
 def test_denied_status_requires_denial_reason() -> None:
     with pytest.raises(ValidationError, match="denial_reason"):
         RequestMoreResponse.model_validate(
@@ -69,6 +72,7 @@ def test_denied_status_requires_denial_reason() -> None:
                 "new_evidence_cards": [],
                 "tokens_returned": 0,
                 "budget_remaining_tokens": 100,
+                "authorization": AUTHORIZATION,
             }
         )
 
@@ -125,6 +129,7 @@ def test_open_evidence_exposes_raw_text_only_as_untrusted_content() -> None:
                 "untrusted_content": "raw chunk text",
                 "tokens_used": 10,
                 "budget_remaining_tokens": 90,
+                "authorization": AUTHORIZATION,
             }
         )
         assert response.level == level
@@ -136,5 +141,6 @@ def test_open_evidence_exposes_raw_text_only_as_untrusted_content() -> None:
                 "untrusted_content": "raw chunk text",
                 "tokens_used": 10,
                 "budget_remaining_tokens": 90,
+                "authorization": AUTHORIZATION,
             }
         )

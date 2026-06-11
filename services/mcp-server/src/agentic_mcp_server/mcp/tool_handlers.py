@@ -10,7 +10,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any
 
 from agentic_mcp_server.context_broker import evidence, graph, ledger, pack, request_more
-from agentic_mcp_server.context_broker.dependencies import BrokerDeps, current_subject
+from agentic_mcp_server.context_broker.dependencies import BrokerDeps, current_requester
 from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
 from agentic_mcp_server.mcp.tool_schemas.context import (
@@ -27,22 +27,22 @@ HandlerFn = Callable[..., Coroutine[Any, Any, McpModel]]
 
 def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
     async def create_pack(request: CreatePackRequest) -> McpModel:
-        return await pack.create_pack(deps, request, current_subject())
+        return await pack.create_pack(deps, request, current_requester())
 
     async def read_pack(request: ReadPackRequest) -> McpModel:
-        return await pack.read_pack(deps, request, current_subject())
+        return await pack.read_pack(deps, request, current_requester())
 
     async def request_more_handler(request: RequestMoreRequest) -> McpModel:
-        return await request_more.request_more(deps, request, current_subject())
+        return await request_more.request_more(deps, request, current_requester())
 
     async def open_evidence(request: OpenEvidenceRequest) -> McpModel:
-        return await evidence.open_evidence(deps, request, current_subject())
+        return await evidence.open_evidence(deps, request, current_requester())
 
     async def get_neighbors(request: GetNeighborsRequest) -> McpModel:
-        return await graph.get_neighbors(deps, request, current_subject())
+        return await graph.get_neighbors(deps, request, current_requester())
 
     async def list_retrievals(request: ListRetrievalsRequest) -> McpModel:
-        return await ledger.list_retrievals(deps, request, current_subject())
+        return await ledger.list_retrievals(deps, request, current_requester())
 
     handlers: dict[str, HandlerFn] = {
         "context.create_pack": create_pack,

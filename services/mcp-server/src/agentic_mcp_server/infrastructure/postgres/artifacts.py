@@ -17,7 +17,7 @@ SOURCE_ITEM_TABLE = "source_item"
 _FETCH_ARTIFACTS_QUERY = text(
     f"""
     SELECT a.artifact_id, a.artifact_type, a.title, a.body_text, a.knowledge_kind,
-           a.authority_score, s.source_uri
+           a.authority_score, a.acl_teams, s.source_uri
     FROM {KNOWLEDGE_ARTIFACT_TABLE} a
     JOIN {SOURCE_ITEM_TABLE} s ON s.source_id = a.source_id
     WHERE a.artifact_id = ANY(CAST(:artifact_ids AS uuid[]))
@@ -35,6 +35,8 @@ class ArtifactRow:
     knowledge_kind: str | None
     authority_score: float | None
     source_uri: str
+    # empty = org-public; non-empty = requester team set must intersect
+    acl_teams: tuple[str, ...] = ()
 
 
 async def fetch_artifacts(
@@ -52,6 +54,7 @@ async def fetch_artifacts(
             knowledge_kind=row.knowledge_kind,
             authority_score=row.authority_score,
             source_uri=row.source_uri,
+            acl_teams=tuple(row.acl_teams),
         )
         for row in result
     ]

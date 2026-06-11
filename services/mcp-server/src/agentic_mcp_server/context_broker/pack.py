@@ -11,9 +11,14 @@ import uuid
 
 from fastmcp.exceptions import ToolError
 
-from agentic_mcp_server.context_broker.audit import write_error_event
+from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
-from agentic_mcp_server.context_broker.retrieval import card_tokens, retrieve_cards
+from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.retrieval import (
+    authorization_decision,
+    card_tokens,
+    retrieve_cards,
+)
 from agentic_mcp_server.context_broker.state import (
     EvidencePackState,
     UnknownPackError,
@@ -44,7 +49,7 @@ def _summary(run_id: str, cards: list[EvidenceCard]) -> str:
 
 
 async def create_pack(
-    deps: BrokerDeps, request: CreatePackRequest, subject: str
+    deps: BrokerDeps, request: CreatePackRequest, requester: Requester
 ) -> CreatePackResponse:
     started = time.monotonic()
     query = f"{request.task} {request.approved_context_plan}"
@@ -54,13 +59,19 @@ async def create_pack(
         await write_error_event(
             deps,
             tool_name="context.create_pack",
-            subject=subject,
+            subject=requester.subject,
             run_id=request.run_id,
             query_text=query,
         )
         raise ToolError("no active kb_version; the knowledge base has not been built yet")
 
-    cards, _ = await retrieve_cards(deps, query=query, kb_version=kb_version, subject=subject)
+    cards, _ = await retrieve_cards(
+        deps,
+        query=query,
+        kb_version=kb_version,
+        requester=requester,
+        tool="context.create_pack",
+    )
     used_tokens = sum(card_tokens(card) for card in cards)
     open_questions = [] if cards else [f"No evidence found for: {request.task}"]
 
@@ -84,7 +95,7 @@ async def create_pack(
             session,
             RetrievalEventInsert(
                 run_id=request.run_id,
-                agent_name=subject,
+                agent_name=requester.subject,
                 tool_name="context.create_pack",
                 status="approved",
                 kb_version=kb_version,
@@ -102,7 +113,7 @@ async def create_pack(
         "broker.create_pack run_id=%s context_pack_id=%s subject=%s cards=%d tokens=%d",
         request.run_id,
         pack.context_pack_id,
-        subject,
+        requester.subject,
         len(cards),
         used_tokens,
     )
@@ -113,10 +124,13 @@ async def create_pack(
         evidence_cards=cards,
         open_questions=pack.open_questions,
         budget_used_tokens=used_tokens,
+        authorization=authorization_decision(deps),
     )
 
 
-async def read_pack(deps: BrokerDeps, request: ReadPackRequest, subject: str) -> ReadPackResponse:
+async def read_pack(
+    deps: BrokerDeps, request: ReadPackRequest, requester: Requester
+) -> ReadPackResponse:
     started = time.monotonic()
     try:
         pack = deps.packs.get(request.context_pack_id)
@@ -124,7 +138,7 @@ async def read_pack(deps: BrokerDeps, request: ReadPackRequest, subject: str) ->
         await write_error_event(
             deps,
             tool_name="context.read_pack",
-            subject=subject,
+            subject=requester.subject,
             query_text=request.context_pack_id,
         )
         raise ToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
@@ -135,7 +149,7 @@ async def read_pack(deps: BrokerDeps, request: ReadPackRequest, subject: str) ->
             session,
             RetrievalEventInsert(
                 run_id=pack.run_id,
-                agent_name=subject,
+                agent_name=requester.subject,
                 tool_name="context.read_pack",
                 status="reused",
                 kb_version=pack.kb_version,
@@ -149,7 +163,7 @@ async def read_pack(deps: BrokerDeps, request: ReadPackRequest, subject: str) ->
     logger.info(
         "broker.read_pack context_pack_id=%s subject=%s role=%s cards=%d",
         pack.context_pack_id,
-        subject,
+        requester.subject,
         request.role,
         len(cards),
     )
@@ -161,4 +175,5 @@ async def read_pack(deps: BrokerDeps, request: ReadPackRequest, subject: str) ->
         evidence_cards=cards,
         open_questions=pack.open_questions,
         budget_remaining_tokens=pack.run_remaining_tokens,
+        authorization=authorization_decision(deps),
     )
