@@ -68,7 +68,8 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   are silently removed before ranking, and the response deliberately carries
   **no filtered count** (counts would leak the existence of restricted
   artifacts). A fully-denied `open_evidence` is a tool error
-  (`evidence not available`), indistinguishable from a missing artifact.
+  (`evidence not available`) — the same error as a missing artifact or an id
+  that was never in the pack, so none of the three is distinguishable.
 - Evidence cards carry `injection_flagged: bool` + `injection_signals: list[str]`
   (scanned over title + summary); `open_evidence` responses carry the same pair
   scanned over the expanded body. Flagging is advisory and deterministic
@@ -77,14 +78,19 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   alter policy.
 - `ledger.list_retrievals` returns one record per retrieval event:
   `event_id`, `run_id`, `kb_version`, `agent_name`, `tool`, `status`,
-  `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`. V1 accepts
-  that ledger records are visible to any authenticated subject that knows the
-  `run_id` (artifact UUIDs in `evidence_ids` confirm existence); run-scoped
-  ledger authorization is a recorded follow-up, not a V1 guarantee.
+  `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`. The non-run
+  sentinel `run_id = "-"` is rejected (it aggregates every subject's
+  non-run-scoped activity and is operator-only). V1 accepts that ledger
+  records are visible to any authenticated subject that knows the `run_id`
+  (artifact UUIDs in `evidence_ids` confirm existence); run-scoped ledger
+  authorization is a recorded follow-up, not a V1 guarantee.
 
 ## Server-side policy (not prompt-enforced)
 
-- Per-run and per-agent budgets enforced in the broker; reuse before retrieve;
+- Per-run and per-agent budgets enforced in the broker; the run budget
+  requested by `create_pack` is clamped to a server-side maximum (default
+  18k, the top of the 12k–18k band) — the request value is never an escape
+  hatch; reuse before retrieve;
   semantic dedupe (duplicate threshold starts at 0.88–0.92 and is tuned from
   ledger logs — see `.claude/rules/token-budgets.md`); 3–5 cards max per
   retrieval after rerank. Per-agent identity binds to the authenticated
@@ -103,7 +109,9 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   org-public (any authenticated subject); a non-empty `acl_teams` requires a
   non-empty intersection with the requester's teams. Filtering applies at
   every surface: card retrieval, pack reads (`read_pack` re-filters the
-  cached cards against the reading requester), evidence expansion
+  cached cards against the reading requester), reuse (`request_more` reused
+  ids are re-filtered for the caller; a fully-suppressed reuse falls through
+  to a fresh, filtered retrieval), evidence expansion
   (`open_evidence` re-hydrates from Postgres and re-filters — a pack handle
   is not a grant), and graph traversal, where the root node and each BFS hop
   are filtered **before** expanding the frontier so restricted nodes never

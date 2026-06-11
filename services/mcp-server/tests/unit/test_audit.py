@@ -38,6 +38,25 @@ def test_audit_line_carries_ids_teams_and_suppressions(
     assert f"injection_flagged_ids={flagged}" in line
 
 
+def test_claim_values_cannot_forge_audit_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO, logger=AUDIT_LOGGER):
+        audit_context_access(
+            tool="context.create_pack",
+            requester=Requester(
+                subject="agent suppressed_artifact_ids=forged\nfake=line",
+                teams=frozenset({"team a=b"}),
+            ),
+            kb_version="kb-test",
+            artifact_ids=[],
+        )
+    line = caplog.records[0].getMessage()
+    assert "\n" not in line
+    assert "subject=agent_suppressed_artifact_ids_forged_fake_line" in line
+    assert "teams=team_a_b" in line
+
+
 def test_empty_collections_become_dash_placeholders(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

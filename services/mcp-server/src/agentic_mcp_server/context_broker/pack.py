@@ -77,20 +77,22 @@ async def create_pack(
     used_tokens = sum(card_tokens(card) for card in cards)
     open_questions = [] if cards else [f"No evidence found for: {request.task}"]
 
+    # the run budget is a server-side control: the requested value is clamped,
+    # never trusted (token-budgets rule)
+    budget_tokens = min(request.budget_tokens, deps.settings.max_run_budget_tokens)
     pack = EvidencePackState(
         context_pack_id=new_pack_id(),
         run_id=request.run_id,
         kb_version=kb_version,
         retrieval_profile=request.retrieval_profile,
         summary=_summary(request.run_id, cards),
-        budget_tokens=request.budget_tokens,
+        budget_tokens=budget_tokens,
         used_run_tokens=used_tokens,
         cards={card.evidence_id: card for card in cards},
         open_questions=open_questions,
     )
     normalized = normalize_query(query)
     pack.history.record(normalized, [card.evidence_id for card in cards])
-    deps.packs.create(pack)
 
     async with deps.session_factory() as session:
         await insert_event(
@@ -111,6 +113,9 @@ async def create_pack(
                 latency_ms=int((time.monotonic() - started) * 1000),
             ),
         )
+    # store the pack only after the ledger write succeeds: no orphan packs
+    # without a create_pack ledger row
+    deps.packs.create(pack)
     logger.info(
         "broker.create_pack run_id=%s context_pack_id=%s subject=%s cards=%d tokens=%d",
         request.run_id,

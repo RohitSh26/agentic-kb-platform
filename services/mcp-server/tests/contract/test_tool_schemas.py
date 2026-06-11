@@ -11,6 +11,7 @@ from agentic_mcp_server.mcp.tool_schemas import (
     MCP_SCHEMA_VERSION,
     CreatePackRequest,
     EvidenceCard,
+    ListRetrievalsRequest,
     OpenEvidenceResponse,
     RequestMoreRequest,
     RequestMoreResponse,
@@ -58,6 +59,13 @@ def test_run_id_rejects_log_injection_charsets() -> None:
                 retrieval_profile="default",
                 budget_tokens=8000,
             )
+
+
+def test_ledger_rejects_the_non_run_sentinel() -> None:
+    """run_id "-" aggregates all subjects' non-run activity — operator-only."""
+    with pytest.raises(ValidationError):
+        ListRetrievalsRequest(run_id="-")
+    assert ListRetrievalsRequest(run_id="run-1").run_id == "run-1"
 
 
 AUTHORIZATION = {"policy": "team_acl_v1", "decision": "allowed"}

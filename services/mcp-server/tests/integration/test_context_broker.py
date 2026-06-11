@@ -563,7 +563,7 @@ async def test_open_evidence_unknown_handle_errors_and_writes_error_row(
     deps = make_broker_deps(factory, search)
     created = await create_pack(deps, _create_pack_request(), REQUESTER)
 
-    with pytest.raises(ToolError, match="unknown evidence_id"):
+    with pytest.raises(ToolError, match="evidence not available"):
         await open_evidence(
             deps,
             OpenEvidenceRequest(

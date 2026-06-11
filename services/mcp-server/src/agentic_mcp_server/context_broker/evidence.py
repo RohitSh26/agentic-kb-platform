@@ -62,10 +62,9 @@ async def open_evidence(
     card = pack.cards.get(request.evidence_id)
     if card is None:
         await write_audit_error()
-        raise ToolError(
-            f"unknown evidence_id for this pack: {request.evidence_id}; "
-            "evidence can only be opened by a handle the pack returned"
-        )
+        # same message as the ACL-denied branch: not-in-pack vs restricted
+        # must be indistinguishable to the caller
+        raise ToolError(f"evidence not available: {request.evidence_id}")
 
     async with deps.session_factory() as session:
         artifacts = await fetch_artifacts(session, [card.artifact_id], pack.kb_version)

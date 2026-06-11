@@ -29,11 +29,13 @@ from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.evidence import open_evidence
 from agentic_mcp_server.context_broker.graph import get_neighbors
 from agentic_mcp_server.context_broker.pack import create_pack, read_pack
+from agentic_mcp_server.context_broker.request_more import request_more
 from agentic_mcp_server.infrastructure.search.search_client import FakeSearchClient, SearchHit
 from agentic_mcp_server.mcp.tool_schemas.context import (
     CreatePackRequest,
     OpenEvidenceRequest,
     ReadPackRequest,
+    RequestMoreRequest,
 )
 from agentic_mcp_server.mcp.tool_schemas.graph import GetNeighborsRequest
 
@@ -160,6 +162,85 @@ async def test_read_pack_refilters_cards_for_the_reading_requester(
 
     full = await read_pack(deps, request, PRIVILEGED)
     assert {card.artifact_id for card in full.evidence_cards} == {public, restricted}
+
+
+def _request_more(question: str) -> RequestMoreRequest:
+    return RequestMoreRequest(
+        context_pack_id="placeholder",
+        agent_name="impl-agent-manifest",
+        question=question,
+        why_needed="the pack does not cover it",
+        decision_needed="which module to extend",
+        already_checked_evidence_ids=[],
+        max_tokens=1500,
+    )
+
+
+async def test_reused_evidence_ids_are_refiltered_for_the_caller(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    search = FakeSearchClient()
+    async with factory() as session:
+        public, _ = await _seed_public_and_restricted(session, search)
+    deps = make_broker_deps(factory, search)
+
+    pack = await create_pack(deps, _create_pack_request(), PRIVILEGED)
+    assert len(pack.evidence_cards) == 2
+    # same normalized question as the creation query => exact reuse
+    request = _request_more("payment validation review the payment validation rules for checkout")
+    request = request.model_copy(update={"context_pack_id": pack.context_pack_id})
+
+    response = await request_more(deps, request, UNPRIVILEGED)
+
+    assert response.status == "reused"
+    assert response.reused_evidence_ids == [str(public)]
+
+
+async def test_fully_suppressed_reuse_falls_through_to_filtered_retrieval(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    search = FakeSearchClient()
+    async with factory() as session:
+        restricted = await insert_artifact(
+            session,
+            title="Payment fraud thresholds",
+            body_text="Internal fraud thresholds: block above risk score 0.97.",
+            acl_teams=["team-payments"],
+        )
+        search.seed("payment", [SearchHit(artifact_id=restricted, score=2.0)])
+    deps = make_broker_deps(factory, search)
+
+    pack = await create_pack(deps, _create_pack_request(), PRIVILEGED)
+    assert len(pack.evidence_cards) == 1
+    request = _request_more("payment validation review the payment validation rules for checkout")
+    request = request.model_copy(update={"context_pack_id": pack.context_pack_id})
+
+    response = await request_more(deps, request, UNPRIVILEGED)
+
+    # not "reused" with a restricted id: the fall-through retrieval is filtered
+    assert response.status == "approved"
+    assert response.reused_evidence_ids == []
+    assert str(restricted) not in [card.evidence_id for card in response.new_evidence_cards]
+
+
+async def test_run_budget_is_clamped_server_side(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    search = FakeSearchClient()
+    async with factory() as session:
+        await _seed_public_and_restricted(session, search)
+    deps = make_broker_deps(factory, search)
+    request = _create_pack_request()
+    request = request.model_copy(update={"budget_tokens": 10**9})
+
+    pack = await create_pack(deps, request, PRIVILEGED)
+
+    read = await read_pack(
+        deps,
+        ReadPackRequest(context_pack_id=pack.context_pack_id, role="implementation"),
+        PRIVILEGED,
+    )
+    assert read.budget_remaining_tokens <= 18_000
 
 
 async def test_unauthorized_graph_root_looks_like_an_unknown_id(

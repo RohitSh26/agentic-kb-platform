@@ -24,12 +24,14 @@ from agentic_mcp_server.context_broker.retrieval import (
 )
 from agentic_mcp_server.context_broker.state import EvidencePackState, UnknownPackError
 from agentic_mcp_server.domain.query_text import normalize_query
+from agentic_mcp_server.infrastructure.postgres.artifacts import fetch_artifacts
 from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
     RetrievalEventInsert,
     insert_event,
 )
 from agentic_mcp_server.mcp.tool_schemas.context import RequestMoreRequest, RequestMoreResponse
 from agentic_mcp_server.mcp.tool_schemas.evidence import EvidenceCard
+from agentic_mcp_server.telemetry.audit import audit_context_access
 
 logger = logging.getLogger(__name__)
 
@@ -98,17 +100,24 @@ async def request_more(
         )
 
     async with pack.lock:
+        # reuse crosses requesters within a run, so reused ids are re-filtered
+        # for the caller; if the ACL suppresses every id, fall through to a
+        # fresh (already-filtered) retrieval instead of leaking their existence
         exact = pack.history.find_exact(normalized)
         if exact is not None:
             reused = list(exact.evidence_ids)
-            await write_ledger("reused", reused=reused, cache_hit=True)
-            return _reuse_response(deps, pack, reused)
+            allowed = await _authorized_reuse(deps, pack, requester, reused)
+            if allowed or not reused:
+                await write_ledger("reused", reused=allowed, cache_hit=True)
+                return _reuse_response(deps, pack, allowed)
 
         semantic = pack.history.find_semantic(normalized, deps.settings.semantic_reuse_threshold)
         if semantic is not None:
             reused = list(semantic.evidence_ids)
-            await write_ledger("reused", reused=reused, semantic_reuse=True)
-            return _reuse_response(deps, pack, reused)
+            allowed = await _authorized_reuse(deps, pack, requester, reused)
+            if allowed or not reused:
+                await write_ledger("reused", reused=allowed, semantic_reuse=True)
+                return _reuse_response(deps, pack, allowed)
 
         allowance = deps.budget_policy.allowance_for(requester.subject)
         usage = pack.usage_for(requester.subject)
@@ -166,6 +175,29 @@ async def request_more(
         budget_remaining_tokens=pack.run_remaining_tokens,
         authorization=authorization_decision(deps),
     )
+
+
+async def _authorized_reuse(
+    deps: BrokerDeps, pack: EvidencePackState, requester: Requester, reused: list[str]
+) -> list[str]:
+    if not reused:
+        return []
+    async with deps.session_factory() as session:
+        artifacts = await fetch_artifacts(
+            session, [uuid.UUID(evidence_id) for evidence_id in reused], pack.kb_version
+        )
+    allowed = {
+        str(artifact.artifact_id)
+        for artifact in deps.authorization.filter_artifacts(requester, artifacts)
+    }
+    audit_context_access(
+        tool=_TOOL_NAME,
+        requester=requester,
+        kb_version=pack.kb_version,
+        artifact_ids=[uuid.UUID(e) for e in reused if e in allowed],
+        suppressed_artifact_ids=[uuid.UUID(e) for e in reused if e not in allowed],
+    )
+    return [evidence_id for evidence_id in reused if evidence_id in allowed]
 
 
 def _reuse_response(

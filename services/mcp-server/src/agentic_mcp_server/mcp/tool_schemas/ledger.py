@@ -7,7 +7,7 @@ every broker call writes a retrieval_event row, and this tool reads them back.
 import uuid
 from datetime import datetime
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
 from agentic_mcp_server.mcp.tool_schemas.context import RUN_ID_PATTERN
@@ -15,6 +15,15 @@ from agentic_mcp_server.mcp.tool_schemas.context import RUN_ID_PATTERN
 
 class ListRetrievalsRequest(McpModel):
     run_id: str = Field(pattern=RUN_ID_PATTERN)
+
+    @field_validator("run_id")
+    @classmethod
+    def _reject_non_run_sentinel(cls, value: str) -> str:
+        # "-" aggregates every subject's non-run-scoped activity (graph
+        # lookups, unresolved errors); it is operator-only, never listable
+        if value == "-":
+            raise ValueError("run_id '-' is the non-run sentinel and cannot be listed")
+        return value
 
 
 class RetrievalEventRecord(McpModel):

@@ -7,6 +7,7 @@ correlation and view selectors only.
 
 from dataclasses import dataclass, field
 
+from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -25,6 +26,9 @@ class BrokerSettings:
     max_cards_per_retrieval: int = 5
     # safety cap on graph traversal fan-out at depth 3
     max_graph_neighbors: int = 100
+    # full run context budget upper bound (token-budgets rule: 12k-18k);
+    # the request value is a floor request, never an escape hatch
+    max_run_budget_tokens: int = 18_000
 
 
 @dataclass(frozen=True)
@@ -38,8 +42,10 @@ class BrokerDeps:
 
 
 def current_requester() -> Requester:
+    # fail closed: org-public artifacts are "any *authenticated* subject", so a
+    # missing token must never synthesize an identity that passes that branch
     token = get_access_token()
     if token is None:
-        return Requester(subject="unauthenticated", teams=frozenset())
+        raise ToolError("no authenticated session")
     subject = token.subject or token.client_id or "unknown"
     return Requester(subject=subject, teams=teams_from_claims(token.claims or {}))

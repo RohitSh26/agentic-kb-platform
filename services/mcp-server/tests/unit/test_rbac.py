@@ -2,7 +2,11 @@
 
 import uuid
 
+import pytest
+from fastmcp.exceptions import ToolError
+
 from agentic_mcp_server.auth.rbac import Requester, TeamAclAuthorization, teams_from_claims
+from agentic_mcp_server.context_broker.dependencies import current_requester
 from agentic_mcp_server.infrastructure.postgres.artifacts import ArtifactRow
 
 POLICY = TeamAclAuthorization()
@@ -57,6 +61,11 @@ def test_policy_name_is_the_contract_value() -> None:
 def test_teams_come_from_groups_and_roles_claims() -> None:
     claims = {"groups": ["team-a", "team-b"], "roles": ["reviewer"], "sub": "agent"}
     assert teams_from_claims(claims) == frozenset({"team-a", "team-b", "reviewer"})
+
+
+def test_requester_identity_fails_closed_without_a_session_token() -> None:
+    with pytest.raises(ToolError, match="no authenticated session"):
+        current_requester()
 
 
 def test_malformed_claims_grant_no_teams() -> None:
