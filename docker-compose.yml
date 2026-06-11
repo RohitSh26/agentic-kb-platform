@@ -1,0 +1,62 @@
+# Local spin-up of the whole system (PR-17): Postgres (the truth store), a
+# one-shot kb-builder migration job (it owns the schema — ADR-0008), and the
+# MCP Context Broker. This is a local convenience, not the deployment story —
+# that is infra/ (Azure). Guide: docs/dev-guide/03-local-testing.md §Docker.
+#
+# The Entra values are identifiers, never secrets; the placeholders boot the
+# stack, but no bearer token verifies until you set a real tenant (auth is
+# fail-closed by design — there is no auth-off switch).
+
+name: agentic-kb-platform
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres # compose-internal local default, same as CI
+      POSTGRES_DB: agentic_kb
+    ports:
+      # 55432 by default so a Homebrew Postgres on 5432 keeps working
+      - "${POSTGRES_HOST_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -h 127.0.0.1 forces TCP: first-boot init runs a socket-only temporary
+      # server that pg_isready would otherwise report healthy too early
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d agentic_kb"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: applies Alembic migrations and exits. There is no build CLI yet
+  # (the nightly pipeline is the recorded follow-up), so migrations are this
+  # container's whole job in compose.
+  kb-builder:
+    build: ./services/kb-builder
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agentic_kb
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Never runs migrations — starts only after kb-builder has applied them.
+  # /health answers 503 (no_active_kb_version) on a fresh volume: readiness
+  # honesty, not a failure.
+  mcp-server:
+    build: ./services/mcp-server
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agentic_kb
+      MCP_ENTRA_TENANT_ID: ${MCP_ENTRA_TENANT_ID:-00000000-0000-0000-0000-000000000000}
+      MCP_ENTRA_AUDIENCE: ${MCP_ENTRA_AUDIENCE:-api://agentic-kb-local}
+    ports:
+      - "${MCP_HOST_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kb-builder:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

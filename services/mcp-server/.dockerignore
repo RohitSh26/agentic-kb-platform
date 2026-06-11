@@ -1,0 +1,8 @@
+.venv/
+tests/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+README.md
+Dockerfile
+.dockerignore

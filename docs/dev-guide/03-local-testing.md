@@ -55,6 +55,39 @@ DB-backed tests expect an already-migrated database. Run `make migrate-test-db` 
 kb-builder's Alembic migrations against `TEST_DATABASE_URL`); if the schema is missing, those
 tests skip with a message telling you exactly that.
 
+## Docker: the whole system with one command
+
+If you prefer containers over a local Postgres + uv, the root `docker-compose.yml` spins up the
+full system (PR-17):
+
+```sh
+docker compose up --build
+```
+
+Three containers, in order:
+
+1. **postgres** — Postgres 16 with a named volume; host port `55432` by default (NOT 5432, so a
+   Homebrew Postgres keeps working — override with `POSTGRES_HOST_PORT`).
+2. **kb-builder** — one-shot: applies the Alembic migrations and exits (it owns the schema,
+   ADR-0008). There is no build CLI yet, so migrations are this container's whole job.
+3. **mcp-server** — starts only after the migration job completes; serves
+   `http://localhost:8000/mcp/` (override with `MCP_HOST_PORT`). It never runs migrations.
+
+Honesty notes, both by design:
+
+- `GET http://localhost:8000/health` answers **503 `no_active_kb_version`** on a fresh volume —
+  there is no built KB yet. That is readiness honesty, not a failure.
+- The compose file boots with **placeholder Entra identifiers** (`MCP_ENTRA_TENANT_ID` /
+  `MCP_ENTRA_AUDIENCE` — identifiers, never secrets). Auth is fail-closed (invariant 6, no
+  auth-off switch), so no bearer token verifies until you export a real tenant id and audience.
+
+The compose invariants — exactly three services, kb-builder as the only migration runner, the
+dependency order, asyncpg URLs, no inline credentials — are pinned by
+`services/kb-builder/tests/contract/test_compose_contract.py`.
+
+To reach the compose Postgres from the host (psql, tests):
+`postgresql+asyncpg://postgres:postgres@localhost:55432/agentic_kb`.
+
 ## How DB tests work
 
 - Tests read `TEST_DATABASE_URL` (falling back to `DATABASE_URL`). If neither is set, DB-backed
