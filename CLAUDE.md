@@ -74,6 +74,9 @@ infra/               Bicep/Terraform for the lean Azure footprint
 > Two distinct agent layers — do not confuse them:
 > - **`.claude/agents/`** = Claude Code *build* subagents that help us write this platform.
 > - **`agents/`** = the *product's* runtime agent manifests that the finished MCP server serves.
+> - **`.copilot/` / `.opencode/`** = *product* renderings of `agents/` for GitHub Copilot and
+>   OpenCode (ADR-0009) — NOT Claude Code build subagents. Hand-authored, parity-pinned by
+>   mcp-server's `test_portable_agent_exports.py`; `agents/` stays canonical.
 
 ## How we work (Claude Code best practices for this repo)
 

@@ -13,3 +13,10 @@ schemas (and the `AGENT_OUTPUT_SCHEMAS` registry the `output_schema` names resol
 
 Budgets here must match `.claude/rules/token-budgets.md`; mcp-server's contract tests check the
 manifests against both the budget rules and the schema registry.
+
+> **Renderings**: the repo-root `.copilot/` and `.opencode/` trees are host-native *renderings*
+> of this canon for GitHub Copilot and OpenCode (ADR-0009). This directory stays the single
+> source of truth; the renderings are hand-authored and parity-pinned by
+> `services/mcp-server/tests/contract/test_portable_agent_exports.py` (checklist:
+> `docs/contracts/portable-agent-framework.md`). Change a manifest here and the contract tests
+> force the renderings to follow in the same PR.

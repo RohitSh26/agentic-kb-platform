@@ -1,4 +1,4 @@
-# 02 — Implementation tour (PR-01 → PR-13)
+# 02 — Implementation tour (PR-01 → PR-15)
 
 > A guided walk through the code as it exists today. Read
 > [01 — Design deep dive](01-design-deep-dive.md) first for the *why*; this document is the *how*
@@ -421,7 +421,36 @@ audience; JWKS verification means no client secret exists), asserted by
 (every ACL surface against real Postgres, audit suppression lines, verbatim injection e2e),
 `tests/unit/test_rbac.py`, `test_untrusted.py`, `test_audit.py`.
 
-## 15. What does not exist yet
+## 15. Portable agent framework (`.copilot/` + `.opencode/`, PR-15)
+
+Host-native renderings of the canonical `agents/*.md` manifests (ADR-0009; contract:
+`docs/contracts/portable-agent-framework.md`), so teams on GitHub Copilot or OpenCode adopt the
+framework by copying a directory and setting one credential:
+
+- `.opencode/` — `agents/*.md` (OpenCode frontmatter: `description`, `mode` — orchestrator is
+  `primary`, specialists `subagent` — and a `tools` glob map enabling exactly the canonical
+  `allowed_tools` as `context-broker_<tool>` entries), `skills/<name>/SKILL.md` (the framework
+  procedures: evidence-pack-orchestration, context-request-discipline, evidence-citation), and
+  `opencode.json` (remote MCP entry for the broker with `{env:CONTEXT_BROKER_TOKEN}`
+  substitution; `context-broker_*` disabled globally, re-enabled per agent).
+- `.copilot/` — `agents/*.agent.md` (`name`, `description`, `tools:
+  ['context-broker/<tool>', …]`), the same three skills as host-neutral instruction modules,
+  and `mcp/repository-settings.json` (`$COPILOT_MCP_CONTEXT_BROKER_TOKEN`) +
+  `mcp/vscode-mcp.json` (`${input:context-broker-token}`).
+- Each rendered body is the canonical instruction body **verbatim** plus a generated
+  "Framework guarantees (enforced server-side)" block (budgets, `requires_evidence_ids`,
+  `output_schema`, request-more discipline, untrusted-content rule). `_template` files carry the
+  framework skeleton with an explicit description slot.
+
+No generator in V1 — renderings are hand-authored and parity-pinned by
+`services/mcp-server/tests/contract/test_portable_agent_exports.py`: exact tool parity per host
+syntax (orchestrator-only tools never leak), budget numbers and framework rules present in every
+body, host validity (OpenCode skill naming regex, Copilot 30k body cap), and a two-sided
+secret scan (markers absent **and** every Authorization header value matches a
+reference-by-name pattern). Enforcement remains server-side either way — a host format that
+cannot express a budget loses only the documentation of the limit, never the limit itself.
+
+## 16. What does not exist yet
 
 - Real connector backends (network I/O) — the configured source set (`sources.yaml`, PR-14) and
   the `connectors_from_config` factory seam exist; the GitHub/Azure Wiki/ADO API `FetchBackend`
@@ -431,7 +460,7 @@ audience; JWKS verification means no client secret exists), asserted by
   `source_item`, but artifacts stay org-public until artifact-level propagation), Entra
   `groupMembershipClaims` configuration, and run-scoped ledger authorization.
 
-## 16. Reading order for a new dev
+## 17. Reading order for a new dev
 
 1. `docs/architecture/00-overview.md` (15 min) — the blueprint.
 2. This guide's doc 01 — the invariants and why.
