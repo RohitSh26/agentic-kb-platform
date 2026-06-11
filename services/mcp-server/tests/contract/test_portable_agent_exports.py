@@ -27,7 +27,10 @@ ROLES = (
     "delivery_planner",
     "pr_planner",
 )
+SPECIALISTS = tuple(role for role in ROLES if role != "orchestrator")
 SKILLS = ("evidence-pack-orchestration", "context-request-discipline", "evidence-citation")
+ORCHESTRATOR_SKILLS = ("evidence-pack-orchestration", "evidence-citation")
+SPECIALIST_SKILLS = ("context-request-discipline", "evidence-citation")
 OPENCODE_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 COPILOT_MAX_BODY_CHARS = 30_000
 REQUEST_MORE_FIELDS = ("question", "why_needed", "decision_needed", "already_checked", "max_tokens")
@@ -56,48 +59,92 @@ def _split(path: Path) -> tuple[list[str], str]:
     raise AssertionError(f"{path}: unterminated frontmatter")
 
 
+def _indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _parse_scalar(value: str) -> object:
+    if value.startswith("[") and value.endswith("]"):
+        return [item.strip().strip("'\"") for item in value[1:-1].split(",") if item.strip()]
+    return value
+
+
+def _parse_map(
+    lines: list[str], start: int, indent: int, path: Path
+) -> tuple[dict[str, object], int]:
+    result: dict[str, object] = {}
+    i = start
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+        if _indent_of(line) < indent:
+            break
+        assert _indent_of(line) == indent, f"{path}: unexpected indent {line!r}"
+        stripped = line.strip()
+        assert not stripped.startswith("- "), f"{path}: list item where a map entry was expected"
+        key, sep, raw = stripped.partition(":")
+        assert sep, f"{path}: bad line {line!r}"
+        value = raw.strip()
+        if value:
+            result[key.strip().strip("'\"")] = _parse_scalar(value)
+            i += 1
+        else:
+            result[key.strip().strip("'\"")], i = _parse_block(lines, i + 1, indent, path)
+    return result, i
+
+
+def _parse_list(lines: list[str], start: int, indent: int, path: Path) -> tuple[list[object], int]:
+    items: list[object] = []
+    i = start
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+        if _indent_of(line) != indent or not line.strip().startswith("- "):
+            break
+        head = line.strip().removeprefix("- ").strip()
+        i += 1
+        if ": " not in head:
+            items.append(head)
+            continue
+        key, _, raw = head.partition(":")
+        item: dict[str, object] = {key.strip(): _parse_scalar(raw.strip())}
+        if (
+            i < len(lines)
+            and lines[i].strip()
+            and _indent_of(lines[i]) > indent
+            and not lines[i].strip().startswith("- ")
+        ):
+            extra, i = _parse_map(lines, i, _indent_of(lines[i]), path)
+            item.update(extra)
+        items.append(item)
+    return items, i
+
+
+def _parse_block(
+    lines: list[str], start: int, parent_indent: int, path: Path
+) -> tuple[object, int]:
+    i = start
+    if i >= len(lines) or not lines[i].strip() or _indent_of(lines[i]) <= parent_indent:
+        return "", i
+    child_indent = _indent_of(lines[i])
+    if lines[i].strip().startswith("- "):
+        return _parse_list(lines, i, child_indent, path)
+    return _parse_map(lines, i, child_indent, path)
+
+
 def _parse_fields(lines: list[str], path: Path) -> dict[str, object]:
     """Hand-rolled frontmatter parsing (mcp-server has no pyyaml; do not add one).
 
-    Handles the three shapes the canon and renderings use: ``key: value``,
-    block lists (``  - item``), block maps (``  key: value``), and inline
-    flow lists (``key: ['a', 'b']``).
+    Handles the shapes the canon and renderings use: ``key: value``, inline flow
+    lists (``key: ['a', 'b']``), block lists (``- item``), block maps, nested
+    block maps (``permission.task``), and lists of block maps (``handoffs``).
     """
-    fields: dict[str, object] = {}
-    container: list[str] | dict[str, str] | None = None
-    pending: str | None = None
-    for line in lines:
-        if line.startswith("  - "):
-            if pending is not None:
-                container = []
-                fields[pending] = container
-                pending = None
-            assert isinstance(container, list), f"{path}: list item outside a list"
-            container.append(line.removeprefix("  - ").strip())
-        elif line.startswith("  "):
-            if pending is not None:
-                container = {}
-                fields[pending] = container
-                pending = None
-            assert isinstance(container, dict), f"{path}: map entry outside a map"
-            key, sep, raw = line.strip().partition(":")
-            assert sep, f"{path}: bad nested line {line!r}"
-            container[key.strip()] = raw.strip()
-        else:
-            container = None
-            key, _, raw = line.partition(":")
-            value = raw.strip()
-            if value == "":
-                pending = key.strip()
-                fields[pending] = value
-            elif value.startswith("[") and value.endswith("]"):
-                pending = None
-                fields[key.strip()] = [
-                    item.strip().strip("'\"") for item in value[1:-1].split(",") if item.strip()
-                ]
-            else:
-                pending = None
-                fields[key.strip()] = value
+    fields, consumed = _parse_map(lines, 0, 0, path)
+    assert consumed == len(lines), f"{path}: unparsed frontmatter from line {consumed + 1}"
     return fields
 
 
@@ -172,6 +219,10 @@ def test_opencode_json_per_agent_tools_exactly_match_canonical_allowed_tools() -
 def test_copilot_frontmatter_tools_exactly_match_canonical_allowed_tools() -> None:
     for role in ROLES:
         expected = [f"context-broker/{tool}" for tool in _canon_tools(role)]
+        if role == "orchestrator":
+            # the `agents` field requires the host `agent` tool — the single pinned
+            # exception to broker-only tool lists (composition, not a data tool)
+            expected.append("agent")
         fields, _ = _copilot_agent(role)
         assert fields["tools"] == expected, f"{role}: copilot tools drifted from canon"
         assert fields["name"] == _canon(role)[0]["name"], f"{role}: copilot name drifted"
@@ -248,6 +299,86 @@ def test_copilot_repository_settings_allowlist_is_the_union_of_canonical_tools()
     expected = sorted({tool for role in ROLES for tool in _canon_tools(role)})
     assert allowed != ["*"], "server-level allowlist must enumerate tools, not expose everything"
     assert sorted(allowed) == expected, "repository-settings allowlist drifted from canon union"
+
+
+# --- composition: native subagent + skill declarations ---------------------------------------
+
+
+def test_copilot_orchestrator_agents_field_lists_exactly_the_five_specialists() -> None:
+    fields, _ = _copilot_agent("orchestrator")
+    expected = [_canon(role)[0]["name"] for role in SPECIALISTS]
+    assert fields["agents"] == expected, "orchestrator agents drifted from canonical names"
+
+
+def test_copilot_specialists_and_template_declare_no_subagents() -> None:
+    for name in (*(f"{role}.agent.md" for role in SPECIALISTS), "_template.agent.md"):
+        fields, _ = _read(COPILOT_DIR / "agents" / name)
+        assert fields["agents"] == [], f"{name}: specialists never spawn — agents must be []"
+        assert "handoffs" not in fields, f"{name}: handoffs are orchestrator-only"
+        tools = fields["tools"]
+        assert isinstance(tools, list) and "agent" not in tools, f"{name}: agent tool leaked"
+
+
+def test_copilot_handoff_targets_are_the_declared_specialists_and_do_not_autosend() -> None:
+    fields, _ = _copilot_agent("orchestrator")
+    handoffs = fields["handoffs"]
+    assert isinstance(handoffs, list) and len(handoffs) == len(SPECIALISTS)
+    assert [h["agent"] for h in handoffs] == fields["agents"], "handoff target not declared"
+    for handoff in handoffs:
+        assert handoff.get("label") and handoff.get("prompt"), "handoff needs label + prompt"
+        assert handoff.get("send") == "false", "handoffs must not auto-send"
+
+
+def test_opencode_orchestrator_task_permission_allows_exactly_the_five_specialists() -> None:
+    permission = _opencode_agent("orchestrator")[0]["permission"]
+    assert isinstance(permission, dict)
+    task = permission["task"]
+    assert isinstance(task, dict)
+    assert task.get("*") == "deny", "task permission must deny by default"
+    allowed = {key: value for key, value in task.items() if key != "*"}
+    assert allowed == {role: "allow" for role in SPECIALISTS}, "task allowlist drifted"
+
+
+def test_opencode_specialists_and_template_deny_all_task_launches() -> None:
+    for name in (*SPECIALISTS, "_template"):
+        fields, _ = _read(OPENCODE_DIR / "agents" / f"{name}.md")
+        permission = fields["permission"]
+        assert isinstance(permission, dict)
+        assert permission["task"] == {"*": "deny"}, f"{name}: specialists never launch subagents"
+
+
+def test_opencode_skill_permissions_deny_by_default_and_match_the_role() -> None:
+    for name in (*ROLES, "_template"):
+        fields, _ = _read(OPENCODE_DIR / "agents" / f"{name}.md")
+        permission = fields["permission"]
+        assert isinstance(permission, dict)
+        skill = permission["skill"]
+        assert isinstance(skill, dict)
+        assert skill.get("*") == "deny", f"{name}: skill permission must deny by default"
+        allowed = [key for key, value in skill.items() if key != "*"]
+        assert all(skill[key] == "allow" for key in allowed), f"{name}: non-allow skill entry"
+        expected = ORCHESTRATOR_SKILLS if name == "orchestrator" else SPECIALIST_SKILLS
+        assert allowed == list(expected), f"{name}: skill allowlist drifted from the role"
+        assert set(allowed) <= set(SKILLS), f"{name}: skill allow-key is not a shipped skill"
+
+
+def test_request_discipline_skill_tracks_the_request_more_grant() -> None:
+    for name in (*ROLES, "_template"):
+        fields, _ = _read(OPENCODE_DIR / "agents" / f"{name}.md")
+        permission = fields["permission"]
+        assert isinstance(permission, dict)
+        skill = permission["skill"]
+        assert isinstance(skill, dict)
+        if name == "_template":
+            tools = fields["tools"]
+            assert isinstance(tools, dict)
+            has_request_more = "context-broker_context.request_more" in tools
+        else:
+            has_request_more = "context.request_more" in _canon_tools(name)
+        has_discipline = skill.get("context-request-discipline") == "allow"
+        assert has_discipline == has_request_more, (
+            f"{name}: context-request-discipline must track the request_more grant"
+        )
 
 
 # --- validity: each rendering is well-formed for its host ------------------------------------

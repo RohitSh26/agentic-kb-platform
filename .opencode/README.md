@@ -41,6 +41,15 @@ ledger; specialists get `context.read_pack` / `context.request_more` (and, where
 allows, `context.open_evidence`). No host tools (file edit, bash, web) are enabled here — your
 team opts into those per agent.
 
+## Composition
+
+Each agent's `permission` frontmatter declares composition natively, deny-by-default: `task`
+(launching subagents) and `skill` (loading skills) both deny `"*"`, then allow-list exactly what
+the role needs. The orchestrator may launch the five specialists (by filename) and load
+`evidence-pack-orchestration` + `evidence-citation`; specialists launch nothing and load
+`context-request-discipline` + `evidence-citation`. The template ships the specialist-shaped
+block.
+
 ## What the broker enforces regardless of these files
 
 Budgets (`max_context_calls`, `max_context_tokens`), tool policy, ACL filtering, the

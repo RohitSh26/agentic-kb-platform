@@ -5,6 +5,13 @@ tools:
   context-broker_context.read_pack: true
   context-broker_context.request_more: true
   context-broker_context.open_evidence: true
+permission:
+  task:
+    "*": deny
+  skill:
+    "*": deny
+    context-request-discipline: allow
+    evidence-citation: allow
 ---
 <!-- rendered from agents/test_layer.md v1.0 — edit the canon, not this body -->
 You are the Test Layer Agent.

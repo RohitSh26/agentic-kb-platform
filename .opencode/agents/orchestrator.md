@@ -6,6 +6,18 @@ tools:
   context-broker_context.read_pack: true
   context-broker_context.open_evidence: true
   context-broker_ledger.list_retrievals: true
+permission:
+  task:
+    "*": deny
+    implementation: allow
+    test_layer: allow
+    code_reviewer: allow
+    delivery_planner: allow
+    pr_planner: allow
+  skill:
+    "*": deny
+    evidence-pack-orchestration: allow
+    evidence-citation: allow
 ---
 <!-- rendered from agents/orchestrator.md v1.0 — edit the canon, not this body -->
 You are the Orchestrator.

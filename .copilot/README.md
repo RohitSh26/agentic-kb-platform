@@ -42,6 +42,15 @@ read the ledger; specialists get `read_pack` / `request_more` (and, where the ca
 `open_evidence`). No host tools (file edit, shell, web) are enabled here — your team opts into
 those per agent.
 
+## Composition
+
+The orchestrator declares its five invocable specialists natively — `agents: [...]` plus
+matching `handoffs:` (VS Code-only; the cloud agent ignores handoffs) — and therefore carries
+the `agent` tool alongside its broker tools, the one pinned exception to the broker-only tool
+lists. Every specialist and the template declare `agents: []`: specialists never launch
+subagents. Copilot has no native skills field, so the `skills/` modules stay wired per the
+table above.
+
 ## What the broker enforces regardless of these files
 
 Budgets (`max_context_calls`, `max_context_tokens`), tool policy, ACL filtering, the
