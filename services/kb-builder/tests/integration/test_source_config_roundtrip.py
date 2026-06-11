@@ -225,3 +225,32 @@ async def test_acl_teams_updated_on_existing_source_item(
     rows = (await session.execute(select(SourceItem))).scalars().all()
     assert len(rows) == 1  # natural identity: upsert, not duplicate
     assert rows[0].acl_teams == ["docs-team", "auditors"]
+
+
+@requires_db
+async def test_acl_only_change_lands_even_when_content_is_unchanged(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    """Removing or adding a team is an access change; it must not be gated
+    behind the content-hash skip."""
+    config_path = tmp_path / "sources.yaml"
+    config_path.write_text(YAML, encoding="utf-8")
+    config = load_source_config(config_path)
+
+    ref = _ref("docs/guide.md")
+    backend = FakeBackend([ref], {ref.source_uri: "same content\n"})
+    await _runner(session, "v-cfg.1").run(connectors_from_config(config, lambda s, t: backend))
+    await session.commit()
+
+    revoked = YAML.replace('["docs-team"]', "[]")
+    config_path.write_text(revoked, encoding="utf-8")
+    config2 = load_source_config(config_path)
+    backend2 = FakeBackend([ref], {ref.source_uri: "same content\n"})
+    run2 = await _runner(session, "v-cfg.2").run(
+        connectors_from_config(config2, lambda s, t: backend2)
+    )
+    await session.commit()
+
+    assert run2.sources_changed == 0  # the hash gate still skipped the pipeline
+    row = (await session.execute(select(SourceItem))).scalars().one()
+    assert row.acl_teams == []

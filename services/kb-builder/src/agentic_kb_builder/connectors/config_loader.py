@@ -137,6 +137,8 @@ class FilteredFetchBackend:
         listed = await self._inner.list_sources()
         kept: list[SourceRef] = []
         for ref in listed:
+            # path=None (card-shaped refs) bypasses the glob filter by design;
+            # path-selecting connectors must always emit a path
             if ref.path is not None and not self._path_filter.matches(ref.path):
                 continue
             kept.append(ref.model_copy(update={"acl_teams": list(self._acl_teams)}))

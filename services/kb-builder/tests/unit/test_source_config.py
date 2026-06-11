@@ -128,6 +128,11 @@ GLOB_CASES = [
     (["a/?.py"], [], "a/bc.py", False),
     (["a/?.py"], [], "a/.py", False),
     (["src/**", "docs/**"], [], "docs/x.md", True),  # any include suffices
+    (["**/**"], [], "a", True),  # consecutive ** collapses to one
+    (["**/**"], [], "a/b/c", True),
+    (["a/**/**"], [], "a", True),
+    (["a/**/**/b"], [], "a/b", True),
+    (["a/**/**/b"], [], "a/x/y/b", True),
     (["**"], ["**/tests/**"], "a/tests/x.py", False),  # exclude wins
     (["**/tests/**"], ["**/tests/**"], "tests/x.py", False),  # exclude beats include
     (["services/**/*.py"], ["**/tests/**"], "services/a/tests/b.py", False),

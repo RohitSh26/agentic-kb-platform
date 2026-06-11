@@ -47,7 +47,15 @@ def glob_to_regex(pattern: str) -> re.Pattern[str]:
         raise GlobError("empty glob pattern")
     if pattern.startswith("/"):
         raise GlobError(f"glob patterns are relative; no leading '/': {pattern!r}")
-    segments = pattern.split("/")
+    raw_segments = pattern.split("/")
+    # collapse runs of ** — "a/**/**" would otherwise compile to a regex that
+    # matches nothing, and a pattern that silently selects zero paths is worse
+    # than an error
+    segments: list[str] = []
+    for segment in raw_segments:
+        if segment == "**" and segments and segments[-1] == "**":
+            continue
+        segments.append(segment)
     parts: list[str] = []
     need_separator = False
     for index, segment in enumerate(segments):

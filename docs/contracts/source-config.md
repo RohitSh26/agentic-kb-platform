@@ -65,7 +65,10 @@ Glob semantics (deterministic, same on every machine):
 | `**` | any number of path segments, including zero |
 | `*` | any characters **within** one segment (never crosses `/`) |
 | `?` | exactly one character within a segment |
-| anything else | literal |
+| anything else | literal — there are **no character classes**; `[ab]` matches the literal text `[ab]` |
+
+`**` must stand alone as a full path segment (`a**b` is rejected); consecutive `**` segments
+collapse to one.
 
 Paths are repo-relative (GitHub) or wiki-page paths (Azure Wiki), `/`-separated, no leading `/`.
 Examples: `services/**/*.py` matches `services/a/b.py` but not `docs/x.py`; `*.md` matches `README.md`
@@ -170,8 +173,10 @@ sources:
 
 - The build reads the config path from `SOURCE_CONFIG_PATH` (no default in production — explicit
   beats implicit; tests pass paths directly).
-- Load order: parse YAML (`yaml.safe_load`) → validate schema → resolve every configured
-  `token_env` against the environment → construct connectors. Any failure aborts before any fetch.
+- Load order: parse YAML (`yaml.safe_load`) → validate schema → resolve every **enabled** source's
+  configured `token_env` against the environment → construct connectors. Any failure aborts before
+  any fetch. (A disabled source's `token_env` is not resolved — disabling a source must not require
+  its credential.)
 - `FilteredFetchBackend` applies `include`/`exclude` to `list_sources()` output — an excluded path
   is never fetched, hashed, or stored.
 - `acl_teams` flows `sources.yaml` → `SourceRef` → `source_item.acl_teams` on insert **and**
