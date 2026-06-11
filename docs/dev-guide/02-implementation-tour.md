@@ -1,4 +1,4 @@
-# 02 — Implementation tour (PR-01 → PR-09)
+# 02 — Implementation tour (PR-01 → PR-10)
 
 > A guided walk through the code as it exists today. Read
 > [01 — Design deep dive](01-design-deep-dive.md) first for the *why*; this document is the *how*
@@ -9,7 +9,7 @@
 ```
 services/kb-builder  the nightly build: connectors → build engine → wikify/graphify → linker →
                      indexing. Owns the registry: SQLAlchemy models + Alembic migrations.
-services/mcp-server  fastmcp server base: auth, telemetry, tool contracts, health (broker: PR-10)
+services/mcp-server  the runtime plane: auth, telemetry, tool contracts, health, Context Broker
 docs/contracts/      markdown cross-service contracts — the only thing the services share
 agents/              product runtime agent manifests (served later by MCP; not Claude Code agents)
 evals/               empty case directories; harness lands in PR-12
@@ -249,12 +249,12 @@ derived, never truth).
 The runtime plane's skeleton (PR-09): everything *around* the broker, so PR-10 can drop broker
 logic into an already-secured, already-observable server.
 
-- `mcp/server.py` — `build_server(auth=..., session_factory=...)` assembles the FastMCP app. The
-  tool surface is registered **exclusively from `TOOL_SCHEMAS`** — a tool cannot exist at the
-  boundary without a versioned contract. Each tool is a stub: fastmcp validates the request
-  against the contract model (so a bare `{"query": ...}` already dies here), then the stub
-  raises `ToolError("... not implemented ... PR-10")`. `create_app()` is the production
-  entrypoint (Entra verifier + engine from env config).
+- `mcp/server.py` — `build_server(auth=..., session_factory=..., search_client=..., settings=...)`
+  assembles the FastMCP app. The tool surface is registered **exclusively from `TOOL_SCHEMAS`** —
+  a tool cannot exist at the boundary without a versioned contract; fastmcp validates each request
+  against the contract model (so a bare `{"query": ...}` already dies here), then
+  `mcp/tool_handlers.py` dispatches into the broker with the authenticated subject.
+  `create_app()` is the production entrypoint (Entra verifier + engine from env config).
 - `auth/entra.py` — the only module that knows Entra ID specifics. Bearer tokens are verified
   via the tenant's public **JWKS** endpoint (fastmcp's `JWTVerifier`), so the server holds no
   client secret at all. The test seam is fastmcp's `TokenVerifier` base class: tests inject a
@@ -278,14 +278,47 @@ been run against (`make migrate-test-db`) — mcp-server itself never runs migra
 `mcp_test_support.asgi_http_client` is a context manager rather than a fixture because the app
 lifespan's anyio cancel scope must enter/exit in one task.
 
-## 11. What does not exist yet
+## 11. Context Broker (`services/mcp-server/src/agentic_mcp_server/context_broker/`)
 
-- Context Broker logic (packs, budgets, ledger writes, evidence expansion): PR-10. Until then
-  every MCP tool validates its contract and returns "not implemented"; stub calls emit the
-  telemetry line but no `retrieval_event` row (deliberate — the ledger write lands with PR-10).
-- Real connector backends (network I/O), agent manifests' runtime, eval harness, IaC.
+The policy layer behind the six tools (PR-10). Identity is always the authenticated session
+subject — `agent_name`/`role` request fields are correlation/view data only.
 
-## 12. Reading order for a new dev
+- `pack.py` — `create_pack` retrieves once per run from `task + approved_context_plan`, builds
+  L0/L1 evidence cards, and records the query in the pack's dedupe history; `read_pack` is free
+  (reuse is the point) and writes a `reused` ledger row.
+- `retrieval.py` — the single retrieval path: `SearchClient` (4× oversample) → hydrate from
+  Postgres → ACL filter → deterministic rerank (source_backed first, then authority, then search
+  score) → top 5 cards. Card cost = `estimate_tokens(title) + estimate_tokens(summary)`.
+- `request_more.py` — the contractual outcome order: exact reuse → semantic reuse (token-cosine ≥
+  `semantic_reuse_threshold`, default 0.90) → per-agent `denied` (with `denial_reason`) → per-run
+  `needs_human_approval` → charged `approved`. Dedupe runs **before** budget denial so an agent
+  is never refused evidence the run already paid for.
+- `evidence.py` — `open_evidence` is the only road to raw text (L2), by handle only, hydrated
+  from Postgres at expansion time, capped by `max_tokens`, and charged against **both** the run
+  budget and the per-agent allowance. The response field is named `untrusted_content` on purpose.
+- `budgets.py` / `state.py` — server-side enforcement primitives. `EvidencePackState` carries a
+  per-pack `asyncio.Lock` that serializes check-then-charge (no TOCTOU double-spend); `PackStore`
+  is a bounded in-process cache (FIFO, 256 packs) — the ledger, not the pack, is the durable
+  record.
+- `dedupe.py` — deterministic normalized-token similarity (no embeddings in the broker, V1).
+- `graph.py` — depth/fan-out-capped BFS over `knowledge_edge`; titles + edge metadata only.
+- `ledger.py` + `audit.py` — every call writes a `retrieval_event` row, including failures
+  (ledger-only status `error`, `"-"` sentinels for unresolved run/kb_version);
+  `ledger.list_retrievals` audits itself.
+- `infrastructure/search/` + `infrastructure/postgres/keyword_search.py` — `SearchClient` is the
+  seam: a Postgres keyword scorer locally, Azure AI Search later behind the same interface.
+
+The executable spec is `tests/integration/test_context_broker.py`: exact + semantic reuse,
+per-agent and per-run denial, evidence expansion/truncation, budget-race concurrency, the 5-card
+cap, and an injection-style document that must come back verbatim as data without changing any
+broker decision.
+
+## 12. What does not exist yet
+
+- Real connector backends (network I/O), agent manifests' runtime (PR-11), eval harness (PR-12),
+  security hardening (real ACL policy, PR-13), IaC.
+
+## 13. Reading order for a new dev
 
 1. `docs/architecture/00-overview.md` (15 min) — the blueprint.
 2. This guide's doc 01 — the invariants and why.
