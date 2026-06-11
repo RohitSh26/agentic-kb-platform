@@ -1,0 +1,54 @@
+# Source configuration for the nightly KB build — schema version 1.
+# Contract: docs/contracts/source-config.md (this file is pinned by a contract test).
+#
+# Secrets are referenced by environment-variable NAME only (auth.token_env);
+# token values live exclusively in the build environment, never in this file.
+
+version: 1
+
+defaults:
+  acl_teams: []          # [] = org-public (any authenticated subject)
+
+sources:
+  - name: platform-code
+    type: github_code
+    repo: RohitSh26/agentic-kb-platform
+    branch: main
+    include:
+      - "services/**/*.py"
+    exclude:
+      - "**/tests/**"
+    auth:
+      token_env: GITHUB_TOKEN
+
+  - name: platform-docs
+    type: github_doc
+    repo: RohitSh26/agentic-kb-platform
+    branch: main
+    include:
+      - "docs/**/*.md"
+      - "README.md"
+
+  - name: platform-wiki
+    type: azure_wiki
+    organization: contoso
+    project: platform
+    wiki: platform.wiki
+    include:
+      - "Architecture/**"
+      - "Runbooks/**"
+    exclude:
+      - "Archive/**"
+    acl_teams: ["platform-eng"]
+    auth:
+      token_env: ADO_PAT
+
+  - name: roadmap-cards
+    type: ado_card
+    organization: contoso
+    project: platform
+    area_path: "Platform\\KB"
+    work_item_types: ["User Story", "Bug"]
+    states: ["Active", "Resolved", "Closed"]
+    auth:
+      token_env: ADO_PAT

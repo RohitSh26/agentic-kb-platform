@@ -268,6 +268,7 @@ class BuildRunner:
                 branch=ref.branch,
                 path=ref.path,
                 external_id=ref.external_id,
+                acl_teams=list(ref.acl_teams),
                 content_hash=fetched.content_hash,
                 last_seen_at=text("now()"),
                 is_deleted=False,
@@ -276,6 +277,7 @@ class BuildRunner:
                 constraint="uq_source_item_source_type_source_uri",
                 set_={
                     "source_version": ref.source_version,
+                    "acl_teams": list(ref.acl_teams),
                     "content_hash": fetched.content_hash,
                     "last_seen_at": text("now()"),
                     "is_deleted": False,

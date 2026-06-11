@@ -2,16 +2,32 @@
 
 from agentic_kb_builder.connectors.ado_card import AdoCardConnector
 from agentic_kb_builder.connectors.azure_wiki import AzureWikiConnector
+from agentic_kb_builder.connectors.config_loader import (
+    SOURCE_CONFIG_PATH_ENV,
+    BackendFactory,
+    FilteredFetchBackend,
+    SourceConfigError,
+    connectors_from_config,
+    load_source_config,
+    resolve_token,
+)
 from agentic_kb_builder.connectors.github_code import GitHubCodeConnector
 from agentic_kb_builder.connectors.github_doc import GitHubDocConnector
 from agentic_kb_builder.connectors.source_connector import BaseConnector, Connector, FetchBackend
 
 __all__ = [
+    "SOURCE_CONFIG_PATH_ENV",
     "AdoCardConnector",
     "AzureWikiConnector",
+    "BackendFactory",
     "BaseConnector",
     "Connector",
     "FetchBackend",
+    "FilteredFetchBackend",
     "GitHubCodeConnector",
     "GitHubDocConnector",
+    "SourceConfigError",
+    "connectors_from_config",
+    "load_source_config",
+    "resolve_token",
 ]

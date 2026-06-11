@@ -1,0 +1,213 @@
+"""Declarative source configuration (sources.yaml), schema version 1.
+
+The authoritative schema lives in docs/contracts/source-config.md and is
+pinned by a contract test against services/kb-builder/sources.example.yaml.
+
+Secrets are referenced by environment-variable NAME only (AuthRef.token_env);
+a token value is unrepresentable in this schema.
+"""
+
+import re
+from typing import Annotated, Final, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+CONFIG_SCHEMA_VERSION: Final = 1
+
+_NAME_PATTERN = r"^[a-z0-9][a-z0-9._-]{0,63}$"
+_TOKEN_ENV_PATTERN = r"^[A-Z][A-Z0-9_]*$"
+_REPO_PATTERN = r"^[^/\s]+/[^/\s]+$"
+
+
+class GlobError(ValueError):
+    """An include/exclude pattern that the glob grammar cannot express."""
+
+
+def _segment_regex(segment: str) -> str:
+    if "**" in segment:
+        raise GlobError(f"'**' must stand alone as a full path segment: {segment!r}")
+    parts: list[str] = []
+    for char in segment:
+        if char == "*":
+            parts.append(r"[^/]*")
+        elif char == "?":
+            parts.append(r"[^/]")
+        else:
+            parts.append(re.escape(char))
+    return "".join(parts)
+
+
+def glob_to_regex(pattern: str) -> re.Pattern[str]:
+    """Translate one gitignore-style glob into an anchored regex.
+
+    `**` spans any number of segments (including zero); `*` and `?` never
+    cross a `/`. Deterministic on every machine — no platform glob libraries.
+    """
+    if not pattern:
+        raise GlobError("empty glob pattern")
+    if pattern.startswith("/"):
+        raise GlobError(f"glob patterns are relative; no leading '/': {pattern!r}")
+    segments = pattern.split("/")
+    parts: list[str] = []
+    need_separator = False
+    for index, segment in enumerate(segments):
+        if segment == "":
+            raise GlobError(f"empty path segment in glob: {pattern!r}")
+        last = index == len(segments) - 1
+        if segment == "**":
+            if last:
+                if parts:
+                    parts.append(r"(?:/[^/]+)*")
+                else:
+                    parts.append(r"[^/]+(?:/[^/]+)*")
+                need_separator = False
+            else:
+                if need_separator:
+                    parts.append("/")
+                parts.append(r"(?:[^/]+/)*")
+                need_separator = False
+        else:
+            if need_separator:
+                parts.append("/")
+            parts.append(_segment_regex(segment))
+            need_separator = True
+    return re.compile("".join(parts) + r"\Z")
+
+
+class PathFilter:
+    """Include/exclude glob filter; a path passes if it matches any include
+    and no exclude — exclude wins."""
+
+    def __init__(
+        self,
+        include: tuple[str, ...] | list[str] = ("**",),
+        exclude: tuple[str, ...] | list[str] = (),
+    ) -> None:
+        self._include = [glob_to_regex(pattern) for pattern in include]
+        self._exclude = [glob_to_regex(pattern) for pattern in exclude]
+
+    def matches(self, path: str) -> bool:
+        if not any(regex.match(path) for regex in self._include):
+            return False
+        return not any(regex.match(path) for regex in self._exclude)
+
+
+class ConfigModel(BaseModel):
+    """Base for source-config models: immutable, typo-rejecting."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class AuthRef(ConfigModel):
+    """Reference to a credential by environment-variable NAME, never value."""
+
+    token_env: str = Field(pattern=_TOKEN_ENV_PATTERN)
+
+
+class BaseSourceSpec(ConfigModel):
+    name: str = Field(pattern=_NAME_PATTERN)
+    enabled: bool = True
+    acl_teams: list[str] = []
+    auth: AuthRef | None = None
+
+
+class PathSelectSpec(BaseSourceSpec):
+    include: list[str] = Field(default=["**"], min_length=1)
+    exclude: list[str] = []
+
+    @field_validator("include", "exclude")
+    @classmethod
+    def _patterns_must_compile(cls, patterns: list[str]) -> list[str]:
+        for pattern in patterns:
+            glob_to_regex(pattern)
+        return patterns
+
+    def path_filter(self) -> PathFilter:
+        return PathFilter(self.include, self.exclude)
+
+
+class GithubCodeSourceSpec(PathSelectSpec):
+    type: Literal["github_code"]
+    repo: str = Field(pattern=_REPO_PATTERN)
+    branch: str = "main"
+
+
+class GithubDocSourceSpec(PathSelectSpec):
+    type: Literal["github_doc"]
+    repo: str = Field(pattern=_REPO_PATTERN)
+    branch: str = "main"
+
+
+class AzureWikiSourceSpec(PathSelectSpec):
+    type: Literal["azure_wiki"]
+    organization: str
+    project: str
+    wiki: str
+
+
+class AdoCardSourceSpec(BaseSourceSpec):
+    """Cards have no paths; selection is query-shaped, not glob-shaped."""
+
+    type: Literal["ado_card"]
+    organization: str
+    project: str
+    area_path: str | None = None
+    work_item_types: list[str] = []
+    states: list[str] = []
+    tags: list[str] = []
+
+
+SourceSpec = Annotated[
+    GithubCodeSourceSpec | GithubDocSourceSpec | AzureWikiSourceSpec | AdoCardSourceSpec,
+    Field(discriminator="type"),
+]
+
+
+class SourceDefaults(ConfigModel):
+    acl_teams: list[str] = []
+
+
+class SourceConfig(ConfigModel):
+    version: Literal[1]
+    defaults: SourceDefaults = SourceDefaults()
+    sources: list[SourceSpec] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _names_unique(self) -> "SourceConfig":
+        seen: set[str] = set()
+        for spec in self.sources:
+            if spec.name in seen:
+                raise ValueError(f"duplicate source name: {spec.name!r}")
+            seen.add(spec.name)
+        return self
+
+    @model_validator(mode="after")
+    def _apply_defaults(self) -> "SourceConfig":
+        if not self.defaults.acl_teams:
+            return self
+        resolved = [
+            spec
+            if "acl_teams" in spec.model_fields_set
+            else spec.model_copy(update={"acl_teams": list(self.defaults.acl_teams)})
+            for spec in self.sources
+        ]
+        return self.model_copy(update={"sources": resolved})
+
+
+__all__ = [
+    "CONFIG_SCHEMA_VERSION",
+    "AdoCardSourceSpec",
+    "AuthRef",
+    "AzureWikiSourceSpec",
+    "BaseSourceSpec",
+    "ConfigModel",
+    "GithubCodeSourceSpec",
+    "GithubDocSourceSpec",
+    "GlobError",
+    "PathFilter",
+    "PathSelectSpec",
+    "SourceConfig",
+    "SourceDefaults",
+    "SourceSpec",
+    "glob_to_regex",
+]
