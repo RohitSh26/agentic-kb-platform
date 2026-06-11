@@ -15,7 +15,7 @@
 One-time setup (each service is its own `uv` project — ADR-0008):
 
 ```sh
-make sync                     # uv sync in services/kb-builder and services/mcp-server
+make sync                     # uv sync in services/kb-builder, services/mcp-server, and evals
 createdb agentic_kb_test      # dedicated test database (any name works)
 ```
 
@@ -25,9 +25,18 @@ This is the definition of "done" for any change. CI (`.github/workflows/ci.yml`)
 service with the same steps against a Postgres 16 service container:
 
 ```sh
-make verify                   # lint + types + tests for both services
+make verify                   # lint + types + tests for all three projects (both services + evals)
 make verify-kb-builder        # or just one
 make verify-mcp-server
+make verify-evals
+```
+
+The Makefile's default `TEST_DATABASE_URL` assumes a `postgres:postgres` role (matching CI).
+Homebrew/macOS Postgres creates a role named after your OS user instead — pass the URL on the
+command line (or export it once in your shell):
+
+```sh
+make verify TEST_DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb_test"
 ```
 
 Or by hand, inside a service directory (`services/kb-builder` or `services/mcp-server`):
