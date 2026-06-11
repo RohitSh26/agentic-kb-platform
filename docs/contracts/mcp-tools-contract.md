@@ -49,7 +49,8 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   with the ledger-only status `error` (the broker holds pack state in memory
   per instance in V1; the durable record is the ledger). The same applies when
   no active `kb_version` exists. `error` rows use the sentinel `"-"` for
-  `run_id`/`kb_version` values the broker could not resolve.
+  `run_id`/`kb_version` values the broker could not resolve; `graph.get_neighbors`
+  rows also use `run_id = "-"` because graph lookups are not run-scoped.
 - `context.read_pack` charges no budget (reuse is the point); `create_pack`,
   `request_more`, and `open_evidence` charge the budgets they consume.
   `open_evidence` enforces both the per-run budget **and** the per-agent token
