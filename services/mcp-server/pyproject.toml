@@ -44,7 +44,11 @@ venvPath = "."
 venv = ".venv"
 include = ["src", "tests"]
 # the tool contracts keep their former packages/ strict-mode guarantee
-strict = ["src/agentic_mcp_server/mcp/tool_schemas", "src/agentic_mcp_server/domain"]
+strict = [
+    "src/agentic_mcp_server/mcp/tool_schemas",
+    "src/agentic_mcp_server/agent_output_schemas",
+    "src/agentic_mcp_server/domain",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

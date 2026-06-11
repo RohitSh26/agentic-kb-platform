@@ -1,4 +1,4 @@
-# 02 — Implementation tour (PR-01 → PR-10)
+# 02 — Implementation tour (PR-01 → PR-11)
 
 > A guided walk through the code as it exists today. Read
 > [01 — Design deep dive](01-design-deep-dive.md) first for the *why*; this document is the *how*
@@ -64,8 +64,8 @@ Runtime-plane schemas, under `services/mcp-server/src/agentic_mcp_server/mcp/`:
   fails validation before any broker code runs), denied responses must carry `denial_reason`,
   and `OpenEvidenceResponse` names its payload `untrusted_content`. `tool_registry.py` exposes
   `TOOL_SCHEMAS`, the authoritative tool-name → schema table the server registers from.
-- Agent output contracts: rules in `docs/contracts/agent-output-contracts.md`; concrete schemas
-  land with PR-11.
+- `agent_output_schemas/` — the structured outputs runtime agents must produce (PR-11), mirrored
+  in `docs/contracts/agent-output-contracts.md`. See §12.
 
 ## 2. The registry (`services/kb-builder` — infrastructure/postgres + migrations)
 
@@ -313,12 +313,39 @@ per-agent and per-run denial, evidence expansion/truncation, budget-race concurr
 cap, and an injection-style document that must come back verbatim as data without changing any
 broker decision.
 
-## 12. What does not exist yet
+## 12. Agent manifests + output schemas (`agents/` + `agent_output_schemas/`)
 
-- Real connector backends (network I/O), agent manifests' runtime (PR-11), eval harness (PR-12),
-  security hardening (real ACL policy, PR-13), IaC.
+The "controlled specialists" layer (PR-11). `agents/*.md` are the **product's** runtime manifests
+(orchestrator, implementation, test_layer, code_reviewer, delivery_planner, pr_planner — not
+Claude Code subagents): YAML frontmatter declares `allowed_tools` (context.\*/ledger.\* only,
+never search), `max_context_calls` / `max_context_tokens` (must match
+`.claude/rules/token-budgets.md`), `requires_evidence_ids`, and an `output_schema` name; the body
+is the agent's instruction set. Only the orchestrator may `context.create_pack`.
 
-## 13. Reading order for a new dev
+`services/mcp-server/src/agentic_mcp_server/agent_output_schemas/` holds the schemas those names
+resolve against (`AGENT_OUTPUT_SCHEMAS`: `phased_pr_plan_v1`, `implementation_plan_v1`,
+`test_plan_v1`, `review_findings_v1`, `delivery_plan_v1`, `pr_plan_v1`), mirrored in
+`docs/contracts/agent-output-contracts.md`. Two enforcement layers, both structural rather than
+prompt-based:
+
+- **Construction**: every claim-bearing component (`EvidencedClaim`, `ImplementationStep`,
+  `PlannedTest`, `ReviewFinding`, `RolloutStep`, `PlannedPr`) requires non-empty `evidence_ids` —
+  an unevidenced claim is *unconstructible*; what cannot be proven goes in `open_questions`.
+- **Reference check**: `validate_evidence_references(output, known_evidence_ids)` walks the model
+  tree (`referenced_evidence_ids`) and raises `AgentOutputValidationError` on any handle the
+  Evidence Pack never returned.
+
+Models are frozen with `extra="forbid"` and pin `schema_version` (like the tool schemas).
+Executable specs: `tests/contract/test_agent_output_schemas.py` (claims without evidence cannot
+exist; unknown IDs fail) and `tests/contract/test_agent_manifests.py` (manifests stay consistent
+with `TOOL_SCHEMAS`, the schema registry, and the budget rules).
+
+## 13. What does not exist yet
+
+- Real connector backends (network I/O), the orchestrator runtime that executes the manifests,
+  eval harness (PR-12), security hardening (real ACL policy, PR-13), IaC.
+
+## 14. Reading order for a new dev
 
 1. `docs/architecture/00-overview.md` (15 min) — the blueprint.
 2. This guide's doc 01 — the invariants and why.

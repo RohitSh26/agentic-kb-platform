@@ -8,6 +8,7 @@ Default V1 budgets (tune with logs, record changes in an ADR if structural):
 - Test agent extra: 1 request / 1.5k–2.5k tokens
 - Code reviewer extra: 1 request / 1.5k–2.5k tokens
 - Delivery planner extra: 1 request / 1k–1.5k tokens
+- PR planner extra: 1 request / 1k–1.5k tokens
 - Max evidence cards per retrieval: 3–5 after internal rerank
 - Semantic duplicate threshold: start 0.88–0.92, tune from logs
 
