@@ -14,10 +14,46 @@
 - Outputs are produced by agents that only ever saw broker-mediated evidence;
   they contain no secrets and no direct data-store references.
 
-## Status
+## Enforcement (two layers)
 
-V1 defines the base model only (`AgentOutputModel`); concrete per-role output
-schemas (implementation, test, code-review, delivery-planning) land with the
-agent manifests (PR-11) and must be added to this document when they do.
-The Python definition lives with its validator in mcp-server once PR-11 lands;
-until then this document is the contract of record.
+1. **Construction**: every claim-bearing component (`EvidencedClaim`,
+   plan steps, test cases, review findings, rollout steps, planned PRs)
+   requires a **non-empty** `evidence_ids` list — an unevidenced claim cannot
+   be constructed and must be expressed as an `open_questions` entry instead.
+2. **Reference check**: `validate_evidence_references(output, known_evidence_ids)`
+   rejects any output citing an `evidence_id` the run's Evidence Pack never
+   returned (`AgentOutputValidationError`). Evidence IDs are the broker's
+   handles (artifact UUIDs as strings — see `evidence-pack-contract.md`).
+
+## The V1 schemas
+
+Python authority: `services/mcp-server/src/agentic_mcp_server/agent_output_schemas/`
+(one module per schema; the `AGENT_OUTPUT_SCHEMAS` registry maps the
+`output_schema` name declared in each manifest to its model).
+
+| `output_schema` | Producer manifest | Top-level shape |
+|---|---|---|
+| `phased_pr_plan_v1` | `agents/orchestrator.md` | `goal`, `phases[]` (name, goal, `changes[]` of evidenced claims, depends_on), `open_questions[]` |
+| `implementation_plan_v1` | `agents/implementation.md` | `task`, `steps[]` (description, target_artifacts, `evidence_ids`), `risks[]`, `open_questions[]` |
+| `test_plan_v1` | `agents/test_layer.md` | `scope`, `test_cases[]` (name, expectation, `evidence_ids`), `regression_risks[]`, `open_questions[]` |
+| `review_findings_v1` | `agents/code_reviewer.md` | `verdict` ∈ approve\|request_changes, `findings[]` (severity ∈ blocker\|major\|minor\|note, finding, `evidence_ids`), `open_questions[]` |
+| `delivery_plan_v1` | `agents/delivery_planner.md` | `rollout_steps[]` (description, `evidence_ids`), `monitoring[]`, `risks[]`, `open_questions[]` |
+| `pr_plan_v1` | `agents/pr_planner.md` | `prs[]` (title, scope, depends_on, `evidence_ids`), `open_questions[]` |
+
+Plans and step lists require at least one entry; finding/risk/monitoring
+lists may be empty. `open_questions` is free text by design — it is the only
+place an agent may state something without evidence.
+
+## Manifest linkage
+
+Each manifest in `agents/` declares `allowed_tools` (context.\*/ledger.\* only —
+no unrestricted KB search), `max_context_calls`, `max_context_tokens`,
+`requires_evidence_ids: true`, and an `output_schema` key that must exist in
+`AGENT_OUTPUT_SCHEMAS`. Manifest budgets must match
+`.claude/rules/token-budgets.md`; the broker enforces them server-side
+regardless of what the manifest prose says.
+
+## Versioning
+
+Any breaking change bumps `AGENT_OUTPUT_SCHEMA_VERSION`, updates this document
+in the same PR, and is validated by mcp-server's contract tests.

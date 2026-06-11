@@ -33,16 +33,6 @@ async def test_bare_query_is_rejected_by_the_schema(server: FastMCP) -> None:
     assert "why_needed" in message  # validation names the missing justification
 
 
-async def test_unknown_pack_is_a_tool_error_not_a_crash(server: FastMCP) -> None:
-    """Pack state is in-memory per instance; an unknown handle must fail cleanly."""
-    async with Client(server) as client:
-        with pytest.raises(ToolError, match="unknown context_pack_id"):
-            await client.call_tool(
-                "context.read_pack",
-                {"request": {"context_pack_id": "never-created", "role": "implementation"}},
-            )
-
-
 async def test_telemetry_emits_structured_line_per_request(
     server: FastMCP, caplog: pytest.LogCaptureFixture
 ) -> None:

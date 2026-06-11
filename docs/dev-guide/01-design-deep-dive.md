@@ -25,7 +25,7 @@ Build units: `docs/pr-briefs/PR-01`–`PR-13`.
 | Plane | What it does | Where it lives | Status |
 |---|---|---|---|
 | **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation | `services/kb-builder` | Implemented through PR-08 (connectors → build engine → wikify → graphify → linker → search indexer) |
-| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, graph traversal, retrieval ledger | `services/mcp-server` | Implemented (PR-09 server base: auth, telemetry, tool contracts, health; PR-10 Context Broker: packs, budgets, dedupe, evidence, graph, ledger) |
+| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, graph traversal, retrieval ledger | `services/mcp-server` | Implemented (PR-09 server base: auth, telemetry, tool contracts, health; PR-10 Context Broker: packs, budgets, dedupe, evidence, graph, ledger; PR-11 agent manifests + output schemas) |
 
 Nothing is shared at runtime (ADR-0008): each service is a self-contained `uv` project, and the
 only cross-service agreements are the markdown contracts in `docs/contracts/`, pinned by contract
@@ -187,4 +187,4 @@ via a new ADR. Default answer is no.
 | 4 | Incremental build; cache hit ⇒ no model call | `GenerationCacheGate` / `EmbeddingCacheGate` in `agentic_kb_builder/application/cache_gates.py`; content-hash skip in `application/build_runner.py` |
 | 5 | kb_version active only after validation | `application/active_version.py` + unique partial index on `kb_build_run` |
 | 6 | Agents never touch stores/secrets; retrieved text untrusted | Entra JWKS auth boundary + schema-encoded policy in `agentic_mcp_server/mcp/tool_schemas` (PR-09); hardening PR-13 |
-| 7 | Every claim cites evidence; no fabrication | Evidence-ID discipline (PR-10/11); linker stale-edge deletion in `linker/write_edges.py` |
+| 7 | Every claim cites evidence; no fabrication | Evidence cards by handle (PR-10); `agent_output_schemas` make unevidenced claims unconstructible and reject unknown evidence IDs (PR-11); linker stale-edge deletion in `linker/write_edges.py` |

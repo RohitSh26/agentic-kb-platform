@@ -6,6 +6,7 @@ allowed_tools:
   - context.read_pack
   - context.open_evidence
   - ledger.list_retrievals
+max_context_calls: 6
 max_context_tokens: 18000
 requires_human_approval: true
 requires_evidence_ids: true
