@@ -7,6 +7,7 @@ change broker behavior. Requires an externally migrated TEST_DATABASE_URL
 (kb-builder `make migrate-test-db`); skips otherwise.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 
@@ -404,6 +405,96 @@ async def test_request_more_budgets_are_tracked_per_agent_subject(
     assert other_subject.status == "approved"
 
 
+async def test_request_more_concurrent_calls_cannot_both_pass_the_allowance_check(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # default policy: 1 follow-up request; the per-pack lock must serialize
+    # check-then-charge so exactly one of two concurrent calls is approved
+    deps, pack_id, _ = await _pack_with_refund_follow_up(factory, budget_policy=BudgetPolicy())
+
+    results = await asyncio.gather(
+        request_more(
+            deps,
+            _request_more("how does refund processing work in checkout", max_tokens=500).model_copy(
+                update={"context_pack_id": pack_id}
+            ),
+            SUBJECT,
+        ),
+        request_more(
+            deps,
+            _request_more("where are webhook signatures verified", max_tokens=500).model_copy(
+                update={"context_pack_id": pack_id}
+            ),
+            SUBJECT,
+        ),
+    )
+
+    assert sorted(r.status for r in results) == ["approved", "denied"]
+
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, RUN_ID)
+    assert sorted(row.status for row in rows[-2:]) == ["approved", "denied"]
+
+
+async def test_request_more_excludes_already_checked_evidence(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    deps, pack_id, refund_id = await _pack_with_refund_follow_up(
+        factory, budget_policy=GENEROUS_POLICY
+    )
+
+    response = await request_more(
+        deps,
+        _request_more("how does refund processing work in checkout").model_copy(
+            update={
+                "context_pack_id": pack_id,
+                "already_checked_evidence_ids": [str(refund_id)],
+            }
+        ),
+        SUBJECT,
+    )
+
+    assert response.status == "approved"
+    assert response.new_evidence_cards == []
+    assert response.tokens_returned == 0
+
+
+async def test_request_more_unknown_pack_writes_error_row(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    with pytest.raises(ToolError, match="unknown context_pack_id"):
+        await request_more(
+            deps, _request_more("how does refund processing work in checkout"), SUBJECT
+        )
+
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, "-")
+    assert (rows[-1].tool_name, rows[-1].status) == ("context.request_more", "error")
+
+
+async def test_create_pack_caps_cards_at_the_retrieval_maximum(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    search = FakeSearchClient()
+    hits = []
+    async with factory() as session:
+        for i in range(7):
+            artifact_id = await insert_artifact(
+                session,
+                title=f"Payment doc {i}",
+                body_text=f"Payment behavior number {i}.",
+            )
+            hits.append(SearchHit(artifact_id=artifact_id, score=float(7 - i)))
+    search.seed("payment", hits)
+    deps = make_broker_deps(factory, search)
+
+    response = await create_pack(deps, _create_pack_request(), SUBJECT)
+
+    assert len(response.evidence_cards) == 5
+
+
 async def test_open_evidence_returns_untrusted_content_and_charges_the_run(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -461,7 +552,7 @@ async def test_open_evidence_truncates_to_the_token_cap(
     assert response.untrusted_content == "x" * 20
 
 
-async def test_open_evidence_unknown_handle_errors(
+async def test_open_evidence_unknown_handle_errors_and_writes_error_row(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     search = FakeSearchClient()
@@ -480,6 +571,43 @@ async def test_open_evidence_unknown_handle_errors(
             ),
             SUBJECT,
         )
+
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, RUN_ID)
+    assert (rows[-1].tool_name, rows[-1].status) == ("context.open_evidence", "error")
+
+
+async def test_open_evidence_over_agent_allowance_writes_denied_row_and_errors(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # default per-agent token allowance is 2500; cost = min(4000, 3000) = 3000
+    search = FakeSearchClient()
+    async with factory() as session:
+        artifact_id = await insert_artifact(
+            session, title="Payment long doc", body_text="y" * 16_000
+        )
+    search.seed("payment", [SearchHit(artifact_id=artifact_id, score=1.0)])
+    deps = make_broker_deps(factory, search)
+    created = await create_pack(deps, _create_pack_request(), SUBJECT)
+
+    with pytest.raises(ToolError, match="agent token allowance exceeded"):
+        await open_evidence(
+            deps,
+            OpenEvidenceRequest(
+                context_pack_id=created.context_pack_id,
+                evidence_id=str(artifact_id),
+                max_tokens=3000,
+            ),
+            SUBJECT,
+        )
+
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, RUN_ID)
+    assert (rows[-1].tool_name, rows[-1].status, rows[-1].tokens_returned) == (
+        "context.open_evidence",
+        "denied",
+        0,
+    )
 
 
 async def test_open_evidence_over_run_budget_writes_denied_row_and_errors(

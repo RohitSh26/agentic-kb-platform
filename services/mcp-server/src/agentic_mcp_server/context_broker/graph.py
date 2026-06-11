@@ -14,6 +14,7 @@ from typing import Literal
 
 from fastmcp.exceptions import ToolError
 
+from agentic_mcp_server.context_broker.audit import write_error_event
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_kb_version
 from agentic_mcp_server.infrastructure.postgres.artifacts import fetch_artifacts
@@ -51,6 +52,12 @@ async def get_neighbors(
     async with deps.session_factory() as session:
         kb_version = await fetch_active_kb_version(session)
         if kb_version is None:
+            await write_error_event(
+                deps,
+                tool_name=_TOOL_NAME,
+                subject=subject,
+                query_text=str(request.artifact_id),
+            )
             raise ToolError("no active kb_version; the knowledge base has not been built yet")
 
         edge_types = request.edge_types or None

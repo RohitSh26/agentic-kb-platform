@@ -54,8 +54,11 @@ and the migrations. Summary:
 table: `tool` ← `tool_name`, `evidence_ids` ← `reused_evidence_ids` ∪
 `new_evidence_ids`, `status` ← `status` (text, NOT NULL, server default
 `'approved'`; added by kb-builder migration 0007 — values are the broker's
-outcome statuses, e.g. `approved`/`reused`/`denied`/`needs_human_approval`).
-Evidence ids are artifact UUIDs rendered as strings in V1, which is why the
-`*_evidence_ids` columns are UUID arrays.
+outcome statuses `approved`/`reused`/`denied`/`needs_human_approval` plus the
+ledger-only status `error`, written when a call fails before producing a
+response, e.g. unknown handles or no active `kb_version`). On `error` rows the
+broker writes the sentinel `"-"` for `run_id`/`kb_version` values it could not
+resolve. Evidence ids are artifact UUIDs rendered as strings in V1, which is
+why the `*_evidence_ids` columns are UUID arrays.
 
 Renaming or retyping these requires a coordinated change in both services.

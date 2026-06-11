@@ -11,6 +11,7 @@ import uuid
 
 from fastmcp.exceptions import ToolError
 
+from agentic_mcp_server.context_broker.audit import write_error_event
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.retrieval import card_tokens, retrieve_cards
 from agentic_mcp_server.context_broker.state import (
@@ -46,12 +47,19 @@ async def create_pack(
     deps: BrokerDeps, request: CreatePackRequest, subject: str
 ) -> CreatePackResponse:
     started = time.monotonic()
+    query = f"{request.task} {request.approved_context_plan}"
     async with deps.session_factory() as session:
         kb_version = await fetch_active_kb_version(session)
     if kb_version is None:
+        await write_error_event(
+            deps,
+            tool_name="context.create_pack",
+            subject=subject,
+            run_id=request.run_id,
+            query_text=query,
+        )
         raise ToolError("no active kb_version; the knowledge base has not been built yet")
 
-    query = f"{request.task} {request.approved_context_plan}"
     cards, _ = await retrieve_cards(deps, query=query, kb_version=kb_version, subject=subject)
     used_tokens = sum(card_tokens(card) for card in cards)
     open_questions = [] if cards else [f"No evidence found for: {request.task}"]
@@ -113,6 +121,12 @@ async def read_pack(deps: BrokerDeps, request: ReadPackRequest, subject: str) ->
     try:
         pack = deps.packs.get(request.context_pack_id)
     except UnknownPackError:
+        await write_error_event(
+            deps,
+            tool_name="context.read_pack",
+            subject=subject,
+            query_text=request.context_pack_id,
+        )
         raise ToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
 
     cards = list(pack.cards.values())

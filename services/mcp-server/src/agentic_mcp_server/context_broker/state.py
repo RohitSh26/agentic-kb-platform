@@ -5,6 +5,7 @@ docs/contracts/mcp-tools-contract.md): packs are a runtime cache, never truth â€
 the durable, auditable record is the retrieval_event ledger in Postgres.
 """
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 
@@ -30,6 +31,9 @@ class EvidencePackState:
     open_questions: list[str] = field(default_factory=list)
     agent_usage: dict[str, AgentUsage] = field(default_factory=dict)
     history: QueryHistory = field(default_factory=QueryHistory)
+    # serializes check-then-charge so concurrent calls cannot both pass a
+    # budget check before either charges (budgets are enforced, not advisory)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @property
     def run_remaining_tokens(self) -> int:
@@ -46,8 +50,13 @@ class EvidencePackState:
 @dataclass
 class PackStore:
     packs: dict[str, EvidencePackState] = field(default_factory=dict)
+    # bounds process memory in a long-lived instance; evicted packs remain
+    # auditable through the ledger
+    max_packs: int = 256
 
     def create(self, pack: EvidencePackState) -> None:
+        while len(self.packs) >= self.max_packs:
+            self.packs.pop(next(iter(self.packs)))
         self.packs[pack.context_pack_id] = pack
 
     def get(self, context_pack_id: str) -> EvidencePackState:
