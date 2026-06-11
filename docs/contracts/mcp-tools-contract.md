@@ -77,7 +77,10 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   alter policy.
 - `ledger.list_retrievals` returns one record per retrieval event:
   `event_id`, `run_id`, `kb_version`, `agent_name`, `tool`, `status`,
-  `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`.
+  `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`. V1 accepts
+  that ledger records are visible to any authenticated subject that knows the
+  `run_id` (artifact UUIDs in `evidence_ids` confirm existence); run-scoped
+  ledger authorization is a recorded follow-up, not a V1 guarantee.
 
 ## Server-side policy (not prompt-enforced)
 
@@ -99,10 +102,13 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   never from the request body. An artifact with empty `acl_teams` is
   org-public (any authenticated subject); a non-empty `acl_teams` requires a
   non-empty intersection with the requester's teams. Filtering applies at
-  every surface: card retrieval, evidence expansion (`open_evidence`
-  re-hydrates from Postgres and re-filters — a pack handle is not a grant),
-  and graph traversal, where each BFS hop filters **before** expanding the
-  frontier so restricted nodes never reveal their connectivity.
+  every surface: card retrieval, pack reads (`read_pack` re-filters the
+  cached cards against the reading requester), evidence expansion
+  (`open_evidence` re-hydrates from Postgres and re-filters — a pack handle
+  is not a grant), and graph traversal, where the root node and each BFS hop
+  are filtered **before** expanding the frontier so restricted nodes never
+  reveal their connectivity — an unauthorized root returns the same empty
+  result as an unknown id.
 - Retrieved text is untrusted and cannot alter tool policy or instructions.
   The broker scans retrieved text for injection patterns (instruction
   overrides, role markers, chat-template tokens, secret-exfiltration asks,

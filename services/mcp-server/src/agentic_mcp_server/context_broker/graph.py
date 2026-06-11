@@ -69,9 +69,17 @@ async def get_neighbors(
         edge_types = request.edge_types or None
         cap = deps.settings.max_graph_neighbors
         visited: set[uuid.UUID] = {request.artifact_id}
-        frontier = [request.artifact_id]
         found: list[_Found] = []
         rows_by_id: dict[uuid.UUID, ArtifactRow] = {}
+
+        # the root is hop 0: an unauthorized start node must not reveal its
+        # connectivity, so denial yields the same empty result as an unknown id
+        root_rows = await fetch_artifacts(session, [request.artifact_id], kb_version)
+        if deps.authorization.filter_artifacts(requester, root_rows):
+            frontier = [request.artifact_id]
+        else:
+            frontier = []
+            suppressed.extend(row.artifact_id for row in root_rows)
 
         for distance in range(1, request.depth + 1):
             if not frontier or len(found) >= cap:

@@ -38,7 +38,7 @@ L2+ through `context.open_evidence` with a budget.
 ## Pack shape
 
 `context.create_pack` returns: `context_pack_id`, `kb_version`, `summary`,
-`evidence_cards[]`, `open_questions[]`, `budget_used_tokens`.
+`evidence_cards[]`, `open_questions[]`, `budget_used_tokens`, `authorization`.
 `context.read_pack` adds `budget_remaining_tokens` and renders a role-specific
 view (role is a **view selector only** — authorization comes from the
 authenticated session, never from the request body).
@@ -53,8 +53,10 @@ authenticated session, never from the request body).
   content (`injection_flagged`/`injection_signals`) but returns it verbatim —
   flagging informs the consumer; it never rewrites evidence.
 - Packs only ever contain artifacts the requester was authorized to see at
-  retrieval time, and `open_evidence` re-checks authorization at expansion
-  time — holding a pack handle is not a grant. Every retrieval response
-  carries an `authorization` decision (see `mcp-tools-contract.md`).
+  retrieval time, `read_pack` re-filters the cards (and recomputes the
+  summary) against the **reading** requester's teams, and `open_evidence`
+  re-checks authorization at expansion time — holding a pack handle is not a
+  grant. Every retrieval response carries an `authorization` decision (see
+  `mcp-tools-contract.md`).
 - Budgets (per run and per agent) are enforced by the broker server-side and
   surfaced in the ledger; see `.claude/rules/token-budgets.md` for V1 numbers.

@@ -28,9 +28,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.evidence import open_evidence
 from agentic_mcp_server.context_broker.graph import get_neighbors
-from agentic_mcp_server.context_broker.pack import create_pack
+from agentic_mcp_server.context_broker.pack import create_pack, read_pack
 from agentic_mcp_server.infrastructure.search.search_client import FakeSearchClient, SearchHit
-from agentic_mcp_server.mcp.tool_schemas.context import CreatePackRequest, OpenEvidenceRequest
+from agentic_mcp_server.mcp.tool_schemas.context import (
+    CreatePackRequest,
+    OpenEvidenceRequest,
+    ReadPackRequest,
+)
 from agentic_mcp_server.mcp.tool_schemas.graph import GetNeighborsRequest
 
 pytestmark = pytest.mark.skipif(
@@ -136,6 +140,50 @@ async def test_pack_handle_is_not_a_grant_open_evidence_rechecks_acl(
     opened = await open_evidence(deps, request, PRIVILEGED)
     assert opened.untrusted_content.startswith("Internal fraud thresholds")
     assert opened.authorization.policy == "team_acl_v1"
+
+
+async def test_read_pack_refilters_cards_for_the_reading_requester(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    search = FakeSearchClient()
+    async with factory() as session:
+        public, restricted = await _seed_public_and_restricted(session, search)
+    deps = make_broker_deps(factory, search)
+
+    pack = await create_pack(deps, _create_pack_request(), PRIVILEGED)
+    assert len(pack.evidence_cards) == 2
+    request = ReadPackRequest(context_pack_id=pack.context_pack_id, role="implementation")
+
+    narrow = await read_pack(deps, request, UNPRIVILEGED)
+    assert {card.artifact_id for card in narrow.evidence_cards} == {public}
+    assert "fraud" not in narrow.summary  # summary recomputed from filtered cards
+
+    full = await read_pack(deps, request, PRIVILEGED)
+    assert {card.artifact_id for card in full.evidence_cards} == {public, restricted}
+
+
+async def test_unauthorized_graph_root_looks_like_an_unknown_id(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with factory() as session:
+        root = await insert_artifact(
+            session, title="fraud root", body_text="r", acl_teams=["team-payments"]
+        )
+        neighbor = await insert_artifact(session, title="module N", body_text="n")
+        await insert_edge(
+            session, from_artifact_id=root, to_artifact_id=neighbor, edge_type="calls"
+        )
+    deps = make_broker_deps(factory, FakeSearchClient())
+    request = GetNeighborsRequest(artifact_id=root, depth=1)
+
+    blocked = await get_neighbors(deps, request, UNPRIVILEGED)
+    unknown = await get_neighbors(
+        deps, GetNeighborsRequest(artifact_id=uuid.uuid4(), depth=1), UNPRIVILEGED
+    )
+    assert blocked.neighbors == unknown.neighbors == []
+
+    allowed = await get_neighbors(deps, request, PRIVILEGED)
+    assert [n.artifact_id for n in allowed.neighbors] == [neighbor]
 
 
 async def test_graph_traversal_never_transits_a_restricted_node(

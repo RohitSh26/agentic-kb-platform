@@ -26,6 +26,7 @@ from agentic_mcp_server.context_broker.state import (
 )
 from agentic_mcp_server.domain.query_text import normalize_query
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_kb_version
+from agentic_mcp_server.infrastructure.postgres.artifacts import fetch_artifacts
 from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
     RetrievalEventInsert,
     insert_event,
@@ -37,6 +38,7 @@ from agentic_mcp_server.mcp.tool_schemas.context import (
     ReadPackResponse,
 )
 from agentic_mcp_server.mcp.tool_schemas.evidence import EvidenceCard
+from agentic_mcp_server.telemetry.audit import audit_context_access
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +145,27 @@ async def read_pack(
         )
         raise ToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
 
-    cards = list(pack.cards.values())
+    # a pack handle is not a grant: cards were filtered against the creator's
+    # teams, so re-apply the ACL for the reading requester before serving them
+    all_cards = list(pack.cards.values())
+    async with deps.session_factory() as session:
+        artifacts = await fetch_artifacts(
+            session, [card.artifact_id for card in all_cards], pack.kb_version
+        )
+    allowed_ids = {
+        artifact.artifact_id
+        for artifact in deps.authorization.filter_artifacts(requester, artifacts)
+    }
+    cards = [card for card in all_cards if card.artifact_id in allowed_ids]
+    audit_context_access(
+        tool="context.read_pack",
+        requester=requester,
+        kb_version=pack.kb_version,
+        artifact_ids=[card.artifact_id for card in cards],
+        suppressed_artifact_ids=[
+            card.artifact_id for card in all_cards if card.artifact_id not in allowed_ids
+        ],
+    )
     async with deps.session_factory() as session:
         await insert_event(
             session,
@@ -171,7 +193,9 @@ async def read_pack(
         context_pack_id=pack.context_pack_id,
         kb_version=pack.kb_version,
         role=request.role,
-        summary=pack.summary,
+        # recomputed from the filtered cards: the stored summary names every
+        # title the creator could see
+        summary=_summary(pack.run_id, cards),
         evidence_cards=cards,
         open_questions=pack.open_questions,
         budget_remaining_tokens=pack.run_remaining_tokens,
