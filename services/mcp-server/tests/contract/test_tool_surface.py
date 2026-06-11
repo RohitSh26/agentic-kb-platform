@@ -1,13 +1,13 @@
-"""Tool surface tests: registry-driven registration, contract validation, stubs.
+"""Tool surface tests: registry-driven registration, contract validation, telemetry.
 
 These use the in-process fastmcp client (no HTTP), which is exactly why they
 must not assert anything about auth — that boundary is covered by
-tests/integration/test_auth.py against the real HTTP app.
+tests/integration/test_auth.py against the real HTTP app. Broker behavior
+against a real registry lives in tests/integration/test_context_broker.py;
+here we only exercise what is deterministic without a database.
 """
 
 import logging
-import uuid
-from typing import Any
 
 import pytest
 from fastmcp import Client, FastMCP
@@ -15,46 +15,10 @@ from fastmcp.exceptions import ToolError
 
 from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 
-ARTIFACT_ID = str(uuid.uuid4())
-
 
 async def test_registered_tools_match_contract_registry(server: FastMCP) -> None:
     tools = await server.list_tools()
     assert {tool.name for tool in tools} == set(TOOL_SCHEMAS)
-
-
-async def test_every_stub_returns_not_implemented(server: FastMCP) -> None:
-    valid_requests: dict[str, dict[str, Any]] = {
-        "context.create_pack": {
-            "run_id": "run-1",
-            "task": "add endpoint",
-            "approved_context_plan": "plan",
-            "retrieval_profile": "default",
-            "budget_tokens": 8000,
-        },
-        "context.read_pack": {"context_pack_id": "pack-1", "role": "implementation"},
-        "context.request_more": {
-            "context_pack_id": "pack-1",
-            "agent_name": "impl-agent",
-            "question": "what validates the payload?",
-            "why_needed": "to reuse the existing validator",
-            "decision_needed": "which module to extend",
-            "already_checked_evidence_ids": ["ev-1"],
-            "max_tokens": 1500,
-        },
-        "context.open_evidence": {
-            "context_pack_id": "pack-1",
-            "evidence_id": "ev-1",
-            "max_tokens": 800,
-        },
-        "graph.get_neighbors": {"artifact_id": ARTIFACT_ID},
-        "ledger.list_retrievals": {"run_id": "run-1"},
-    }
-    assert set(valid_requests) == set(TOOL_SCHEMAS)
-    async with Client(server) as client:
-        for tool_name, request in valid_requests.items():
-            with pytest.raises(ToolError, match="not implemented"):
-                await client.call_tool(tool_name, {"request": request})
 
 
 async def test_bare_query_is_rejected_by_the_schema(server: FastMCP) -> None:
@@ -65,17 +29,32 @@ async def test_bare_query_is_rejected_by_the_schema(server: FastMCP) -> None:
                 "context.request_more", {"request": {"query": "give me everything"}}
             )
     message = str(excinfo.value)
-    assert "not implemented" not in message  # rejected before the stub ran
+    assert "unknown context_pack_id" not in message  # rejected before the broker ran
     assert "why_needed" in message  # validation names the missing justification
+
+
+async def test_unknown_pack_is_a_tool_error_not_a_crash(server: FastMCP) -> None:
+    """Pack state is in-memory per instance; an unknown handle must fail cleanly."""
+    async with Client(server) as client:
+        with pytest.raises(ToolError, match="unknown context_pack_id"):
+            await client.call_tool(
+                "context.read_pack",
+                {"request": {"context_pack_id": "never-created", "role": "implementation"}},
+            )
 
 
 async def test_telemetry_emits_structured_line_per_request(
     server: FastMCP, caplog: pytest.LogCaptureFixture
 ) -> None:
+    # the extra field fails contract validation deterministically (no DB), but
+    # the middleware logs before validation, so the line still carries run_id
     with caplog.at_level(logging.INFO, logger="agentic_mcp_server.telemetry.middleware"):
         async with Client(server) as client:
-            with pytest.raises(ToolError, match="not implemented"):
-                await client.call_tool("ledger.list_retrievals", {"request": {"run_id": "run-42"}})
+            with pytest.raises(ToolError):
+                await client.call_tool(
+                    "ledger.list_retrievals",
+                    {"request": {"run_id": "run-42", "unexpected_field": True}},
+                )
     lines = [r.getMessage() for r in caplog.records if "event=mcp_request" in r.getMessage()]
     assert len(lines) == 1
     line = lines[0]
