@@ -82,3 +82,48 @@ jobs:
       - name: Tests
         working-directory: services/mcp-server
         run: uv run pytest
+
+  evals:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      # kb-builder owns the schema; the harness needs a migrated registry
+      - name: Run kb-builder migrations
+        working-directory: services/kb-builder
+        run: |
+          uv sync --locked
+          DATABASE_URL=$TEST_DATABASE_URL uv run alembic upgrade head
+      - name: Sync
+        working-directory: evals
+        run: uv sync --locked
+      - name: Lint
+        working-directory: evals
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Type-check
+        working-directory: evals
+        run: uv run pyright
+      - name: Tests
+        working-directory: evals
+        run: uv run pytest
+      - name: Benchmark run (baseline diff)
+        working-directory: evals
+        run: uv run python run.py

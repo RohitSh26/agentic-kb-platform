@@ -1,4 +1,4 @@
-# 02 — Implementation tour (PR-01 → PR-11)
+# 02 — Implementation tour (PR-01 → PR-12)
 
 > A guided walk through the code as it exists today. Read
 > [01 — Design deep dive](01-design-deep-dive.md) first for the *why*; this document is the *how*
@@ -12,7 +12,7 @@ services/kb-builder  the nightly build: connectors → build engine → wikify/g
 services/mcp-server  the runtime plane: auth, telemetry, tool contracts, health, Context Broker
 docs/contracts/      markdown cross-service contracts — the only thing the services share
 agents/              product runtime agent manifests (served later by MCP; not Claude Code agents)
-evals/               empty case directories; harness lands in PR-12
+evals/               dev-only uv project: benchmark cases + harness + baseline (PR-12)
 infra/               README describing the lean Azure footprint; no IaC yet
 ```
 
@@ -340,12 +340,37 @@ Executable specs: `tests/contract/test_agent_output_schemas.py` (claims without 
 exist; unknown IDs fail) and `tests/contract/test_agent_manifests.py` (manifests stay consistent
 with `TOOL_SCHEMAS`, the schema registry, and the budget rules).
 
-## 13. What does not exist yet
+## 13. Evaluation harness (`evals/`)
+
+The benchmark layer (PR-12), contract in `docs/contracts/evals-report.md`. A **dev-only** uv
+project (never deployed, never a service) with an editable path dependency on
+`services/mcp-server`: the executor drives `create_pack` / `request_more` / `open_evidence`
+in-process through `BrokerDeps` with a `FakeSearchClient` against a migrated `TEST_DATABASE_URL`
+registry — the same seam mcp-server's integration tests use, so every run exercises real budget,
+dedupe, rerank, and ledger behavior. It never runs Alembic (kb-builder owns the schema) and never
+requires Azure.
+
+- `retrieval_cases/` + `agent_task_cases/` — YAML cases covering all six §13 benchmark task
+  types. Each case seeds its own registry fixtures and search seeds, optionally scripts broker
+  calls per agent (exercising exact reuse, semantic reuse, L2 expansion, conflicting evidence),
+  and lists expected docs/files/symbols/tests/open questions. Loader validators reject unknown
+  fixture keys and search seeds no scripted query can ever reach.
+- `harness/` — `executor.py` runs a case and normalizes `retrieval_event` rows into pure
+  `RunRecord` dataclasses; `metrics.py` computes the eleven §13 metrics DB-free (build-plane
+  metrics emit `not_measured` with null values, never faked; `unsupported_claim_rate` is
+  `measured_scripted` via the PR-11 `validate_evidence_references` seam); `baseline.py` diffs
+  against the committed `baseline.json` (±5% relative ⇒ improved/regressed, else flat).
+- `run.py` — entrypoint (`make eval-run`); writes `report.json` (gitignored), prints the table
+  the `eval-runner` Claude Code subagent reads, `--update-baseline` reseeds the baseline.
+- Case success = expected-doc recall 1.0 **and** no ledger row with status `error`; broker
+  denials are contractual outcomes, not failures.
+
+## 14. What does not exist yet
 
 - Real connector backends (network I/O), the orchestrator runtime that executes the manifests,
-  eval harness (PR-12), security hardening (real ACL policy, PR-13), IaC.
+  security hardening (real ACL policy, PR-13), IaC.
 
-## 14. Reading order for a new dev
+## 15. Reading order for a new dev
 
 1. `docs/architecture/00-overview.md` (15 min) — the blueprint.
 2. This guide's doc 01 — the invariants and why.

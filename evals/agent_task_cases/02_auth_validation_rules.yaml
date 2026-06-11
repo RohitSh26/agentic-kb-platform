@@ -1,0 +1,39 @@
+id: auth-rules-user-endpoint
+task_type: find_auth_validation_rules
+task: "find auth and validation rules for the user profile endpoint"
+approved_context_plan: "review authorization scopes and request validation for user endpoints"
+budget_tokens: 8000
+fixtures:
+  artifacts:
+    - key: auth_rules
+      title: "User endpoint auth rules"
+      body_text: "Scope checks live in api/users/auth.py: require_user_scope enforces the user scope on every profile route."
+      authority_score: 0.9
+    - key: validation_rules
+      title: "User profile validation"
+      body_text: "Request validation lives in api/users/validators.py: validate_profile_update rejects empty display names."
+      authority_score: 0.85
+  search_seeds:
+    - keyword: auth
+      hits: [auth_rules]
+    - keyword: validation
+      hits: [validation_rules]
+    - keyword: user
+      hits: [auth_rules, validation_rules]
+script:
+  - tool: context.open_evidence
+    agent: impl-agent
+    evidence: auth_rules
+    max_tokens: 400
+agent_output:
+  claims:
+    - claim: "require_user_scope in api/users/auth.py enforces the user scope"
+      evidence: [auth_rules]
+    - claim: "validate_profile_update in api/users/validators.py rejects empty display names"
+      evidence: [validation_rules]
+expected:
+  docs: [auth_rules, validation_rules]
+  files: ["api/users/auth.py", "api/users/validators.py"]
+  symbols: ["require_user_scope", "validate_profile_update"]
+  tests: []
+  open_questions: []

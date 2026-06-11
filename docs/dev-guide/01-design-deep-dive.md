@@ -26,6 +26,7 @@ Build units: `docs/pr-briefs/PR-01`–`PR-13`.
 |---|---|---|---|
 | **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation | `services/kb-builder` | Implemented through PR-08 (connectors → build engine → wikify → graphify → linker → search indexer) |
 | **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, graph traversal, retrieval ledger | `services/mcp-server` | Implemented (PR-09 server base: auth, telemetry, tool contracts, health; PR-10 Context Broker: packs, budgets, dedupe, evidence, graph, ledger; PR-11 agent manifests + output schemas) |
+| **Benchmark layer** | Dev-only eval harness: runs the §13 benchmark cases through the real broker, computes token-cost metrics, diffs against a committed baseline | `evals/` | Implemented (PR-12; contract in `docs/contracts/evals-report.md`) |
 
 Nothing is shared at runtime (ADR-0008): each service is a self-contained `uv` project, and the
 only cross-service agreements are the markdown contracts in `docs/contracts/`, pinned by contract

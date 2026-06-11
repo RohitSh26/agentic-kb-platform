@@ -1,0 +1,47 @@
+id: release-monitoring-new-route
+task_type: find_release_monitoring_guidance
+task: "find release and monitoring guidance for a new route"
+approved_context_plan: "review the deployment runbook and monitoring alerts for new routes"
+budget_tokens: 8000
+fixtures:
+  artifacts:
+    - key: release_runbook
+      title: "Release runbook"
+      body_text: "Deploys roll out via staged slots; docs/runbooks/release.md requires a health gate before traffic shifts."
+      authority_score: 0.9
+    - key: monitoring_guide
+      title: "Monitoring alerts for routes"
+      body_text: "Each new route adds a latency alert in monitoring/alerts.yaml before launch."
+      authority_score: 0.85
+  search_seeds:
+    - keyword: release
+      hits: [release_runbook]
+    - keyword: monitoring
+      hits: [monitoring_guide]
+    - keyword: runbook
+      hits: [release_runbook]
+script:
+  - tool: context.request_more
+    agent: delivery-agent
+    question: "what monitoring alerts exist for new routes"
+    why_needed: "the pack covers the runbook but alert specifics drive the rollout plan"
+    decision_needed: "which alert to add before launch"
+    max_tokens: 1200
+  - tool: context.request_more
+    agent: review-agent
+    question: "what monitoring alerts exist for the new routes"
+    why_needed: "verifying the rollout plan cites the same alert guidance"
+    decision_needed: "approve or flag the rollout plan's monitoring step"
+    max_tokens: 1200
+agent_output:
+  claims:
+    - claim: "Releases require the health gate in docs/runbooks/release.md"
+      evidence: [release_runbook]
+    - claim: "A latency alert must be added in monitoring/alerts.yaml before launch"
+      evidence: [monitoring_guide]
+expected:
+  docs: [release_runbook, monitoring_guide]
+  files: ["docs/runbooks/release.md", "monitoring/alerts.yaml"]
+  symbols: []
+  tests: []
+  open_questions: []

@@ -1,0 +1,47 @@
+id: embeddings-change-impact
+task_type: identify_embeddings_change_impact
+task: "identify service and repository files impacted by an embeddings change"
+approved_context_plan: "trace embeddings usage across the build services and caches"
+budget_tokens: 8000
+fixtures:
+  artifacts:
+    - key: embeddings_service
+      title: "Embeddings service"
+      body_text: "Embedding calls go through embeddings/service.py: EmbeddingService.embed_chunks writes embedding_cache rows."
+      authority_score: 0.9
+    - key: embedding_cache_repo
+      title: "Embedding cache repository"
+      body_text: "embedding_cache rows are read by repositories/embedding_cache.py before any model call."
+      authority_score: 0.85
+    - key: indexer_impact
+      title: "Search indexer impact"
+      body_text: "indexing/projection.py re-embeds only changed chunks; an embeddings change forces re-indexing."
+      authority_score: 0.8
+  search_seeds:
+    - keyword: embeddings
+      hits: [embeddings_service]
+    - keyword: repository
+      hits: [embedding_cache_repo]
+    - keyword: indexer
+      hits: [indexer_impact]
+script:
+  - tool: context.request_more
+    agent: impl-agent
+    question: "does the search indexer re embed on embedding changes"
+    why_needed: "the pack covers the service and cache but not the index projection"
+    decision_needed: "whether the change requires a full re-index"
+    max_tokens: 1500
+agent_output:
+  claims:
+    - claim: "EmbeddingService.embed_chunks in embeddings/service.py writes the embedding cache"
+      evidence: [embeddings_service]
+    - claim: "repositories/embedding_cache.py reads cached vectors before any model call"
+      evidence: [embedding_cache_repo]
+    - claim: "indexing/projection.py re-embeds only changed chunks"
+      evidence: [indexer_impact]
+expected:
+  docs: [embeddings_service, embedding_cache_repo, indexer_impact]
+  files: ["embeddings/service.py", "repositories/embedding_cache.py", "indexing/projection.py"]
+  symbols: ["EmbeddingService"]
+  tests: []
+  open_questions: []

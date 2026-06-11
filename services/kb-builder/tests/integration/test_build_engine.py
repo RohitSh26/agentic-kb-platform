@@ -145,6 +145,10 @@ async def session(migrated_db: None) -> AsyncIterator[AsyncSession]:
     engine = create_async_engine(TEST_DATABASE_URL)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as sess:
+        # clean before AND after: the DB is shared (evals/mcp-server runs leave rows)
+        for table in TABLES_IN_DELETE_ORDER:
+            await sess.execute(text(f"DELETE FROM {table}"))
+        await sess.commit()
         yield sess
         await sess.rollback()
         for table in TABLES_IN_DELETE_ORDER:
