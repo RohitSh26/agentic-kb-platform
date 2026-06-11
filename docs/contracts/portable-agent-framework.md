@@ -28,7 +28,8 @@ For each canonical manifest, its rendering in each host format must carry:
    `ledger.list_retrievals`) never appear in a specialist rendering. In OpenCode the broker
    namespace is globally disabled (`"context-broker_*": false` in `opencode.json` `tools`) and
    re-enabled per agent, both in the agent file's `tools` map and in the `opencode.json`
-   per-agent override — the parity test pins both against the canon.
+   per-agent override — the parity test pins both against the canon. One documented exception:
+   the Copilot orchestrator additionally carries the host's `agent` tool (see Composition).
 2. **Budgets stated in the body.** The literal lines `max_context_calls: <n>` and
    `max_context_tokens: <n>`, with the same numbers the canonical frontmatter declares (which
    in turn must match `.claude/rules/token-budgets.md`).
@@ -46,6 +47,34 @@ to the canonical instruction body, which is otherwise reproduced **verbatim**. T
 states the truth that makes portability safe: the Context Broker enforces every limit
 server-side per authenticated subject — a host format that cannot express a budget loses only
 the documentation of the limit, never the limit itself.
+
+## Composition (native subagent + skill declarations)
+
+The renderings also declare the framework's composition in each host's **native fields**. The
+composition is fixed by the canon: the orchestrator invokes the five specialists; specialists
+never invoke anyone.
+
+| Role | May invoke (subagents) | Framework skills |
+|---|---|---|
+| orchestrator | the five specialists | `evidence-pack-orchestration` · `evidence-citation` |
+| the five specialists + template | none | `context-request-discipline` · `evidence-citation` |
+
+- **Copilot** (`*.agent.md`, VS Code custom-agent fields): the orchestrator declares
+  `agents: [<the five specialist names>]` and `handoffs:` whose targets are those same five
+  names; every specialist and the template declare `agents: []`. Because the `agents` field
+  requires it, the orchestrator's `tools` list carries `agent` **in addition to** its broker
+  tools — the single permitted exception to tool-parity item 1. It is a composition affordance,
+  not a data tool, and the parity test pins it to the orchestrator only. Copilot has no native
+  skills field, so skills stay README-mapped instruction modules. `handoffs` is VS Code-only
+  (the cloud agent ignores it).
+- **OpenCode** (`permission` frontmatter): every agent denies `"*"` for both `task` (launching
+  subagents) and `skill` (loading skills), then allow-lists exactly its row above. Subagent
+  identifiers are agent filenames (`implementation`, `test_layer`, `code_reviewer`,
+  `delivery_planner`, `pr_planner`); skill identifiers are shipped skill names.
+
+Skill assignment follows the canon: `context-request-discipline` only where the canon grants
+`context.request_more` (the five specialists, never the orchestrator);
+`evidence-pack-orchestration` only on the orchestrator; `evidence-citation` everywhere.
 
 ## Host validity rules
 

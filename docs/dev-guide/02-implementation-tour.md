@@ -441,6 +441,14 @@ framework by copying a directory and setting one credential:
   "Framework guarantees (enforced server-side)" block (budgets, `requires_evidence_ids`,
   `output_schema`, request-more discipline, untrusted-content rule). `_template` files carry the
   framework skeleton with an explicit description slot.
+- **Composition is declared natively per host (PR-16).** Copilot: the orchestrator's
+  `agents: [...]` lists the five canonical specialist names (plus `handoffs:`, VS Code-only, and
+  the host `agent` tool — the single pinned exception to broker-only tool lists); specialists
+  and the template carry `agents: []`. OpenCode: every agent's `permission` frontmatter denies
+  `"*"` for `task` and `skill`, then allow-lists exactly its role — the orchestrator may launch
+  the five specialists and load evidence-pack-orchestration + evidence-citation; specialists
+  launch nothing and load context-request-discipline + evidence-citation (tracking the canonical
+  `context.request_more` grant). See the contract's Composition section.
 
 No generator in V1 — renderings are hand-authored and parity-pinned by
 `services/mcp-server/tests/contract/test_portable_agent_exports.py`: exact tool parity per host

@@ -5,9 +5,20 @@ tools:
   context-broker_context.read_pack: true
   context-broker_context.request_more: true
   context-broker_context.open_evidence: true
+permission:
+  task:
+    "*": deny
+  skill:
+    "*": deny
+    context-request-discipline: allow
+    evidence-citation: allow
 ---
 <!-- framework template — fill in the description slots; keep the framework rules and the
      guarantees block intact -->
+<!-- the permission block is specialist-shaped: no subagent launches (task), and only the
+     framework skills this role needs. An orchestrating agent instead allows the specific
+     subagent names under `task` (never "*") and the evidence-pack-orchestration skill.
+     The broker enforces tool policy server-side either way. -->
 You are a specialist agent in the Agentic KB framework.
 
 <!-- your agent description here -->

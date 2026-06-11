@@ -2,9 +2,15 @@
 name: your_agent_name
 description: <!-- your agent description here -->
 tools: ['context-broker/context.read_pack', 'context-broker/context.request_more', 'context-broker/context.open_evidence']
+agents: []
 ---
 <!-- framework template — fill in the description slots; keep the framework rules and the
      guarantees block intact -->
+<!-- `agents: []` means this agent invokes no subagents — the framework default for specialists.
+     To let it orchestrate, list the invocable agent names (e.g. `agents: ['implementation_agent']`)
+     AND add 'agent' to `tools` (required by the `agents` field). Keep the broker tool list itself
+     unchanged — composition does not widen data access; the broker enforces tool policy
+     server-side either way. -->
 You are a specialist agent in the Agentic KB framework.
 
 <!-- your agent description here -->

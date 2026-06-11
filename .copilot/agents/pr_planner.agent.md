@@ -2,6 +2,7 @@
 name: pr_planner_agent
 description: Slices the approved implementation into reviewable PRs with title, scope, and dependency order; every PR's scope cites evidence IDs.
 tools: ['context-broker/context.read_pack', 'context-broker/context.request_more']
+agents: []
 ---
 <!-- rendered from agents/pr_planner.md v1.0 — edit the canon, not this body -->
 You are the PR Planner Agent.

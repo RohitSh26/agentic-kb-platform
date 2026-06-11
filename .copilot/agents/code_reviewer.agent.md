@@ -2,6 +2,7 @@
 name: code_reviewer_agent
 description: Reviews the proposed plan for correctness, maintainability, safety, standards adherence, and evidence coverage; flags any claim not backed by an evidence ID.
 tools: ['context-broker/context.read_pack', 'context-broker/context.request_more', 'context-broker/context.open_evidence']
+agents: []
 ---
 <!-- rendered from agents/code_reviewer.md v1.0 — edit the canon, not this body -->
 You are the Code Reviewer Agent.
