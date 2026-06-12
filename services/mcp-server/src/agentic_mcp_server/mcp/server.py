@@ -4,6 +4,8 @@ The tool surface is registered exclusively from TOOL_SCHEMAS, so a tool cannot
 exist at this boundary without a versioned schema.
 """
 
+import logging
+
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -12,6 +14,7 @@ from starlette.responses import JSONResponse
 
 from agentic_mcp_server.auth import build_entra_verifier
 from agentic_mcp_server.config import SERVER_NAME, load_config
+from agentic_mcp_server.context_broker.budgets import BudgetPolicy, parse_agent_allowances
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps, BrokerSettings
 from agentic_mcp_server.health import health
 from agentic_mcp_server.infrastructure.postgres.keyword_search import PostgresKeywordSearchClient
@@ -24,6 +27,8 @@ from agentic_mcp_server.mcp.tool_handlers import make_handlers
 from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 from agentic_mcp_server.telemetry import TelemetryMiddleware
 
+logger = logging.getLogger(__name__)
+
 
 def build_server(
     *,
@@ -31,11 +36,13 @@ def build_server(
     session_factory: async_sessionmaker[AsyncSession],
     search_client: SearchClient | None = None,
     settings: BrokerSettings | None = None,
+    budget_policy: BudgetPolicy | None = None,
 ) -> FastMCP:
     deps = BrokerDeps(
         session_factory=session_factory,
         search_client=search_client or PostgresKeywordSearchClient(session_factory),
         settings=settings or BrokerSettings(),
+        budget_policy=budget_policy or BudgetPolicy(),
     )
     server = FastMCP(name=SERVER_NAME, auth=auth, middleware=[TelemetryMiddleware()])
 
@@ -55,8 +62,11 @@ def build_server(
 def create_app() -> FastMCP:
     """Production entrypoint: Entra ID auth + registry-backed health."""
     config = load_config()
+    allowances = parse_agent_allowances(config.agent_allowances_json)
+    logger.info("event=agent_allowances_loaded subjects=%d", len(allowances))
     engine = create_engine(config.database_url)
     return build_server(
         auth=build_entra_verifier(config),
         session_factory=create_session_factory(engine),
+        budget_policy=BudgetPolicy(allowances=allowances),
     )

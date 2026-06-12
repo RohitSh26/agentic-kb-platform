@@ -23,7 +23,13 @@ _CREDENTIAL_LITERALS = re.compile(
 
 def test_server_config_has_no_secret_shaped_fields() -> None:
     names = {field.name for field in fields(ServerConfig)}
-    assert names == {"database_url", "entra_tenant_id", "entra_audience"}
+    # agent_allowances_json holds subjects + integer allowances: identifiers only
+    assert names == {
+        "database_url",
+        "entra_tenant_id",
+        "entra_audience",
+        "agent_allowances_json",
+    }
     for name in names:
         assert not any(token in name for token in _FORBIDDEN_FIELD_TOKENS)
 

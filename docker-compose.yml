@@ -50,6 +50,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agentic_kb
       MCP_ENTRA_TENANT_ID: ${MCP_ENTRA_TENANT_ID:-00000000-0000-0000-0000-000000000000}
       MCP_ENTRA_AUDIENCE: ${MCP_ENTRA_AUDIENCE:-api://agentic-kb-local}
+      # optional subject -> allowance JSON (identifiers only); empty = defaults
+      MCP_AGENT_ALLOWANCES: ${MCP_AGENT_ALLOWANCES:-}
     ports:
       - "${MCP_HOST_PORT:-8000}:8000"
     depends_on:

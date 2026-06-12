@@ -63,6 +63,13 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   `request_more`, and `open_evidence` charge the budgets they consume.
   `open_evidence` enforces both the per-run budget **and** the per-agent token
   allowance; exceeding either ⇒ tool error plus a `denied` ledger row.
+- Per-agent allowances are keyed by the **authenticated session subject** and
+  supplied per deployment via the optional `MCP_AGENT_ALLOWANCES` env var — a
+  JSON object `{subject: {max_requests, max_tokens}}` (identifiers only, never
+  secrets). Unlisted subjects get the conservative default (1 request / 2,500
+  tokens). `max_requests: 0` is valid and means the subject may never
+  `request_more`. Malformed config (bad JSON, padded or duplicate subject
+  keys, non-integer values) fails the boot — it never silently defaults.
 - `context.open_evidence` returns the raw text in `untrusted_content` plus
   `tokens_used`, `budget_remaining_tokens`, `source_uri`.
 - Evidence card `title` and `summary` fields are derived from retrieved

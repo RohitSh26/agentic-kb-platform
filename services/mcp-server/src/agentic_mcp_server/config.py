@@ -16,6 +16,9 @@ class ServerConfig:
     database_url: str
     entra_tenant_id: str
     entra_audience: str
+    # raw MCP_AGENT_ALLOWANCES value (subject -> allowance JSON); optional —
+    # parsed fail-fast by context_broker.budgets.parse_agent_allowances
+    agent_allowances_json: str | None = None
 
 
 def load_config() -> ServerConfig:
@@ -30,4 +33,5 @@ def load_config() -> ServerConfig:
         database_url=os.environ["DATABASE_URL"],
         entra_tenant_id=os.environ["MCP_ENTRA_TENANT_ID"],
         entra_audience=os.environ["MCP_ENTRA_AUDIENCE"],
+        agent_allowances_json=os.environ.get("MCP_AGENT_ALLOWANCES"),
     )
