@@ -321,7 +321,10 @@ the broker never branches on the value.
 - `budgets.py` / `state.py` — server-side enforcement primitives. `EvidencePackState` carries a
   per-pack `asyncio.Lock` that serializes check-then-charge (no TOCTOU double-spend); `PackStore`
   is a bounded in-process cache (FIFO, 256 packs) — the ledger, not the pack, is the durable
-  record.
+  record. Since PR-19, the per-subject allowance map is deployment config: the optional
+  `MCP_AGENT_ALLOWANCES` env var (JSON `{subject: {max_requests, max_tokens}}`) is parsed
+  fail-fast by `parse_agent_allowances` at boot — adopting teams grant their own agents their
+  own allowances without touching server code; unlisted subjects keep the conservative default.
 - `dedupe.py` — deterministic normalized-token similarity (no embeddings in the broker, V1).
 - `graph.py` — depth/fan-out-capped BFS over `knowledge_edge`; titles + edge metadata only.
 - `ledger.py` + `audit.py` — every call writes a `retrieval_event` row, including failures

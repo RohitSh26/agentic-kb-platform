@@ -27,7 +27,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_mcp_server.auth.rbac import Requester
-from agentic_mcp_server.context_broker.budgets import AgentAllowance, BudgetPolicy
+from agentic_mcp_server.context_broker.budgets import (
+    AgentAllowance,
+    BudgetPolicy,
+    parse_agent_allowances,
+)
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.evidence import open_evidence
 from agentic_mcp_server.context_broker.ledger import list_retrievals
@@ -361,6 +365,58 @@ async def test_request_more_denied_when_request_allowance_is_exhausted(
     async with factory() as session:
         rows = await fetch_ledger_rows(session, RUN_ID)
     assert rows[-1].status == "denied"
+
+
+async def test_configured_allowance_from_deployment_json_raises_the_request_cap(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """MCP_AGENT_ALLOWANCES is real enforcement: the second follow-up the default
+    policy denies is approved when deployment config grants it — and the third
+    is denied, proving the cap moved rather than vanished."""
+    policy = BudgetPolicy(
+        allowances=parse_agent_allowances(
+            '{"impl-agent": {"max_requests": 2, "max_tokens": 100000}}'
+        )
+    )
+    deps, pack_id, _ = await _pack_with_refund_follow_up(factory, budget_policy=policy)
+    async with factory() as session:
+        webhook_id = await insert_artifact(
+            session,
+            title="Webhook signature verification",
+            body_text="Webhook signatures are verified in webhooks/verify.py using HMAC.",
+        )
+    assert isinstance(deps.search_client, FakeSearchClient)
+    deps.search_client.seed("webhook", [SearchHit(artifact_id=webhook_id, score=2.0)])
+
+    first = await request_more(
+        deps,
+        _request_more("how does refund processing work in checkout", max_tokens=500).model_copy(
+            update={"context_pack_id": pack_id}
+        ),
+        REQUESTER,
+    )
+    assert first.status == "approved"
+
+    second = await request_more(
+        deps,
+        _request_more("where are webhook signatures verified", max_tokens=500).model_copy(
+            update={"context_pack_id": pack_id}
+        ),
+        REQUESTER,
+    )
+    assert second.status == "approved"
+    assert [c.evidence_id for c in second.new_evidence_cards] == [str(webhook_id)]
+
+    third = await request_more(
+        deps,
+        _request_more("how are chargebacks reconciled", max_tokens=500).model_copy(
+            update={"context_pack_id": pack_id}
+        ),
+        REQUESTER,
+    )
+    assert third.status == "denied"
+    assert third.denial_reason is not None
+    assert "request allowance exhausted" in third.denial_reason
 
 
 async def test_request_more_denied_when_token_allowance_would_be_exceeded(
