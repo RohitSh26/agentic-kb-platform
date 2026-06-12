@@ -464,6 +464,14 @@ secret scan (markers absent **and** every Authorization header value matches a
 reference-by-name pattern). Enforcement remains server-side either way — a host format that
 cannot express a budget loses only the documentation of the limit, never the limit itself.
 
+Since PR-20 the pinning model is **pinned minimum + whatever exists**: the six roles and three
+skills must always be present, and every manifest *discovered* in `agents/` — including agents
+an adopting team adds — is held to the same checklist (composition is structural: the
+`context.create_pack` grant decides who may launch subagents and be `mode: primary`).
+`agents/check_parity.py` is the standalone stdlib-only checker adopters run over copied trees;
+the contract suite smoke-tests it by subprocess (exit 0 on this repo, exit 1 on seeded tool
+drift or a literal-looking credential) and proves a parity-clean seventh agent passes.
+
 ## 16. What does not exist yet
 
 - Real connector backends (network I/O) — the configured source set (`sources.yaml`, PR-14) and
