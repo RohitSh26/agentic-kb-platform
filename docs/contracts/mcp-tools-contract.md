@@ -3,9 +3,11 @@
 > Versioned tool surface served by mcp-server. Schema before code: every tool
 > has a frozen pydantic request/response model (`extra="forbid"`) in
 > `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`, registered in
-> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.1.0"` (1.1.0 = PR-13:
+> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.2.0"` (1.1.0 = PR-13:
 > `authorization` decision on every retrieval response, `injection_*` markers
-> on cards and expansions).
+> on cards and expansions; 1.2.0 = PR-18: `read_pack.role` opened from the
+> closed six-role enum to a free-form charset-guarded string — response
+> consumers may now receive team-defined role values).
 
 ## The six V1 tools
 
@@ -30,6 +32,10 @@ There is **no** generic unrestricted `kb.search` tool in V1.
 - `context.open_evidence`: `context_pack_id`, `evidence_id`, `max_tokens`.
 - `graph.get_neighbors`: `artifact_id`, optional `edge_types[]`, `depth` 1–3.
 - `run_id` matches `^[A-Za-z0-9._-]{1,128}$` (log-injection guard).
+- `context.read_pack.role` is **free-form** — adopting teams name their own
+  roles (`security_auditor` is as valid as `implementation`); the broker never
+  branches on it. It matches `^[A-Za-z0-9._-]{1,64}$` because the value lands
+  verbatim in `key=value` audit logs (same forgery guard as `run_id`).
 - `agent_name` / `role` are correlation/view fields only; identity binds to the
   authenticated session (Entra ID bearer token), never to the request body.
 

@@ -43,10 +43,10 @@ class CreatePackResponse(McpModel):
 class ReadPackRequest(McpModel):
     """Role-specific view of a pack.
 
-    `role` selects a *view* only. Authorization, ledger attribution, and
-    per-agent budget identity always come from the authenticated MCP session,
-    never from request fields — a spoofed role must not grant another role's
-    access.
+    `role` selects a *view* only and is free-form — adopting teams name their
+    own roles. Authorization, ledger attribution, and per-agent budget identity
+    always come from the authenticated MCP session, never from request fields —
+    a spoofed role must not grant another role's access.
     """
 
     context_pack_id: str = Field(min_length=1)

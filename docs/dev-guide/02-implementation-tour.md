@@ -300,7 +300,10 @@ lifespan's anyio cancel scope must enter/exit in one task.
 ## 11. Context Broker (`services/mcp-server/src/agentic_mcp_server/context_broker/`)
 
 The policy layer behind the six tools (PR-10). Identity is always the authenticated session
-subject — `agent_name`/`role` request fields are correlation/view data only.
+subject — `agent_name`/`role` request fields are correlation/view data only. Since PR-18 the
+`role` field is free-form (charset-guarded like `run_id`, since it lands in audit logs): a
+team-defined `security_auditor` reads the shared pack exactly like a canonical role, because
+the broker never branches on the value.
 
 - `pack.py` — `create_pack` retrieves once per run from `task + approved_context_plan`, builds
   L0/L1 evidence cards, and records the query in the pack's dedupe history; `read_pack` is free
@@ -387,7 +390,7 @@ requires Azure.
 ## 14. Security hardening (PR-13)
 
 The runtime plane's trust boundary, contract in `docs/contracts/mcp-tools-contract.md`
-(`MCP_SCHEMA_VERSION` 1.1.0). Three layers, all server-side — prompts enforce nothing:
+(`MCP_SCHEMA_VERSION` 1.2.0). Three layers, all server-side — prompts enforce nothing:
 
 - **`auth/rbac.py`** — `Requester` (subject + frozen team set, derived solely from the verified
   token's `groups`/`roles` claims via `teams_from_claims`; request-body fields can never name an
