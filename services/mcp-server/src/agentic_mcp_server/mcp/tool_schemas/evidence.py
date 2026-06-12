@@ -6,7 +6,7 @@ context.open_evidence with an explicit token cap.
 """
 
 import uuid
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -14,14 +14,11 @@ from agentic_mcp_server.mcp.tool_schemas.base import McpModel
 
 EvidenceLevel = Literal["L0", "L1", "L2", "L3", "L4"]
 
-AgentRole = Literal[
-    "orchestrator",
-    "implementation",
-    "test",
-    "code_reviewer",
-    "delivery_planner",
-    "pr_planner",
-]
+# Free-form so adopting teams can bring their own roles — the broker never
+# branches on it (identity binds to the authenticated session). Charset-guarded
+# like run_id: the value lands verbatim in key=value audit logs, so spaces,
+# newlines, '=' and quotes must stay unrepresentable (log-line forgery guard).
+AgentRole = Annotated[str, Field(pattern=r"^[A-Za-z0-9._-]{1,64}$")]
 
 
 class AuthorizationDecision(McpModel):

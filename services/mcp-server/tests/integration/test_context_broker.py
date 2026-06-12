@@ -218,6 +218,29 @@ async def test_read_pack_is_free_and_writes_reused_row(
     assert rows[1].agent_name == "test-agent"
 
 
+async def test_read_pack_serves_team_defined_roles(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The framework is the product: a role the platform never shipped reads the
+    shared pack like any canonical one — the broker never branches on role."""
+    search = FakeSearchClient()
+    async with factory() as session:
+        await _seed_payment_artifact(session, search)
+    deps = make_broker_deps(factory, search)
+    created = await create_pack(deps, _create_pack_request(), REQUESTER)
+
+    response = await read_pack(
+        deps,
+        ReadPackRequest(context_pack_id=created.context_pack_id, role="security_auditor"),
+        Requester(subject="security-auditor-agent", teams=frozenset()),
+    )
+
+    assert response.role == "security_auditor"
+    assert [c.evidence_id for c in response.evidence_cards] == [
+        c.evidence_id for c in created.evidence_cards
+    ]
+
+
 async def test_read_pack_unknown_pack_errors(factory: async_sessionmaker[AsyncSession]) -> None:
     deps = make_broker_deps(factory, FakeSearchClient())
     with pytest.raises(ToolError, match="unknown context_pack_id"):

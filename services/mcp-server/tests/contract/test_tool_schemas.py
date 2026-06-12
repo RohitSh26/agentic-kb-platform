@@ -13,6 +13,7 @@ from agentic_mcp_server.mcp.tool_schemas import (
     EvidenceCard,
     ListRetrievalsRequest,
     OpenEvidenceResponse,
+    ReadPackRequest,
     RequestMoreRequest,
     RequestMoreResponse,
     RequestMoreStatus,
@@ -47,6 +48,23 @@ def test_request_more_requires_full_justification() -> None:
                 # why_needed / decision_needed / already_checked / max_tokens missing
             }
         )
+
+
+def test_read_pack_role_is_open_to_team_defined_agents() -> None:
+    """The framework is the product: a team's own role name must validate."""
+    for role in ("security_auditor", "orchestrator", "implementation", "sre.oncall-v2", "x" * 64):
+        assert ReadPackRequest(context_pack_id="pack-1", role=role).role == role
+
+
+def test_read_pack_role_rejects_log_injection_charsets() -> None:
+    """role lands verbatim in key=value audit logs — same guard as run_id.
+
+    The trailing-newline case pins pydantic-core's strict end-of-text `$`:
+    Python's re engine would let "x\\n" through and break the log line.
+    """
+    for bad in ("a b", "x\nstatus=ok", "security_auditor\n", "r=1", 'r"1', "", "x" * 65):
+        with pytest.raises(ValidationError):
+            ReadPackRequest(context_pack_id="pack-1", role=bad)
 
 
 def test_run_id_rejects_log_injection_charsets() -> None:
