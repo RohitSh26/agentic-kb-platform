@@ -7,6 +7,10 @@ rendering preserves the canon's tool access, budgets, and framework rules. Do no
 rendered instruction bodies here — change `agents/*.md` and the tests will force this rendering
 to follow. The parity checklist lives in `docs/contracts/portable-agent-framework.md`.
 
+You can add your own agents next to the framework's six (canon manifest in `agents/`, a
+rendering here, an `opencode.json` entry) — run `python agents/check_parity.py` to verify your
+whole tree stays parity-clean without this repo's test suite (stdlib-only, CI-friendly).
+
 ## Where each file goes (OpenCode discovery locations)
 
 | File here | Where OpenCode looks for it |

@@ -2,14 +2,25 @@
 
 The canonical manifests in agents/ are the source of truth for tool access,
 budgets, and instruction content. The host-native renderings are hand-authored,
-so these contract tests are what keep them honest: tool lists exact-match the
-canonical allowed_tools, budgets/evidence rules/output schemas appear in every
-rendered body, host validity rules hold, and no shipped file ever carries a
-token value (contract: docs/contracts/portable-agent-framework.md).
+so these contract tests are what keep them honest. The pinning model is
+**pinned minimum + whatever exists**: the framework's six roles and three
+skills must always be present, and every manifest *discovered* in agents/ —
+including agents an adopting team adds later — must pass the same parity
+checks: tool lists exact-match the canonical allowed_tools, budgets/evidence
+rules/output schemas appear in every rendered body, host validity rules hold,
+and no shipped file ever carries a token value
+(contract: docs/contracts/portable-agent-framework.md).
+
+Adopters who copy only the trees get the same verification from the shipped
+standalone checker, agents/check_parity.py — smoke-tested here by subprocess
+(never imported: services do not import root files, ADR-0008).
 """
 
 import json
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,7 +30,8 @@ AGENTS_DIR = REPO_ROOT / "agents"
 OPENCODE_DIR = REPO_ROOT / ".opencode"
 COPILOT_DIR = REPO_ROOT / ".copilot"
 
-ROLES = (
+# the framework minimum: these must exist; teams may add more next to them
+PINNED_ROLES = (
     "orchestrator",
     "implementation",
     "test_layer",
@@ -27,10 +39,8 @@ ROLES = (
     "delivery_planner",
     "pr_planner",
 )
-SPECIALISTS = tuple(role for role in ROLES if role != "orchestrator")
-SKILLS = ("evidence-pack-orchestration", "context-request-discipline", "evidence-citation")
-ORCHESTRATOR_SKILLS = ("evidence-pack-orchestration", "evidence-citation")
-SPECIALIST_SKILLS = ("context-request-discipline", "evidence-citation")
+PINNED_SPECIALISTS = tuple(role for role in PINNED_ROLES if role != "orchestrator")
+PINNED_SKILLS = ("evidence-pack-orchestration", "context-request-discipline", "evidence-citation")
 OPENCODE_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 COPILOT_MAX_BODY_CHARS = 30_000
 REQUEST_MORE_FIELDS = ("question", "why_needed", "decision_needed", "already_checked", "max_tokens")
@@ -153,6 +163,22 @@ def _read(path: Path) -> tuple[dict[str, object], str]:
     return _parse_fields(frontmatter, path), body
 
 
+def _discovered_roles() -> tuple[str, ...]:
+    roles = tuple(
+        sorted(
+            p.stem
+            for p in AGENTS_DIR.glob("*.md")
+            if p.name != "README.md" and not p.name.startswith("_")
+        )
+    )
+    assert roles, "no agent manifests discovered"
+    return roles
+
+
+def _discovered_skills() -> tuple[str, ...]:
+    return tuple(sorted(p.name for p in (OPENCODE_DIR / "skills").iterdir() if p.is_dir()))
+
+
 def _canon(role: str) -> tuple[dict[str, object], str]:
     return _read(AGENTS_DIR / f"{role}.md")
 
@@ -161,6 +187,10 @@ def _canon_tools(role: str) -> list[str]:
     tools = _canon(role)[0]["allowed_tools"]
     assert isinstance(tools, list) and tools
     return tools
+
+
+def _creates_packs(role: str) -> bool:
+    return "context.create_pack" in _canon_tools(role)
 
 
 def _opencode_agent(role: str) -> tuple[dict[str, object], str]:
@@ -186,11 +216,19 @@ def _shipped_files() -> list[Path]:
     return files
 
 
-# --- parity: every rendering preserves the canon ---------------------------------------------
+# --- the framework minimum is pinned ----------------------------------------------------------
 
 
-def test_all_six_manifests_exist_in_both_renderings_plus_templates() -> None:
-    for role in ROLES:
+def test_the_six_pinned_roles_and_three_pinned_skills_always_exist() -> None:
+    assert set(PINNED_ROLES) <= set(_discovered_roles()), "a framework role was removed"
+    assert set(PINNED_SKILLS) <= set(_discovered_skills()), "a framework skill was removed"
+
+
+# --- parity: every discovered rendering preserves the canon ------------------------------------
+
+
+def test_every_discovered_manifest_exists_in_both_renderings_plus_templates() -> None:
+    for role in _discovered_roles():
         assert (OPENCODE_DIR / "agents" / f"{role}.md").is_file(), f"opencode missing {role}"
         assert (COPILOT_DIR / "agents" / f"{role}.agent.md").is_file(), f"copilot missing {role}"
     assert (OPENCODE_DIR / "agents" / "_template.md").is_file()
@@ -198,7 +236,7 @@ def test_all_six_manifests_exist_in_both_renderings_plus_templates() -> None:
 
 
 def test_opencode_frontmatter_tools_exactly_match_canonical_allowed_tools() -> None:
-    for role in ROLES:
+    for role in _discovered_roles():
         expected = [f"context-broker_{tool}" for tool in _canon_tools(role)]
         tools = _opencode_agent(role)[0]["tools"]
         assert isinstance(tools, dict), f"{role}: opencode tools must be a map"
@@ -210,46 +248,49 @@ def test_opencode_json_per_agent_tools_exactly_match_canonical_allowed_tools() -
     config = json.loads((OPENCODE_DIR / "opencode.json").read_text())
     assert config["tools"] == {"context-broker_*": False}, "broker namespace must default off"
     agents = config["agent"]
-    assert set(agents) == set(ROLES)
-    for role in ROLES:
+    assert set(agents) == set(_discovered_roles()), (
+        "opencode.json agent entries must cover exactly the manifests in agents/"
+    )
+    for role in _discovered_roles():
         expected = {f"context-broker_{tool}": True for tool in _canon_tools(role)}
         assert agents[role]["tools"] == expected, f"{role}: opencode.json drifted from canon"
 
 
 def test_copilot_frontmatter_tools_exactly_match_canonical_allowed_tools() -> None:
-    for role in ROLES:
+    for role in _discovered_roles():
+        fields, _ = _copilot_agent(role)
         expected = [f"context-broker/{tool}" for tool in _canon_tools(role)]
-        if role == "orchestrator":
+        if fields.get("agents"):
             # the `agents` field requires the host `agent` tool — the single pinned
             # exception to broker-only tool lists (composition, not a data tool)
             expected.append("agent")
-        fields, _ = _copilot_agent(role)
         assert fields["tools"] == expected, f"{role}: copilot tools drifted from canon"
         assert fields["name"] == _canon(role)[0]["name"], f"{role}: copilot name drifted"
 
 
-def test_orchestrator_only_tools_never_leak_to_specialists() -> None:
-    for role in ROLES:
-        if role == "orchestrator":
-            continue
+def test_pack_creation_and_ledger_never_leak_beyond_their_canonical_grants() -> None:
+    for role in _discovered_roles():
+        canon_tools = _canon_tools(role)
         renderings = (("opencode", _opencode_agent(role)[0]), ("copilot", _copilot_agent(role)[0]))
         for host, fields in renderings:
             tools = fields["tools"]
             assert isinstance(tools, list | dict)
             rendered = list(tools)
-            assert not any("create_pack" in t for t in rendered), f"{host}/{role}: pack leaked"
-            assert not any("ledger." in t for t in rendered), f"{host}/{role}: ledger leaked"
+            if "context.create_pack" not in canon_tools:
+                assert not any("create_pack" in t for t in rendered), f"{host}/{role}: pack leaked"
+            if "ledger.list_retrievals" not in canon_tools:
+                assert not any("ledger." in t for t in rendered), f"{host}/{role}: ledger leaked"
 
 
 def test_rendered_bodies_contain_the_canonical_instruction_body_verbatim() -> None:
-    for role in ROLES:
+    for role in _discovered_roles():
         canonical_body = _canon(role)[1].strip()
         for host, body in _rendered_bodies(role).items():
             assert canonical_body in body, f"{host}/{role}: canonical body not verbatim"
 
 
 def test_budget_numbers_in_every_rendered_body_match_the_canon() -> None:
-    for role in ROLES:
+    for role in _discovered_roles():
         fields = _canon(role)[0]
         for host, body in _rendered_bodies(role).items():
             assert f"max_context_calls: {fields['max_context_calls']}" in body, f"{host}/{role}"
@@ -257,7 +298,7 @@ def test_budget_numbers_in_every_rendered_body_match_the_canon() -> None:
 
 
 def test_evidence_id_rule_in_every_rendered_body() -> None:
-    for role in ROLES:
+    for role in _discovered_roles():
         for host, body in _rendered_bodies(role).items():
             lowered = body.lower()
             assert "evidence id" in lowered, f"{host}/{role}: evidence-ID rule missing"
@@ -265,20 +306,20 @@ def test_evidence_id_rule_in_every_rendered_body() -> None:
 
 
 def test_request_more_field_discipline_in_every_rendered_body() -> None:
-    for role in ROLES:
+    for role in _discovered_roles():
         for host, body in _rendered_bodies(role).items():
             for field in REQUEST_MORE_FIELDS:
                 assert field in body, f"{host}/{role}: request_more field {field} missing"
 
 
 def test_untrusted_content_rule_in_every_rendered_body() -> None:
-    for role in ROLES:
+    for role in _discovered_roles():
         for host, body in _rendered_bodies(role).items():
             assert "untrusted" in body.lower(), f"{host}/{role}: untrusted-content rule missing"
 
 
 def test_output_schema_named_in_every_rendered_body() -> None:
-    for role in ROLES:
+    for role in _discovered_roles():
         schema = _canon(role)[0]["output_schema"]
         assert isinstance(schema, str)
         for host, body in _rendered_bodies(role).items():
@@ -286,7 +327,7 @@ def test_output_schema_named_in_every_rendered_body() -> None:
 
 
 def test_provenance_comment_in_every_rendered_body() -> None:
-    for role in ROLES:
+    for role in _discovered_roles():
         for host, body in _rendered_bodies(role).items():
             assert f"<!-- rendered from agents/{role}.md" in body, (
                 f"{host}/{role}: provenance comment missing"
@@ -296,7 +337,7 @@ def test_provenance_comment_in_every_rendered_body() -> None:
 def test_copilot_repository_settings_allowlist_is_the_union_of_canonical_tools() -> None:
     config = json.loads((COPILOT_DIR / "mcp" / "repository-settings.json").read_text())
     allowed = config["mcpServers"]["context-broker"]["tools"]
-    expected = sorted({tool for role in ROLES for tool in _canon_tools(role)})
+    expected = sorted({tool for role in _discovered_roles() for tool in _canon_tools(role)})
     assert allowed != ["*"], "server-level allowlist must enumerate tools, not expose everything"
     assert sorted(allowed) == expected, "repository-settings allowlist drifted from canon union"
 
@@ -304,51 +345,63 @@ def test_copilot_repository_settings_allowlist_is_the_union_of_canonical_tools()
 # --- composition: native subagent + skill declarations ---------------------------------------
 
 
-def test_copilot_orchestrator_agents_field_lists_exactly_the_five_specialists() -> None:
+def test_copilot_orchestrator_agents_field_includes_the_five_pinned_specialists() -> None:
     fields, _ = _copilot_agent("orchestrator")
-    expected = [_canon(role)[0]["name"] for role in SPECIALISTS]
-    assert fields["agents"] == expected, "orchestrator agents drifted from canonical names"
+    agents = fields["agents"]
+    assert isinstance(agents, list)
+    pinned = [_canon(role)[0]["name"] for role in PINNED_SPECIALISTS]
+    assert set(pinned) <= set(agents), "a pinned specialist left the orchestrator's agents list"
+    canonical_names = {_canon(role)[0]["name"] for role in _discovered_roles()}
+    assert set(agents) <= canonical_names, "orchestrator declares a non-canonical subagent"
 
 
-def test_copilot_specialists_and_template_declare_no_subagents() -> None:
-    for name in (*(f"{role}.agent.md" for role in SPECIALISTS), "_template.agent.md"):
+def test_copilot_non_pack_creators_and_template_declare_no_subagents() -> None:
+    names = [f"{role}.agent.md" for role in _discovered_roles() if not _creates_packs(role)]
+    for name in (*names, "_template.agent.md"):
         fields, _ = _read(COPILOT_DIR / "agents" / name)
         assert fields["agents"] == [], f"{name}: specialists never spawn — agents must be []"
-        assert "handoffs" not in fields, f"{name}: handoffs are orchestrator-only"
+        assert "handoffs" not in fields, f"{name}: handoffs are pack-creator-only"
         tools = fields["tools"]
         assert isinstance(tools, list) and "agent" not in tools, f"{name}: agent tool leaked"
 
 
-def test_copilot_handoff_targets_are_the_declared_specialists_and_do_not_autosend() -> None:
-    fields, _ = _copilot_agent("orchestrator")
-    handoffs = fields["handoffs"]
-    assert isinstance(handoffs, list) and len(handoffs) == len(SPECIALISTS)
-    assert [h["agent"] for h in handoffs] == fields["agents"], "handoff target not declared"
-    for handoff in handoffs:
-        assert handoff.get("label") and handoff.get("prompt"), "handoff needs label + prompt"
-        assert handoff.get("send") == "false", "handoffs must not auto-send"
+def test_copilot_handoff_targets_are_the_declared_agents_and_do_not_autosend() -> None:
+    for role in _discovered_roles():
+        fields, _ = _copilot_agent(role)
+        agents = fields.get("agents")
+        if not agents:
+            continue
+        handoffs = fields["handoffs"]
+        assert isinstance(handoffs, list)
+        assert [h["agent"] for h in handoffs] == agents, f"{role}: handoff target not declared"
+        for handoff in handoffs:
+            assert handoff.get("label") and handoff.get("prompt"), "handoff needs label + prompt"
+            assert handoff.get("send") == "false", "handoffs must not auto-send"
 
 
-def test_opencode_orchestrator_task_permission_allows_exactly_the_five_specialists() -> None:
+def test_opencode_orchestrator_task_permission_includes_the_five_pinned_specialists() -> None:
     permission = _opencode_agent("orchestrator")[0]["permission"]
     assert isinstance(permission, dict)
     task = permission["task"]
     assert isinstance(task, dict)
     assert task.get("*") == "deny", "task permission must deny by default"
     allowed = {key: value for key, value in task.items() if key != "*"}
-    assert allowed == {role: "allow" for role in SPECIALISTS}, "task allowlist drifted"
+    assert all(value == "allow" for value in allowed.values()), "non-allow task entry"
+    assert set(PINNED_SPECIALISTS) <= set(allowed), "a pinned specialist left the task allowlist"
+    assert set(allowed) <= set(_discovered_roles()), "task target is not a manifest in agents/"
 
 
-def test_opencode_specialists_and_template_deny_all_task_launches() -> None:
-    for name in (*SPECIALISTS, "_template"):
+def test_opencode_non_pack_creators_and_template_deny_all_task_launches() -> None:
+    names = [role for role in _discovered_roles() if not _creates_packs(role)]
+    for name in (*names, "_template"):
         fields, _ = _read(OPENCODE_DIR / "agents" / f"{name}.md")
         permission = fields["permission"]
         assert isinstance(permission, dict)
         assert permission["task"] == {"*": "deny"}, f"{name}: specialists never launch subagents"
 
 
-def test_opencode_skill_permissions_deny_by_default_and_match_the_role() -> None:
-    for name in (*ROLES, "_template"):
+def test_opencode_skill_permissions_deny_by_default_and_track_the_canonical_grants() -> None:
+    for name in (*_discovered_roles(), "_template"):
         fields, _ = _read(OPENCODE_DIR / "agents" / f"{name}.md")
         permission = fields["permission"]
         assert isinstance(permission, dict)
@@ -357,13 +410,21 @@ def test_opencode_skill_permissions_deny_by_default_and_match_the_role() -> None
         assert skill.get("*") == "deny", f"{name}: skill permission must deny by default"
         allowed = [key for key, value in skill.items() if key != "*"]
         assert all(skill[key] == "allow" for key in allowed), f"{name}: non-allow skill entry"
-        expected = ORCHESTRATOR_SKILLS if name == "orchestrator" else SPECIALIST_SKILLS
-        assert allowed == list(expected), f"{name}: skill allowlist drifted from the role"
-        assert set(allowed) <= set(SKILLS), f"{name}: skill allow-key is not a shipped skill"
+        assert set(allowed) <= set(_discovered_skills()), f"{name}: allow-key not a shipped skill"
+        assert "evidence-citation" in allowed, f"{name}: evidence-citation is framework-wide"
+        if name == "_template":
+            tools = fields["tools"]
+            assert isinstance(tools, dict)
+            creates_packs = "context-broker_context.create_pack" in tools
+        else:
+            creates_packs = _creates_packs(name)
+        assert ("evidence-pack-orchestration" in allowed) == creates_packs, (
+            f"{name}: evidence-pack-orchestration must track the create_pack grant"
+        )
 
 
 def test_request_discipline_skill_tracks_the_request_more_grant() -> None:
-    for name in (*ROLES, "_template"):
+    for name in (*_discovered_roles(), "_template"):
         fields, _ = _read(OPENCODE_DIR / "agents" / f"{name}.md")
         permission = fields["permission"]
         assert isinstance(permission, dict)
@@ -384,9 +445,9 @@ def test_request_discipline_skill_tracks_the_request_more_grant() -> None:
 # --- validity: each rendering is well-formed for its host ------------------------------------
 
 
-def test_opencode_modes_are_primary_for_orchestrator_and_subagent_for_the_rest() -> None:
-    for role in ROLES:
-        expected = "primary" if role == "orchestrator" else "subagent"
+def test_opencode_modes_are_primary_for_pack_creators_and_subagent_for_the_rest() -> None:
+    for role in _discovered_roles():
+        expected = "primary" if _creates_packs(role) else "subagent"
         assert _opencode_agent(role)[0]["mode"] == expected, f"{role}: wrong opencode mode"
     template, _ = _read(OPENCODE_DIR / "agents" / "_template.md")
     assert template["mode"] == "subagent"
@@ -394,8 +455,7 @@ def test_opencode_modes_are_primary_for_orchestrator_and_subagent_for_the_rest()
 
 def test_opencode_skills_follow_the_naming_rules() -> None:
     skills_dir = OPENCODE_DIR / "skills"
-    assert {p.name for p in skills_dir.iterdir() if p.is_dir()} == set(SKILLS)
-    for skill in SKILLS:
+    for skill in _discovered_skills():
         fields, body = _read(skills_dir / skill / "SKILL.md")
         name = fields["name"]
         assert name == skill, f"{skill}: SKILL.md name must match its directory"
@@ -407,8 +467,10 @@ def test_opencode_skills_follow_the_naming_rules() -> None:
         assert body.strip(), f"{skill}: empty skill body"
 
 
-def test_copilot_skill_modules_exist_for_the_same_three_procedures() -> None:
-    for skill in SKILLS:
+def test_copilot_skill_modules_mirror_the_opencode_skill_set() -> None:
+    copilot_set = {p.stem for p in (COPILOT_DIR / "skills").glob("*.md")}
+    assert copilot_set == set(_discovered_skills()), "skill sets differ between renderings"
+    for skill in _discovered_skills():
         path = COPILOT_DIR / "skills" / f"{skill}.md"
         assert path.is_file() and path.read_text().strip(), f"copilot skill {skill} missing"
 
@@ -424,7 +486,7 @@ def test_description_is_present_in_every_agent_rendering() -> None:
         *sorted((OPENCODE_DIR / "agents").glob("*.md")),
         *sorted((COPILOT_DIR / "agents").glob("*.agent.md")),
     ]
-    assert len(paths) == 2 * (len(ROLES) + 1)
+    assert len(paths) == 2 * (len(_discovered_roles()) + 1)
     for path in paths:
         fields, _ = _read(path)
         description = fields.get("description")
@@ -483,3 +545,71 @@ def test_every_auth_header_value_is_a_reference_not_a_literal() -> None:
     assert len(values) >= 3, "expected auth headers in opencode.json + both .copilot/mcp configs"
     for path, value in values:
         assert AUTH_REFERENCE_RE.fullmatch(value), f"{path}: non-reference auth value {value!r}"
+
+
+# --- the shipped adopter checker agrees with this suite ---------------------------------------
+
+
+def _run_checker(root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(AGENTS_DIR / "check_parity.py"), "--repo-root", str(root)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _copy_trees(destination: Path) -> Path:
+    for tree in ("agents", ".opencode", ".copilot"):
+        shutil.copytree(REPO_ROOT / tree, destination / tree)
+    return destination
+
+
+def test_the_shipped_adopter_checker_passes_on_this_repo() -> None:
+    result = _run_checker(REPO_ROOT)
+    assert result.returncode == 0, f"checker failed on the repo:\n{result.stdout}{result.stderr}"
+    assert "parity OK" in result.stdout
+
+
+def test_the_checker_flags_tool_drift_and_literal_credentials(tmp_path: Path) -> None:
+    root = _copy_trees(tmp_path)
+    drifted = root / ".opencode" / "agents" / "code_reviewer.md"
+    drifted.write_text(
+        drifted.read_text().replace(
+            "context-broker_context.request_more: true",
+            "context-broker_context.create_pack: true",
+        )
+    )
+    literal = root / ".copilot" / "mcp" / "vscode-mcp.json"
+    literal.write_text(literal.read_text().replace("${input:context-broker-token}", "abc123"))
+    result = _run_checker(root)
+    assert result.returncode == 1
+    assert "code_reviewer.md" in result.stderr, "tool drift not reported"
+    assert "vscode-mcp.json" in result.stderr, "literal credential not reported"
+
+
+def test_the_checker_accepts_a_team_added_agent(tmp_path: Path) -> None:
+    """The extensibility promise: a seventh agent rendered in parity passes everything."""
+    root = _copy_trees(tmp_path)
+    renames = (("code_reviewer", "risk_auditor"), ("code_reviewer_agent", "risk_auditor_agent"))
+
+    def rendered(source: Path) -> str:
+        text = source.read_text()
+        for old, new in renames:
+            text = text.replace(old, new)
+        return text
+
+    (root / "agents" / "risk_auditor.md").write_text(rendered(AGENTS_DIR / "code_reviewer.md"))
+    (root / ".opencode" / "agents" / "risk_auditor.md").write_text(
+        rendered(OPENCODE_DIR / "agents" / "code_reviewer.md")
+    )
+    (root / ".copilot" / "agents" / "risk_auditor.agent.md").write_text(
+        rendered(COPILOT_DIR / "agents" / "code_reviewer.agent.md")
+    )
+    config_path = root / ".opencode" / "opencode.json"
+    config = json.loads(config_path.read_text())
+    config["agent"]["risk_auditor"] = config["agent"]["code_reviewer"]
+    config_path.write_text(json.dumps(config, indent=2))
+    result = _run_checker(root)
+    assert result.returncode == 0, f"team-added agent rejected:\n{result.stdout}{result.stderr}"
+    assert "7 agent(s)" in result.stdout
