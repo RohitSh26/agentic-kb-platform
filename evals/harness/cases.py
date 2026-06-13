@@ -37,8 +37,11 @@ TaskType = Literal[
 # nothing and must fail validate_evidence_references
 UNKNOWN_EVIDENCE_PREFIX = "unknown:"
 
-# subjects with a manifest allowance in the executor; a typo'd agent would
-# otherwise fall back silently to the broker's smallest default allowance
+# subjects with a manifest allowance in the executor. The Literal guards scripted
+# names against typos: an unknown subject falls back to DEFAULT_AGENT_ALLOWANCE
+# (1/2500), which is LARGER than the delivery/pr-planner allowances (1/1500) — so a
+# silent typo would widen the budget, not shrink it. Keep this list in sync with the
+# executor's allowance map.
 AgentName = Literal[
     "impl-agent",
     "test-agent",

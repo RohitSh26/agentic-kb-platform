@@ -18,9 +18,9 @@
       }
     },
     "agentic-kb": {
-      "//": "Once apps/mcp-server is running, point Claude Code at the platform's OWN MCP server to dogfood the Context Broker during development.",
+      "//": "Once services/mcp-server is running, point Claude Code at the platform's OWN MCP server to dogfood the Context Broker during development.",
       "type": "http",
-      "url": "http://localhost:8080/mcp",
+      "url": "http://localhost:8000/mcp/",
       "disabled": true
     }
   }

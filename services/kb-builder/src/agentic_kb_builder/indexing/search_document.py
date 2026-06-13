@@ -7,10 +7,11 @@ rebuild from Postgres produces byte-identical doc identities. artifact_hash is
 carried so post-build consistency validation can compare index state against
 the registry without fetching bodies.
 
-Only artifacts that carry servable text are projected (concept, summary,
-chunk, source_backed_fact, code_symbol). Pointer-only artifacts (code_file,
-endpoint, test) stay out of the index: they have no body to rank and are
-reachable through graph edges instead.
+Only artifacts meant to rank by their own text are projected (concept, summary,
+chunk, source_backed_fact, code_symbol). `code_file` and `endpoint` are
+pointer-only (body_text=None). `test` carries a snippet body like code_symbol
+but is deliberately kept out of the index — a test is reached through its graph
+edges to what it exercises, not by ranking its body.
 """
 
 import uuid

@@ -19,3 +19,10 @@ question. Architecture references point at `docs/architecture/00-overview.md` an
 | PR-11 | Agent markdown manifests |
 | PR-12 | Evaluation harness |
 | PR-13 | Security hardening |
+| PR-14 | YAML source configuration |
+| PR-15 | Portable agent framework (.copilot / .opencode) |
+| PR-16 | Native subagent + skill declarations in the portable renderings |
+| PR-17 | Docker compose for the whole system (two service containers + Postgres) |
+| PR-18 | Open the `read_pack` role field to team-defined agents |
+| PR-19 | Deployment-time per-agent budget allowances |
+| PR-20 | Adopter-side parity checker + pinned-minimum parity tests |
