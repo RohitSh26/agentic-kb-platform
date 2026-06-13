@@ -24,6 +24,7 @@ from harness.fixtures import clean_registry, require_registry_schema
 from harness.metrics import compute_metrics
 from harness.records import RunRecord
 from harness.report import build_report, render_table, write_report
+from harness.run_status import exit_code
 
 EVALS_DIR = Path(__file__).resolve().parent
 BASELINE_PATH = EVALS_DIR / "baseline.json"
@@ -87,6 +88,13 @@ def main() -> int:
     parser.add_argument("--cases-dir", type=Path, default=None)
     parser.add_argument("--update-baseline", action="store_true")
     parser.add_argument("--json", action="store_true", help="print the full report JSON")
+    parser.add_argument(
+        "--fail-on-regress",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="exit nonzero (3) when the baseline verdict is 'regressed' "
+        "(default: on; always skipped with --update-baseline)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -123,11 +131,12 @@ def main() -> int:
     else:
         print(render_table(records, metrics, comparison))
 
-    failed = [record.case_id for record in records if not record.succeeded]
-    if failed:
-        print(f"failed cases: {', '.join(failed)}", file=sys.stderr)
-        return 1
-    return 0
+    return exit_code(
+        records,
+        comparison,
+        fail_on_regress=args.fail_on_regress,
+        update_baseline=args.update_baseline,
+    )
 
 
 if __name__ == "__main__":
