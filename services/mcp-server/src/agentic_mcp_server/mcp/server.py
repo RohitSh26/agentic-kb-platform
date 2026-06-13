@@ -25,6 +25,7 @@ from agentic_mcp_server.infrastructure.postgres.session import (
 from agentic_mcp_server.infrastructure.search.search_client import SearchClient
 from agentic_mcp_server.mcp.tool_handlers import make_handlers
 from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
+from agentic_mcp_server.structured_logging import configure_logging
 from agentic_mcp_server.telemetry import TelemetryMiddleware
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ def build_server(
 
 def create_app() -> FastMCP:
     """Production entrypoint: Entra ID auth + registry-backed health."""
+    configure_logging()
     config = load_config()
     allowances = parse_agent_allowances(config.agent_allowances_json)
     logger.info("event=agent_allowances_loaded subjects=%d", len(allowances))
