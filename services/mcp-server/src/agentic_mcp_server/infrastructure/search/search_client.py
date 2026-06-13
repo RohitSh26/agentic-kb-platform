@@ -26,11 +26,15 @@ class SearchClient(Protocol):
         ...
 
 
+def _empty_hits() -> dict[str, list[SearchHit]]:
+    return {}
+
+
 @dataclass
 class FakeSearchClient:
     """Keyword-seeded fake for tests and the local development loop."""
 
-    hits_by_keyword: dict[str, list[SearchHit]] = field(default_factory=dict)
+    hits_by_keyword: dict[str, list[SearchHit]] = field(default_factory=_empty_hits)
 
     def seed(self, keyword: str, hits: list[SearchHit]) -> None:
         self.hits_by_keyword[normalize_query(keyword)] = hits

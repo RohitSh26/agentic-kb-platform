@@ -44,6 +44,10 @@ _LIST_EVENTS_QUERY = text(
 )
 
 
+def _empty_uuid_list() -> list[uuid.UUID]:
+    return []
+
+
 @dataclass(frozen=True)
 class RetrievalEventInsert:
     run_id: str
@@ -55,9 +59,9 @@ class RetrievalEventInsert:
     query_text: str | None = None
     normalized_query: str | None = None
     retrieval_profile: str | None = None
-    returned_artifact_ids: list[uuid.UUID] = field(default_factory=list)
-    reused_evidence_ids: list[uuid.UUID] = field(default_factory=list)
-    new_evidence_ids: list[uuid.UUID] = field(default_factory=list)
+    returned_artifact_ids: list[uuid.UUID] = field(default_factory=_empty_uuid_list)
+    reused_evidence_ids: list[uuid.UUID] = field(default_factory=_empty_uuid_list)
+    new_evidence_ids: list[uuid.UUID] = field(default_factory=_empty_uuid_list)
     cache_hit: bool = False
     semantic_reuse: bool = False
     tokens_returned: int = 0

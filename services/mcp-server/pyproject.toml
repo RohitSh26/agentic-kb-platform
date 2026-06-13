@@ -43,11 +43,14 @@ pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
 include = ["src", "tests"]
-# the tool contracts keep their former packages/ strict-mode guarantee
+# strict on each service's domain, infrastructure, and tool-schema packages
+# (.claude/rules/python.md); auth is the identity/ACL boundary, held to the same bar
 strict = [
     "src/agentic_mcp_server/mcp/tool_schemas",
     "src/agentic_mcp_server/agent_output_schemas",
     "src/agentic_mcp_server/domain",
+    "src/agentic_mcp_server/infrastructure",
+    "src/agentic_mcp_server/auth",
 ]
 
 [tool.pytest.ini_options]
