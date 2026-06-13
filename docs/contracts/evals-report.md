@@ -107,6 +107,21 @@ Comparing only metrics measured in **both** runs:
 
 `biggest_mover` is the metric with the largest absolute relative delta.
 
+## Exit codes
+
+`run.py` returns:
+
+- `0` — success: every case passed and the baseline verdict is not `regressed`.
+- `1` — at least one case failed (ledger status `error` or doc recall < 1.0).
+- `2` — `TEST_DATABASE_URL` is unset (no registry to run against).
+- `3` — the baseline verdict is `regressed` and the regression gate is on.
+
+The regression gate is **on by default** (`--fail-on-regress`) so CI fails on a token-cost
+regression — the harness computes the `regressed` verdict and now enforces it. Pass
+`--no-fail-on-regress` to report only, or `--update-baseline` to accept the new numbers (the gate
+is always skipped while updating the baseline). Case failures take priority over the regression
+gate. The decision lives in `harness/run_status.py` so it is unit-tested without a database.
+
 ## Boundary
 
 `evals/` is a dev-only benchmark project, never deployed. It takes a path dependency on
