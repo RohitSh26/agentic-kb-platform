@@ -21,7 +21,9 @@ class AgentAllowance:
     max_tokens: int
 
 
-# conservative default: the smallest role allowance (delivery planner)
+# fallback for a subject absent from the allowance map. NOT the smallest configured
+# allowance — delivery/pr-planner deployments use 1/1500; deployments grant generous
+# roles a larger allowance via MCP_AGENT_ALLOWANCES.
 DEFAULT_AGENT_ALLOWANCE = AgentAllowance(max_requests=1, max_tokens=2500)
 
 

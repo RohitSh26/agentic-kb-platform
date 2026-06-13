@@ -37,9 +37,11 @@ Code authority: `services/kb-builder/src/agentic_kb_builder/indexing/search_docu
 | `embedding` | float vector? | hybrid retrieval |
 | `embedding_model` | string? | |
 
-Only artifacts with servable text are projected (`PROJECTABLE_ARTIFACT_TYPES`).
-Pointer-only artifacts (code_file, endpoint, test) stay out of the index and are
-reachable through graph edges instead.
+Only artifacts meant to rank by their own text are projected
+(`PROJECTABLE_ARTIFACT_TYPES`: concept, summary, chunk, source_backed_fact,
+code_symbol). `code_file` and `endpoint` are pointer-only (`body_text` null).
+`test` carries a snippet body but is deliberately excluded from the index and
+reached through graph edges instead.
 
 ## Rules
 
