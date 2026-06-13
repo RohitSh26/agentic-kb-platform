@@ -16,9 +16,22 @@ TESTS_CONFIDENCE = 0.9
 
 def file_graph_to_edges(graph: FileGraph) -> tuple[CodeEdgeDraft, ...]:
     edges: list[CodeEdgeDraft] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add(draft: CodeEdgeDraft) -> None:
+        # A symbol may call or import another more than once; graphify carries no
+        # call-site distinguisher, so identical (from, to, edge_type) drafts are
+        # redundant rows for one logical fact. Dedupe within the file so the
+        # registry holds one edge per fact (graph queries already dedupe neighbors).
+        key = (draft.from_key, draft.to_key, str(draft.edge_type))
+        if key in seen:
+            return
+        seen.add(key)
+        edges.append(draft)
+
     source_file = file_key(graph.path)
     for imported in graph.imports:
-        edges.append(
+        add(
             CodeEdgeDraft(
                 from_key=source_file,
                 to_key=file_key(imported.target_path),
@@ -27,7 +40,7 @@ def file_graph_to_edges(graph: FileGraph) -> tuple[CodeEdgeDraft, ...]:
             )
         )
     for call in graph.calls:
-        edges.append(
+        add(
             CodeEdgeDraft(
                 from_key=symbol_key(graph.path, call.from_symbol),
                 to_key=_symbol_ref_key(graph.path, call.to_symbol),
@@ -37,7 +50,7 @@ def file_graph_to_edges(graph: FileGraph) -> tuple[CodeEdgeDraft, ...]:
         )
     for test in graph.tests:
         for target in test.targets:
-            edges.append(
+            add(
                 CodeEdgeDraft(
                     from_key=test_key(graph.path, test.name),
                     to_key=_symbol_ref_key(graph.path, target),
@@ -46,7 +59,7 @@ def file_graph_to_edges(graph: FileGraph) -> tuple[CodeEdgeDraft, ...]:
                 )
             )
     for endpoint in graph.endpoints:
-        edges.append(
+        add(
             CodeEdgeDraft(
                 from_key=symbol_key(graph.path, endpoint.symbol),
                 to_key=endpoint_key(graph.path, endpoint.http_method, endpoint.route),
