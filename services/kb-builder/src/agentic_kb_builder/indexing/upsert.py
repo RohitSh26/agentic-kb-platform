@@ -16,7 +16,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentic_kb_builder.domain.content_hasher import content_hash
-from agentic_kb_builder.indexing.projection import load_search_docs
+from agentic_kb_builder.indexing.projection import load_doc_hashes, load_search_docs
 from agentic_kb_builder.indexing.search_document import SearchDoc
 from agentic_kb_builder.infrastructure.azure_search.search_client import SearchClient
 from agentic_kb_builder.infrastructure.postgres.models import EmbeddingCache
@@ -73,7 +73,7 @@ class SearchDocUpserter:
 
 async def delete_orphaned_docs(session: AsyncSession, client: SearchClient) -> int:
     """Remove index documents whose artifact is gone from the registry."""
-    expected = {doc.doc_id for doc in await load_search_docs(session)}
+    expected = set(await load_doc_hashes(session))
     state = await client.fetch_index_state()
     orphaned = sorted(set(state.docs) - expected)
     if not orphaned:

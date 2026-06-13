@@ -83,6 +83,31 @@ async def load_search_docs(
     return docs
 
 
+async def load_doc_hashes(session: AsyncSession) -> dict[str, str | None]:
+    """Map doc_id -> artifact_hash for every projectable artifact.
+
+    The orphan sweep and the consistency check need only document identity and
+    hash, so this deliberately loads neither body_text nor the embedding vectors
+    that load_search_docs must materialize — a scalar two-column scan instead of
+    full artifact rows joined to the embedding cache.
+    """
+    query = (
+        select(KnowledgeArtifact.artifact_id, KnowledgeArtifact.artifact_hash)
+        .join(SourceItem, KnowledgeArtifact.source_id == SourceItem.source_id)
+        .where(
+            SourceItem.is_deleted.is_(False),
+            KnowledgeArtifact.artifact_type.in_(sorted(PROJECTABLE_ARTIFACT_TYPES)),
+            KnowledgeArtifact.body_text.is_not(None),
+        )
+    )
+    rows = (await session.execute(query)).all()
+    hashes = {
+        SearchDoc.doc_id_for(artifact_id): artifact_hash for artifact_id, artifact_hash in rows
+    }
+    logger.info("event=indexer_doc_hashes_loaded count=%d", len(hashes))
+    return hashes
+
+
 async def _load_embeddings(
     session: AsyncSession, artifact_ids: Sequence[uuid.UUID]
 ) -> dict[tuple[uuid.UUID, str], EmbeddingCache]:
