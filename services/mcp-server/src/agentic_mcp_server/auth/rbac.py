@@ -9,7 +9,7 @@ requester's teams (docs/contracts/mcp-tools-contract.md).
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from agentic_mcp_server.infrastructure.postgres.artifacts import ArtifactRow
 
@@ -31,7 +31,7 @@ def teams_from_claims(claims: Mapping[str, Any]) -> frozenset[str]:
     for claim in TEAM_CLAIMS:
         value = claims.get(claim)
         if isinstance(value, list):
-            teams.update(item for item in value if isinstance(item, str))
+            teams.update(item for item in cast("list[object]", value) if isinstance(item, str))
     return frozenset(teams)
 
 
