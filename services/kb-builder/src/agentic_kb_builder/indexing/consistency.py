@@ -12,7 +12,7 @@ registry — delete_orphaned_docs should have removed these), and drifted
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentic_kb_builder.application.active_version import ValidationHook
-from agentic_kb_builder.indexing.projection import load_search_docs
+from agentic_kb_builder.indexing.projection import load_doc_hashes
 from agentic_kb_builder.infrastructure.azure_search.search_client import SearchClient
 from agentic_kb_builder.structured_logging import get_logger
 
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 async def validate_index_consistency(
     session: AsyncSession, kb_version: str, *, client: SearchClient
 ) -> bool:
-    expected = {doc.doc_id: doc.artifact_hash for doc in await load_search_docs(session)}
+    expected = await load_doc_hashes(session)
     actual = (await client.fetch_index_state()).docs
 
     missing = sorted(set(expected) - set(actual))
