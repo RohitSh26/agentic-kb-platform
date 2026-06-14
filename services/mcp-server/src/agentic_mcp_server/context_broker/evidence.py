@@ -96,7 +96,11 @@ async def open_evidence(
                     context_pack_id=uuid.UUID(pack.context_pack_id),
                     retrieval_profile=pack.retrieval_profile,
                     returned_artifact_ids=[card.artifact_id],
-                    reused_evidence_ids=[card.artifact_id],
+                    # an approved expansion is fresh, charged content (the contract's
+                    # duplicate_context_tokens counts the first open_evidence as new,
+                    # not reuse); only a non-approved row carries no fresh id
+                    new_evidence_ids=[card.artifact_id] if status == "approved" else [],
+                    reused_evidence_ids=[] if status == "approved" else [card.artifact_id],
                     tokens_returned=tokens_returned,
                     latency_ms=int((time.monotonic() - started) * 1000),
                 ),

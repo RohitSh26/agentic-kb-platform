@@ -461,6 +461,29 @@ async def test_request_more_escalates_when_run_budget_is_too_small(
     assert rows[-1].status == "needs_human_approval"
 
 
+async def test_request_more_denied_takes_priority_over_run_budget_escalation(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # the request exceeds BOTH the per-agent token allowance (default 2500) AND the
+    # run budget (100); the contract orders denied before needs_human_approval, so
+    # the per-agent denial must win — a reorder of the two checks would fail here
+    deps, pack_id, _ = await _pack_with_refund_follow_up(
+        factory, budget_policy=BudgetPolicy(), budget_tokens=100
+    )
+
+    response = await request_more(
+        deps,
+        _request_more("how does refund processing work", max_tokens=3000).model_copy(
+            update={"context_pack_id": pack_id}
+        ),
+        REQUESTER,
+    )
+
+    assert response.status == "denied"
+    assert response.denial_reason is not None
+    assert "token allowance exceeded" in response.denial_reason
+
+
 async def test_request_more_budgets_are_tracked_per_agent_subject(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:

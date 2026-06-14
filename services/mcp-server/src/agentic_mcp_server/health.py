@@ -11,6 +11,7 @@ from typing import TypedDict
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from agentic_mcp_server.config import SERVER_NAME
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_kb_version
 from agentic_mcp_server.structured_logging import get_logger
 
@@ -31,11 +32,11 @@ async def health(session_factory: async_sessionmaker[AsyncSession]) -> HealthPay
         logger.error("event=health_registry_unreachable error=%s", type(exc).__name__)
         return {
             "status": "registry_unreachable",
-            "service": "mcp-server",
+            "service": SERVER_NAME,
             "active_kb_version": None,
         }
     return {
         "status": "ok" if active is not None else "no_active_kb_version",
-        "service": "mcp-server",
+        "service": SERVER_NAME,
         "active_kb_version": active,
     }
