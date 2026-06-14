@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Integer, Text, text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,6 +37,18 @@ class KbBuildRun(Base):
         Integer, nullable=False, server_default=text("0")
     )
     error_summary: Mapped[str | None] = mapped_column(Text)
+    # Publish-gate bookkeeping (docs/contracts/publish-gates.md, PR-25).
+    # extractor_failures backs the extractor-error-rate gate; allow_large_delta is
+    # the symbol-count-delta override flag; failed_gate + gate_measured_value record
+    # which gate blocked activation and its measured value (NULL on a clean publish).
+    extractor_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    allow_large_delta: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    failed_gate: Mapped[str | None] = mapped_column(Text)
+    gate_measured_value: Mapped[float | None] = mapped_column(Float)
 
     __table_args__ = (
         Index("ix_kb_build_run_kb_version", "kb_version"),

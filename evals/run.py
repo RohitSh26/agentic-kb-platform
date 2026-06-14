@@ -21,6 +21,7 @@ from harness.baseline import compare, load_baseline, write_baseline
 from harness.cases import BENCHMARK_TASK_TYPES, EvalCase, load_cases
 from harness.executor import execute_case
 from harness.fixtures import clean_registry, require_registry_schema
+from harness.golden import GoldenCase, load_golden_cases
 from harness.metrics import compute_metrics
 from harness.records import RunRecord
 from harness.report import build_report, render_table, write_report
@@ -29,6 +30,7 @@ from harness.run_status import exit_code
 EVALS_DIR = Path(__file__).resolve().parent
 BASELINE_PATH = EVALS_DIR / "baseline.json"
 REPORT_PATH = EVALS_DIR / "report.json"
+GOLDEN_DIR = EVALS_DIR / "retrieval_cases" / "golden"
 
 
 def _git_sha() -> str | None:
@@ -61,6 +63,12 @@ def _load_all_cases(cases_dir: Path | None) -> list[EvalCase]:
         if missing:
             raise SystemExit(f"benchmark task types without a case: {missing}")
     return cases
+
+
+def _load_golden_cases() -> list[GoldenCase]:
+    if not GOLDEN_DIR.exists():
+        return []
+    return load_golden_cases(GOLDEN_DIR)
 
 
 async def _run_cases(cases: list[EvalCase], database_url: str) -> list[RunRecord]:
@@ -114,6 +122,10 @@ def main() -> int:
         return 2
 
     cases = _load_all_cases(args.cases_dir)
+    # The golden set (evidence-recall publish gate, docs/contracts/golden-query-evals.md)
+    # is loaded and surfaced here. Phase 1 reports the set so a missing/duplicate case is
+    # caught; the evidence-recall metric is computed by harness.golden over broker results.
+    golden = _load_golden_cases()
     records = asyncio.run(_run_cases(cases, database_url))
 
     metrics = compute_metrics(records)
@@ -130,6 +142,10 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         print(render_table(records, metrics, comparison))
+        intents = sorted({case.intent for case in golden})
+        print(
+            f"golden queries: {len(golden)} loaded (evidence-recall floor 0.95) intents={intents}"
+        )
 
     return exit_code(
         records,

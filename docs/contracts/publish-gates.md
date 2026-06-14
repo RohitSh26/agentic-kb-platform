@@ -27,6 +27,18 @@ the rollback automatic (the previous active version is never touched until the n
 `*` Phase 1 ships the evidence-recall gate against the seed golden set; it becomes strict as the set
 grows. A gate not yet applicable to the current phase is skipped, not failed.
 
+**Phase-1 wiring (PR-25):** the index-consistency, extractor-error-rate, symbol-count-delta,
+no-dangling-citations, and edge-evidence-integrity gates are REAL and ENFORCED inside activation
+(kb-builder `application/publish_gates.py`, composed with the existing `make_consistency_validator`
+into one `ValidationHook`). The evidence-recall + ACL-leak gate is an intentional, documented
+**seam**: its authoritative value needs the full Context Broker (retrieval + ACL + budget) over the
+golden set, which lives in `evals/` and cannot be imported by kb-builder (service boundary,
+ADR-0008). So evidence-recall is enforced by the evals harness (`make eval-run`,
+`harness/golden.py` — `evidence_recall`, `acl_leak_count`, per-`edge_type` precision/recall) and is
+SKIPPED (logs a registry-derivable proxy, never blocks) inside activation in phase 1. It tightens to
+enforcing through the same seam as the golden set grows. Phase-2 gates (relation precision, no ghost
+edges) remain inert (skipped) until their producing mechanism exists.
+
 ## Override
 
 A build may set `allow_large_delta=true` (recorded in `kb_build_run`) to bypass the symbol-count

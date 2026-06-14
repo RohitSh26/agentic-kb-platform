@@ -18,12 +18,20 @@ from agentic_kb_builder.application.cache_gates import (
     code_graph_cache_key,
     concept_rollup_cache_key,
 )
+from agentic_kb_builder.application.publish_gates import (
+    ALLOWED_EDGE_TYPES,
+    GateResult,
+    compose_gates,
+    make_publish_gate_validator,
+)
 
 __all__ = [
+    "ALLOWED_EDGE_TYPES",
     "BuildRunner",
     "Embedder",
     "EmbeddingCacheGate",
     "EmbeddingResult",
+    "GateResult",
     "GenerationCacheGate",
     "Graphifier",
     "SearchIndexer",
@@ -32,6 +40,8 @@ __all__ = [
     "activate_kb_version",
     "chunk_summary_cache_key",
     "code_graph_cache_key",
+    "compose_gates",
     "concept_rollup_cache_key",
     "get_active_kb_version",
+    "make_publish_gate_validator",
 ]

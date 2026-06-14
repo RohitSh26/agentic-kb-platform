@@ -30,6 +30,7 @@ from agentic_kb_builder.application.build_runner import (
     SearchIndexer,
     Wikifier,
 )
+from agentic_kb_builder.application.publish_gates import make_publish_gate_validator
 from agentic_kb_builder.connectors import connectors_from_config, load_source_config
 from agentic_kb_builder.connectors.local_fs import local_fs_backend_factory
 from agentic_kb_builder.embeddings import LocalHashEmbedder
@@ -81,8 +82,11 @@ async def run_build(
     version: str,
     collaborators: Collaborators,
     activate: bool,
+    allow_large_delta: bool = False,
 ) -> KbBuildRun:
-    """Run one build into Postgres; activate the new kb_version if validation passes."""
+    """Run one build into Postgres; activate the new kb_version if every publish
+    gate passes (docs/contracts/publish-gates.md). allow_large_delta overrides the
+    symbol-count-delta gate only (recorded on kb_build_run, logged)."""
     config = load_source_config(sources_path)
     factory = local_fs_backend_factory(Path(workspace), version=version)
     connectors = connectors_from_config(config, factory)
@@ -102,10 +106,20 @@ async def run_build(
         run.build_id,
     )
     if activate and run.status == "completed":
-        validator = make_consistency_validator(collaborators.search_client)
+        # Record the override BEFORE the gates read it, so the symbol-count-delta
+        # gate sees allow_large_delta on this build's kb_build_run row.
+        run.allow_large_delta = allow_large_delta
+        await session.flush()
+        consistency = make_consistency_validator(collaborators.search_client)
+        validator = make_publish_gate_validator(consistency)
         activated = await activate_kb_version(session, run.build_id, validator)
         await session.commit()
-        logger.info("event=build_activation kb_version=%s activated=%s", kb_version, activated)
+        logger.info(
+            "event=build_activation kb_version=%s activated=%s allow_large_delta=%s",
+            kb_version,
+            activated,
+            allow_large_delta,
+        )
     return run
 
 
@@ -124,6 +138,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--version", default="local", help="source_version stamp (e.g. a git SHA)")
     parser.add_argument("--no-activate", action="store_true", help="build but do not mark active")
+    parser.add_argument(
+        "--allow-large-delta",
+        action="store_true",
+        help="override the symbol-count-delta publish gate for an intentional large change "
+        "(recorded in kb_build_run and logged); no other gate is overridable",
+    )
     return parser.parse_args(argv)
 
 
@@ -140,6 +160,7 @@ async def _main(args: argparse.Namespace) -> int:
                 version=args.version,
                 collaborators=default_collaborators(session),
                 activate=not args.no_activate,
+                allow_large_delta=args.allow_large_delta,
             )
             active = await get_active_kb_version(session)
     finally:

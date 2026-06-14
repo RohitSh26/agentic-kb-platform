@@ -1,0 +1,15 @@
+# Golden query: imports of a module? (docs/contracts/golden-query-evals.md)
+# pkg/service.py imports pkg/util.py. The `imports` relation and the imported
+# module's evidence must surface. must_not_leak_ids asserts the ACL negative:
+# an evidence id outside the requester's teams must NEVER appear (acl_leak_count
+# must be 0, a hard gate).
+case_id: code-structure/imports-of-util-001
+query: Which modules import pkg/util.py?
+intent: how_does_x_work
+requester_teams: [platform]
+expected_evidence_ids:
+  - ev_pkg_service_file
+expected_edge_types: [imports]
+must_not_leak_ids:
+  - ev_restricted_secrets_module
+min_evidence_recall: 1.0

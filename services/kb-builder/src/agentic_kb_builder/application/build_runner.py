@@ -107,6 +107,10 @@ class _Counters:
     llm_calls: int = 0
     embedding_calls: int = 0
     search_docs_upserted: int = 0
+    # code files whose AST extraction raised; backs the extractor-error-rate
+    # publish gate (docs/contracts/publish-gates.md). A failed file is skipped,
+    # not fatal — one unparsable file must not abort an otherwise-good build.
+    extractor_failures: int = 0
 
 
 class BuildRunner:
@@ -232,6 +236,7 @@ class BuildRunner:
                 llm_calls=counters.llm_calls,
                 embedding_calls=counters.embedding_calls,
                 search_docs_upserted=counters.search_docs_upserted,
+                extractor_failures=counters.extractor_failures,
             )
         )
 
@@ -306,9 +311,19 @@ class BuildRunner:
         source_id = await self._upsert_source_item(fetched)
         artifact_ids = await self._wikify_gated(counters, fetched, source_id)
         if fetched.source.source_type == "github_code":
-            artifact_ids += await self._graphify_gated(
-                counters, fetched, source_id, code_key_map, pending_edges
-            )
+            try:
+                artifact_ids += await self._graphify_gated(
+                    counters, fetched, source_id, code_key_map, pending_edges
+                )
+            except Exception as error:
+                # One unparsable file must not abort the build; count it for the
+                # extractor-error-rate publish gate and move on (no silent failure).
+                counters.extractor_failures += 1
+                logger.error(
+                    "event=graphify_extraction_failed source_uri=%s error=%s",
+                    fetched.source.source_uri,
+                    f"{type(error).__name__}: {error}",
+                )
         for artifact_id in artifact_ids:
             await self._embed_gated(counters, artifact_id)
         if artifact_ids:

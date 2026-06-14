@@ -1,0 +1,12 @@
+# Golden query: where is a symbol defined? (docs/contracts/golden-query-evals.md)
+# Code-structure seed over the PR-22 fixture workspace (pkg/util.py::helper).
+# expected_evidence_ids are the evidence the broker MUST surface; underlinking
+# (returning real-but-wrong citations) drops evidence_recall and blocks publish.
+case_id: code-structure/where-is-helper-defined-001
+query: Where is the helper function defined?
+intent: how_does_x_work
+requester_teams: [platform]
+expected_evidence_ids:
+  - ev_pkg_util_helper
+expected_edge_types: [imports]
+min_evidence_recall: 1.0

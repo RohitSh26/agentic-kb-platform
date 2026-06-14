@@ -1,0 +1,340 @@
+"""Publish gates wired to activation (PR-25, docs/contracts/publish-gates.md).
+
+A build that passes every phase-1 gate activates; a build with an injected
+dangling citation / a forced bad edge_type / a forced symbol-count blowup stays
+INACTIVE with the failing gate + measured value recorded on kb_build_run, and the
+previously active version keeps serving. The allow_large_delta override is honoured.
+"""
+
+import os
+from collections.abc import AsyncIterator, Iterator, Sequence
+from pathlib import Path
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from agentic_kb_builder.application.active_version import get_active_kb_version
+from agentic_kb_builder.application.publish_gates import (
+    edge_evidence_integrity_gate,
+    no_dangling_citations_gate,
+    symbol_count_delta_gate,
+)
+from agentic_kb_builder.build import Collaborators, run_build
+from agentic_kb_builder.domain import NormalizedContent, WikifyArtifactDraft
+from agentic_kb_builder.embeddings import LocalHashEmbedder
+from agentic_kb_builder.graphify import GraphifyGraphifier
+from agentic_kb_builder.indexing import SearchDocUpserter
+from agentic_kb_builder.infrastructure.azure_search.search_client import FakeSearchClient
+from agentic_kb_builder.infrastructure.postgres.models import KbBuildRun
+
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
+
+requires_db = pytest.mark.skipif(
+    TEST_DATABASE_URL is None, reason="no test database configured (set TEST_DATABASE_URL)"
+)
+
+ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
+
+TABLES_IN_DELETE_ORDER = (
+    "retrieval_event",
+    "embedding_cache",
+    "generation_cache_artifact",
+    "generation_cache",
+    "knowledge_edge",
+    "knowledge_artifact",
+    "source_item",
+    "kb_build_run",
+)
+
+SERVICE_PY = (
+    "from pkg.util import helper\n\n\n"
+    "def top():\n    return helper()\n\n\n"
+    "class Service:\n    def handle(self):\n        return self.helper()\n\n"
+    "    def helper(self):\n        return top()\n"
+)
+UTIL_PY = "def helper():\n    return 42\n"
+
+SOURCES_YAML = (
+    "version: 1\n"
+    "sources:\n"
+    "  - name: code\n"
+    "    type: github_code\n"
+    "    repo: o/r\n"
+    "    branch: main\n"
+    "    include: ['**/*.py']\n"
+)
+
+
+class FakeWikifier:
+    model_name = "fake-wikify"
+    model_params_hash = "fake-params"
+
+    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
+        return [
+            WikifyArtifactDraft(
+                artifact_type="summary",
+                knowledge_kind="interpreted",
+                title=f"summary of {content.source.path}",
+                body_text=f"Summary of {content.source.path}",
+                authority_score=0.5,
+                freshness_score=1.0,
+            )
+        ]
+
+
+@pytest.fixture(scope="module")
+def migrated_db() -> Iterator[None]:
+    assert TEST_DATABASE_URL is not None
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+    cfg = Config(str(ALEMBIC_INI))
+    command.upgrade(cfg, "head")
+    yield
+    command.downgrade(cfg, "base")
+    if previous is None:
+        os.environ.pop("DATABASE_URL", None)
+    else:
+        os.environ["DATABASE_URL"] = previous
+
+
+@pytest.fixture
+async def session(migrated_db: None) -> AsyncIterator[AsyncSession]:
+    assert TEST_DATABASE_URL is not None
+    engine = create_async_engine(TEST_DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as sess:
+        for table in TABLES_IN_DELETE_ORDER:
+            await sess.execute(text(f"DELETE FROM {table}"))
+        await sess.commit()
+        yield sess
+        await sess.rollback()
+        for table in TABLES_IN_DELETE_ORDER:
+            await sess.execute(text(f"DELETE FROM {table}"))
+        await sess.commit()
+    await engine.dispose()
+
+
+def _workspace(tmp_path: Path) -> tuple[Path, Path]:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "service.py").write_text(SERVICE_PY, encoding="utf-8")
+    (pkg / "util.py").write_text(UTIL_PY, encoding="utf-8")
+    sources = tmp_path / "sources.yaml"
+    sources.write_text(SOURCES_YAML, encoding="utf-8")
+    return tmp_path, sources
+
+
+def _collaborators(session: AsyncSession) -> Collaborators:
+    client = FakeSearchClient()
+    return Collaborators(
+        wikifier=FakeWikifier(),
+        graphifier=GraphifyGraphifier(),
+        embedder=LocalHashEmbedder(),
+        indexer=SearchDocUpserter(session, client),
+        search_client=client,
+    )
+
+
+async def _build(
+    session: AsyncSession, tmp_path: Path, *, kb_version: str, allow_large_delta: bool = False
+) -> KbBuildRun:
+    workspace, sources = _workspace(tmp_path)
+    return await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version=kb_version,
+        version="local",
+        collaborators=_collaborators(session),
+        activate=True,
+        allow_large_delta=allow_large_delta,
+    )
+
+
+async def _run_row(session: AsyncSession, kb_version: str) -> KbBuildRun:
+    return (
+        await session.execute(select(KbBuildRun).where(KbBuildRun.kb_version == kb_version))
+    ).scalar_one()
+
+
+@requires_db
+async def test_clean_build_passes_all_gates_and_activates(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    run = await _build(session, tmp_path, kb_version="v-gate.ok")
+    assert run.status in {"completed", "active"}
+    assert await get_active_kb_version(session) == "v-gate.ok"
+    row = await _run_row(session, "v-gate.ok")
+    assert row.failed_gate is None
+    assert row.gate_measured_value is None
+
+
+@requires_db
+async def test_dangling_citation_keeps_version_inactive(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    # build (no activate yet), inject a dangling citation by soft-deleting the
+    # source_item behind a citeable artifact, then run the gate validator.
+    workspace, sources = _workspace(tmp_path)
+    await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-gate.dangle",
+        version="local",
+        collaborators=_collaborators(session),
+        activate=False,
+    )
+    await session.execute(text("UPDATE source_item SET is_deleted = true"))
+    await session.commit()
+    result = await no_dangling_citations_gate(session, "v-gate.dangle")
+    assert not result.passed
+    assert result.measured_value is not None and result.measured_value > 0
+
+
+@requires_db
+async def test_forced_bad_edge_type_fails_integrity_gate(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    workspace, sources = _workspace(tmp_path)
+    await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-gate.edge",
+        version="local",
+        collaborators=_collaborators(session),
+        activate=False,
+    )
+    # corrupt one edge to a banned generic catch-all (relation-ontology.md).
+    await session.execute(
+        text(
+            "UPDATE knowledge_edge SET edge_type = 'related_to' "
+            "WHERE kb_version = 'v-gate.edge' "
+            "AND edge_id = (SELECT edge_id FROM knowledge_edge "
+            "WHERE kb_version = 'v-gate.edge' LIMIT 1)"
+        )
+    )
+    await session.commit()
+    result = await edge_evidence_integrity_gate(session, "v-gate.edge")
+    assert not result.passed
+    assert result.measured_value == 1.0
+
+
+@requires_db
+async def test_symbol_count_blowup_blocks_then_override_activates(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    # first build activates (no baseline -> delta gate trivially passes).
+    await _build(session, tmp_path, kb_version="v-gate.base")
+    assert await get_active_kb_version(session) == "v-gate.base"
+
+    # a second build whose symbol count is a blowup vs the active baseline. Force
+    # the blowup by deleting most of the new build's symbols before the gate runs.
+    workspace, sources = _workspace(tmp_path / "v2")
+    # use a fresh workspace dir so content hashes differ and graphify re-runs
+    await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-gate.big",
+        version="local2",
+        collaborators=_collaborators(session),
+        activate=False,
+    )
+    # keep exactly one v-gate.big symbol; drop the rest (and their edges + cache
+    # links first, to satisfy FKs) so the delta vs the 5-symbol baseline blows >25%.
+    keep = (
+        await session.execute(
+            text(
+                "SELECT artifact_id FROM knowledge_artifact "
+                "WHERE kb_version = 'v-gate.big' AND artifact_type = 'code_symbol' LIMIT 1"
+            )
+        )
+    ).scalar_one()
+    await session.execute(text("DELETE FROM knowledge_edge WHERE kb_version = 'v-gate.big'"))
+    await session.execute(
+        text(
+            "DELETE FROM generation_cache_artifact WHERE artifact_id IN ("
+            "  SELECT artifact_id FROM knowledge_artifact "
+            "  WHERE kb_version = 'v-gate.big' AND artifact_type = 'code_symbol' "
+            "  AND artifact_id != CAST(:keep AS uuid))"
+        ),
+        {"keep": str(keep)},
+    )
+    await session.execute(
+        text(
+            "DELETE FROM knowledge_artifact WHERE kb_version = 'v-gate.big' "
+            "AND artifact_type = 'code_symbol' AND artifact_id != CAST(:keep AS uuid)"
+        ),
+        {"keep": str(keep)},
+    )
+    await session.commit()
+
+    blocked = await symbol_count_delta_gate(session, "v-gate.big")
+    assert not blocked.passed
+    assert blocked.measured_value is not None and blocked.measured_value > 0.25
+
+    # the override honours the blowup and the gate passes (logged).
+    await session.execute(
+        text("UPDATE kb_build_run SET allow_large_delta = true WHERE kb_version = 'v-gate.big'")
+    )
+    await session.commit()
+    overridden = await symbol_count_delta_gate(session, "v-gate.big")
+    assert overridden.passed
+
+
+@requires_db
+async def test_failed_gate_records_reason_and_keeps_prev_active(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    # build + activate a good baseline, then a second build forced to fail a gate
+    # via run_build's full activation path; the new version must stay inactive,
+    # the failing gate recorded, and the old version keep serving.
+    await _build(session, tmp_path, kb_version="v-gate.serving")
+    assert await get_active_kb_version(session) == "v-gate.serving"
+
+    workspace, sources = _workspace(tmp_path / "v2")
+    await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-gate.fail",
+        version="local2",
+        collaborators=_collaborators(session),
+        activate=False,
+    )
+    # inject a banned edge so the integrity gate fails when activation runs.
+    await session.execute(
+        text(
+            "UPDATE knowledge_edge SET edge_type = 'related_to' "
+            "WHERE kb_version = 'v-gate.fail' "
+            "AND edge_id = (SELECT edge_id FROM knowledge_edge "
+            "WHERE kb_version = 'v-gate.fail' LIMIT 1)"
+        )
+    )
+    await session.commit()
+
+    from agentic_kb_builder.application.active_version import activate_kb_version
+    from agentic_kb_builder.application.publish_gates import (
+        compose_gates,
+        edge_evidence_integrity_gate,
+    )
+
+    # compose the edge-integrity gate alone (index consistency across two builds'
+    # registries is exercised by test_build_cli; here we isolate the failure-
+    # recording + rollback semantics through the real activation path).
+    run = await _run_row(session, "v-gate.fail")
+    validator = compose_gates([edge_evidence_integrity_gate])
+    activated = await activate_kb_version(session, run.build_id, validator)
+    await session.commit()
+
+    assert activated is False
+    assert await get_active_kb_version(session) == "v-gate.serving"  # prev keeps serving
+    failed = await _run_row(session, "v-gate.fail")
+    assert failed.status == "validation_failed"
+    assert failed.failed_gate == "edge_evidence_integrity"
+    assert failed.gate_measured_value == 1.0
