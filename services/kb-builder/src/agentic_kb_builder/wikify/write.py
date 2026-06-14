@@ -26,6 +26,10 @@ async def write_wikify_artifacts(
     runner) owns the transaction and must record the generation-cache row in
     the same transaction after this returns.
     """
+    # TODO(acl-propagation): acl_teams is left unset, so derived artifacts default to
+    # org-public; propagate source_item.acl_teams here once that follow-up lands
+    # (docs/contracts/postgres-knowledge-registry.md). test_acl_propagation pins the
+    # current org-public default so the gap stays visible.
     artifacts = [
         KnowledgeArtifact(
             artifact_type=draft.artifact_type,
