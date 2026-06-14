@@ -43,8 +43,7 @@
       "Read(./.env.*)",
       "Read(./**/secrets/**)",
       "Read(./**/*.pem)",
-      "Edit(./.env)",
-      "Edit(./services/kb-builder/migrations/versions/*_applied_*.py)"
+      "Edit(./.env)"
     ]
   },
   "hooks": {
