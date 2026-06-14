@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agentic_mcp_server.structured_logging import get_logger
+
+logger = get_logger(__name__)
+
 KNOWLEDGE_ARTIFACT_TABLE = "knowledge_artifact"
 SOURCE_ITEM_TABLE = "source_item"
 
@@ -45,7 +49,7 @@ async def fetch_artifacts(
     result = await session.execute(
         _FETCH_ARTIFACTS_QUERY, {"artifact_ids": artifact_ids, "kb_version": kb_version}
     )
-    return [
+    artifacts = [
         ArtifactRow(
             artifact_id=row.artifact_id,
             artifact_type=row.artifact_type,
@@ -58,3 +62,15 @@ async def fetch_artifacts(
         )
         for row in result
     ]
+    requested = len(set(artifact_ids))
+    if len(artifacts) < requested:
+        # callers treat a missing row as unauthorized/unknown, so a build-plane
+        # anomaly (orphaned or source-deleted artifact) would otherwise vanish
+        # silently from every retrieval surface (python.md: no silent failures)
+        logger.warning(
+            "event=fetch_artifacts_incomplete requested=%d returned=%d kb_version=%s",
+            requested,
+            len(artifacts),
+            kb_version,
+        )
+    return artifacts

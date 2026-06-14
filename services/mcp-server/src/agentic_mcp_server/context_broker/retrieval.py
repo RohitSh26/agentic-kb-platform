@@ -51,7 +51,7 @@ def build_card(artifact: ArtifactRow) -> EvidenceCard:
 
 
 def _card_summary(body: str, max_chars: int = 280) -> str:
-    first_line = body.strip().splitlines()[0] if body.strip() else ""
+    first_line = next(iter(body.strip().splitlines()), "")
     return first_line[:max_chars]
 
 

@@ -1,20 +1,15 @@
-"""Budget arithmetic: enforced by the broker, so it must be exact."""
+"""estimate_tokens: the deterministic ~4-chars-per-token arithmetic budgets charge against."""
 
-from agentic_mcp_server.domain.token_budget import TokenBudget
-
-
-def test_remaining_tokens() -> None:
-    budget = TokenBudget(max_tokens=100, used_tokens=40)
-    assert budget.remaining_tokens == 60
+from agentic_mcp_server.domain.token_budget import CHARS_PER_TOKEN, estimate_tokens
 
 
-def test_can_spend_up_to_the_remainder() -> None:
-    budget = TokenBudget(max_tokens=100, used_tokens=40)
-    assert budget.can_spend(60)
-    assert not budget.can_spend(61)
+def test_estimate_tokens_rounds_up() -> None:
+    assert estimate_tokens("") == 0
+    assert estimate_tokens("a") == 1
+    assert estimate_tokens("a" * CHARS_PER_TOKEN) == 1
+    assert estimate_tokens("a" * (CHARS_PER_TOKEN + 1)) == 2
 
 
-def test_overdrawn_budget_clamps_to_zero() -> None:
-    budget = TokenBudget(max_tokens=10, used_tokens=25)
-    assert budget.remaining_tokens == 0
-    assert not budget.can_spend(1)
+def test_estimate_tokens_is_deterministic() -> None:
+    text = "the quick brown fox jumps"
+    assert estimate_tokens(text) == estimate_tokens(text)

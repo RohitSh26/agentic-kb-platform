@@ -17,6 +17,8 @@ from fastmcp import FastMCP
 from mcp_test_support import TEST_DATABASE_URL, asgi_http_client, make_session_factory
 from sqlalchemy import text
 
+from agentic_mcp_server.config import SERVER_NAME
+
 pytestmark = pytest.mark.skipif(
     TEST_DATABASE_URL is None,
     reason="no test database configured (set TEST_DATABASE_URL)",
@@ -55,7 +57,7 @@ async def test_health_without_active_version_is_not_ready(server: FastMCP) -> No
     payload = response.json()
     assert payload["status"] == "no_active_kb_version"
     assert payload["active_kb_version"] is None
-    assert payload["service"] == "mcp-server"
+    assert payload["service"] == SERVER_NAME
 
 
 async def test_health_returns_active_kb_version(server: FastMCP) -> None:
