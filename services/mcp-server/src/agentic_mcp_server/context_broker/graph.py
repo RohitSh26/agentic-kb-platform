@@ -20,6 +20,7 @@ from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.error_ledger import write_error_event
 from agentic_mcp_server.context_broker.retrieval import authorization_decision
+from agentic_mcp_server.context_broker.trust import admits, is_claim_supporting
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_kb_version
 from agentic_mcp_server.infrastructure.postgres.artifacts import ArtifactRow, fetch_artifacts
 from agentic_mcp_server.infrastructure.postgres.edges import fetch_edges_touching
@@ -48,6 +49,7 @@ class _Found:
     confidence: float
     edge_source: str
     distance: int
+    trust_class: str
 
 
 async def get_neighbors(
@@ -88,6 +90,15 @@ async def get_neighbors(
             frontier_set = set(frontier)
             candidates: list[_Found] = []
             for edge in edges:
+                # Trust admission first: AMBIGUOUS/REJECTED (and unknown buckets)
+                # never route or surface; INFERRED_* only with include_inferred.
+                # A non-admitted edge must not even transit the frontier.
+                if not admits(
+                    edge.trust_class,
+                    trust_floor=request.trust_floor,
+                    include_inferred=request.include_inferred,
+                ):
+                    continue
                 if edge.from_artifact_id in frontier_set and edge.to_artifact_id not in visited:
                     neighbor, direction = edge.to_artifact_id, "out"
                 elif edge.to_artifact_id in frontier_set and edge.from_artifact_id not in visited:
@@ -103,6 +114,7 @@ async def get_neighbors(
                         confidence=min(max(edge.confidence or 0.0, 0.0), 1.0),
                         edge_source=edge.source or "unknown",
                         distance=distance,
+                        trust_class=edge.trust_class,
                     )
                 )
             if not candidates:
@@ -146,6 +158,8 @@ async def get_neighbors(
             confidence=f.confidence,
             edge_source=f.edge_source,
             distance=f.distance,
+            trust_class=f.trust_class,
+            claim_supporting=is_claim_supporting(f.trust_class),
         )
         for f in found
     ]
@@ -172,10 +186,13 @@ async def get_neighbors(
         suppressed_artifact_ids=suppressed,
     )
     logger.info(
-        "broker.get_neighbors artifact_id=%s subject=%s depth=%d neighbors=%d suppressed=%d",
+        "broker.get_neighbors artifact_id=%s subject=%s depth=%d trust_floor=%s "
+        "include_inferred=%s neighbors=%d suppressed=%d",
         request.artifact_id,
         requester.subject,
         request.depth,
+        request.trust_floor,
+        request.include_inferred,
         len(neighbors),
         len(suppressed),
     )

@@ -24,6 +24,12 @@ class KnowledgeEdge(Base):
     confidence: Mapped[float | None] = mapped_column(Float)
     source: Mapped[str | None] = mapped_column(Text)
     kb_version: Mapped[str] = mapped_column(Text, nullable=False)
+    # Trust bucket (docs/contracts/trust-buckets.md). Deterministic producers
+    # may only ever assign 'EXTRACTED'; the broker enforces the bucket at read
+    # time via trust_floor. Server default backfills existing rows.
+    trust_class: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'EXTRACTED'")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -31,6 +37,7 @@ class KnowledgeEdge(Base):
     __table_args__ = (
         Index("ix_knowledge_edge_edge_type", "edge_type"),
         Index("ix_knowledge_edge_kb_version", "kb_version"),
+        Index("ix_knowledge_edge_kb_version_trust_class", "kb_version", "trust_class"),
         Index("ix_knowledge_edge_from_artifact_id", "from_artifact_id"),
         Index("ix_knowledge_edge_to_artifact_id", "to_artifact_id"),
         Index(

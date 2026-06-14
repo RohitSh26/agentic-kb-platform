@@ -27,6 +27,9 @@ logger = get_logger(__name__)
 CODE_AUTHORITY = 1.0
 BUILD_TIME_FRESHNESS = 1.0
 EDGE_SOURCE = "graphify"
+# Deterministic AST extraction may ONLY ever assign EXTRACTED
+# (docs/contracts/trust-buckets.md). INFERRED_* arrives with the phase-3 judge.
+EDGE_TRUST_CLASS = "EXTRACTED"
 
 
 async def write_code_artifacts(
@@ -108,6 +111,7 @@ async def write_code_edges(
                 confidence=draft.confidence,
                 source=EDGE_SOURCE,
                 kb_version=kb_version,
+                trust_class=EDGE_TRUST_CLASS,
             )
         )
         inserted += 1

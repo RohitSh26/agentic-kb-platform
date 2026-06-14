@@ -151,3 +151,182 @@ async def test_no_active_kb_version_errors(factory: async_sessionmaker[AsyncSess
 
     with pytest.raises(ToolError, match="no active kb_version"):
         await get_neighbors(deps, GetNeighborsRequest(artifact_id=uuid.uuid4(), depth=1), REQUESTER)
+
+
+# ---------------------------------------------------------------------------
+# Trust-aware traversal (PR-23 / ADR-0011, docs/contracts/trust-buckets.md)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_trust_graph(
+    session: AsyncSession,
+) -> dict[str, uuid.UUID]:
+    """Root A connects to one neighbor per bucket via depth-1 edges."""
+    a = await insert_artifact(session, title="root A", body_text="a", artifact_type="code_chunk")
+    extracted = await insert_artifact(session, title="EXTRACTED node", body_text="e")
+    inferred_high = await insert_artifact(session, title="INFERRED_HIGH node", body_text="ih")
+    inferred_low = await insert_artifact(session, title="INFERRED_LOW node", body_text="il")
+    ambiguous = await insert_artifact(session, title="AMBIGUOUS node", body_text="am")
+    rejected = await insert_artifact(session, title="REJECTED node", body_text="rj")
+    await insert_edge(
+        session,
+        from_artifact_id=a,
+        to_artifact_id=extracted,
+        edge_type="calls",
+        trust_class="EXTRACTED",
+    )
+    await insert_edge(
+        session,
+        from_artifact_id=a,
+        to_artifact_id=inferred_high,
+        edge_type="documents",
+        trust_class="INFERRED_HIGH",
+    )
+    await insert_edge(
+        session,
+        from_artifact_id=a,
+        to_artifact_id=inferred_low,
+        edge_type="documents",
+        trust_class="INFERRED_LOW",
+    )
+    await insert_edge(
+        session,
+        from_artifact_id=a,
+        to_artifact_id=ambiguous,
+        edge_type="documents",
+        trust_class="AMBIGUOUS",
+    )
+    await insert_edge(
+        session,
+        from_artifact_id=a,
+        to_artifact_id=rejected,
+        edge_type="documents",
+        trust_class="REJECTED",
+    )
+    return {
+        "a": a,
+        "extracted": extracted,
+        "inferred_high": inferred_high,
+        "inferred_low": inferred_low,
+        "ambiguous": ambiguous,
+        "rejected": rejected,
+    }
+
+
+async def test_default_trust_floor_returns_only_extracted(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with factory() as session:
+        nodes = await _seed_trust_graph(session)
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    response = await get_neighbors(
+        deps, GetNeighborsRequest(artifact_id=nodes["a"], depth=1), REQUESTER
+    )
+
+    by_id = {n.artifact_id: n for n in response.neighbors}
+    assert set(by_id) == {nodes["extracted"]}
+    neighbor = by_id[nodes["extracted"]]
+    assert neighbor.trust_class == "EXTRACTED"
+    assert neighbor.claim_supporting is True
+
+
+async def test_include_inferred_surfaces_inferred_as_non_claim_support(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with factory() as session:
+        nodes = await _seed_trust_graph(session)
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    response = await get_neighbors(
+        deps,
+        GetNeighborsRequest(artifact_id=nodes["a"], depth=1, include_inferred=True),
+        REQUESTER,
+    )
+
+    by_id = {n.artifact_id: n for n in response.neighbors}
+    # EXTRACTED plus both INFERRED_* surface; AMBIGUOUS/REJECTED still excluded.
+    assert set(by_id) == {nodes["extracted"], nodes["inferred_high"], nodes["inferred_low"]}
+    assert by_id[nodes["extracted"]].claim_supporting is True
+    # INFERRED_* are routing hints only — never claim-supporting.
+    assert by_id[nodes["inferred_high"]].trust_class == "INFERRED_HIGH"
+    assert by_id[nodes["inferred_high"]].claim_supporting is False
+    assert by_id[nodes["inferred_low"]].claim_supporting is False
+
+
+async def test_ambiguous_and_rejected_never_returned(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with factory() as session:
+        nodes = await _seed_trust_graph(session)
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    # Lowest possible floor + include_inferred: AMBIGUOUS/REJECTED still excluded.
+    response = await get_neighbors(
+        deps,
+        GetNeighborsRequest(
+            artifact_id=nodes["a"],
+            depth=1,
+            trust_floor="INFERRED_LOW",
+            include_inferred=True,
+        ),
+        REQUESTER,
+    )
+
+    returned = {n.artifact_id for n in response.neighbors}
+    assert nodes["ambiguous"] not in returned
+    assert nodes["rejected"] not in returned
+
+
+async def test_inferred_only_admitted_when_include_inferred(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with factory() as session:
+        nodes = await _seed_trust_graph(session)
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    # trust_floor below EXTRACTED but include_inferred default False ⇒ still
+    # only EXTRACTED (the gate, not just the floor, governs INFERRED_*).
+    response = await get_neighbors(
+        deps,
+        GetNeighborsRequest(artifact_id=nodes["a"], depth=1, trust_floor="INFERRED_HIGH"),
+        REQUESTER,
+    )
+
+    assert {n.artifact_id for n in response.neighbors} == {nodes["extracted"]}
+
+
+async def test_trust_and_acl_filters_compose(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A restricted EXTRACTED neighbor is suppressed by ACL even though it
+    clears the trust floor — both filters must pass."""
+    async with factory() as session:
+        a = await insert_artifact(session, title="root", body_text="a", artifact_type="code_chunk")
+        # EXTRACTED but team-restricted: requester (no teams) cannot see it.
+        restricted = await insert_artifact(
+            session, title="restricted", body_text="r", acl_teams=["secret-team"]
+        )
+        # EXTRACTED and org-public: visible.
+        public = await insert_artifact(session, title="public", body_text="p")
+        await insert_edge(
+            session,
+            from_artifact_id=a,
+            to_artifact_id=restricted,
+            edge_type="calls",
+            trust_class="EXTRACTED",
+        )
+        await insert_edge(
+            session,
+            from_artifact_id=a,
+            to_artifact_id=public,
+            edge_type="calls",
+            trust_class="EXTRACTED",
+        )
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    response = await get_neighbors(deps, GetNeighborsRequest(artifact_id=a, depth=1), REQUESTER)
+
+    returned = {n.artifact_id for n in response.neighbors}
+    assert public in returned
+    assert restricted not in returned  # trust passes, ACL does not ⇒ excluded

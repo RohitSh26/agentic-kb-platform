@@ -14,7 +14,7 @@ KNOWLEDGE_EDGE_TABLE = "knowledge_edge"
 
 _FETCH_EDGES_QUERY = text(
     f"""
-    SELECT from_artifact_id, to_artifact_id, edge_type, confidence, source
+    SELECT from_artifact_id, to_artifact_id, edge_type, confidence, source, trust_class
     FROM {KNOWLEDGE_EDGE_TABLE}
     WHERE kb_version = :kb_version
       AND (from_artifact_id = ANY(CAST(:artifact_ids AS uuid[]))
@@ -31,6 +31,9 @@ class EdgeRow:
     edge_type: str
     confidence: float | None
     source: str | None
+    # Trust bucket (docs/contracts/trust-buckets.md). The broker enforces the
+    # trust_floor over this column; an unknown value is treated as AMBIGUOUS.
+    trust_class: str
 
 
 async def fetch_edges_touching(
@@ -54,6 +57,7 @@ async def fetch_edges_touching(
             edge_type=row.edge_type,
             confidence=row.confidence,
             source=row.source,
+            trust_class=row.trust_class,
         )
         for row in result
     ]

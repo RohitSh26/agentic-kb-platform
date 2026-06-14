@@ -3,11 +3,14 @@
 > Versioned tool surface served by mcp-server. Schema before code: every tool
 > has a frozen pydantic request/response model (`extra="forbid"`) in
 > `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`, registered in
-> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.2.0"` (1.1.0 = PR-13:
+> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.3.0"` (1.1.0 = PR-13:
 > `authorization` decision on every retrieval response, `injection_*` markers
 > on cards and expansions; 1.2.0 = PR-18: `read_pack.role` opened from the
 > closed six-role enum to a free-form charset-guarded string — response
-> consumers may now receive team-defined role values).
+> consumers may now receive team-defined role values; 1.3.0 = PR-23:
+> `graph.get_neighbors` gains `trust_floor` + `include_inferred` (trust-aware
+> traversal, ADR-0011) and `GraphNeighbor` gains `trust_class` +
+> `claim_supporting`).
 
 ## The six V1 tools
 
@@ -30,7 +33,8 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   `question`, `why_needed`, `decision_needed`, `already_checked_evidence_ids`,
   `max_tokens`. A bare `{"query": ...}` fails schema validation.
 - `context.open_evidence`: `context_pack_id`, `evidence_id`, `max_tokens`.
-- `graph.get_neighbors`: `artifact_id`, optional `edge_types[]`, `depth` 1–3.
+- `graph.get_neighbors`: `artifact_id`, optional `edge_types[]`, `depth` 1–3,
+  `trust_floor` (default `EXTRACTED`), `include_inferred` (default `false`).
 - `run_id` matches `^[A-Za-z0-9._-]{1,128}$` (log-injection guard).
 - `context.read_pack.role` is **free-form** — adopting teams name their own
   roles (`security_auditor` is as valid as `implementation`); the broker never
@@ -83,7 +87,17 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   artifacts). A fully-denied `open_evidence` is a tool error
   (`evidence not available`) — the same error as a missing artifact or an id
   that was never in the pack, so none of the three is distinguishable.
-- Evidence cards carry `injection_flagged: bool` + `injection_signals: list[str]`
+- `graph.get_neighbors` is **trust-aware** (ADR-0011, `trust-buckets.md`).
+  Each returned `GraphNeighbor` carries the connecting edge's `trust_class` and
+  a `claim_supporting` flag (true only for `EXTRACTED`). `trust_floor` defaults
+  to `EXTRACTED`, so the default result is exactly the directly-extracted graph.
+  `AMBIGUOUS` and `REJECTED` edges (and any unknown/banned bucket, treated as
+  `AMBIGUOUS`) are **never** returned and never transited. `INFERRED_HIGH` /
+  `INFERRED_LOW` edges are returned **only** when `include_inferred=true`, with
+  `claim_supporting=false` — they are routing hints to source evidence, never
+  themselves the cited support for a platform-trusted claim. Trust filtering is
+  applied to every edge before the frontier expands and **composes with the ACL
+  filter**: an edge must clear both trust admission and per-hop authorization.
   (scanned over title + summary); `open_evidence` responses carry the same pair
   scanned over the expanded body. Flagging is advisory and deterministic
   (regex, no model calls); flagged content is returned **verbatim**, never

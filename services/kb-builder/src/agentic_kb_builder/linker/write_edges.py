@@ -25,6 +25,9 @@ logger = get_logger(__name__)
 
 EDGE_SOURCE = "linker"
 LOW_CONFIDENCE_THRESHOLD = 0.9
+# The deterministic linker may ONLY ever assign EXTRACTED
+# (docs/contracts/trust-buckets.md). INFERRED_* arrives with the phase-3 judge.
+EDGE_TRUST_CLASS = "EXTRACTED"
 
 
 async def write_link_edges(
@@ -64,6 +67,7 @@ async def write_link_edges(
                 confidence=draft.confidence,
                 source=EDGE_SOURCE,
                 kb_version=kb_version,
+                trust_class=EDGE_TRUST_CLASS,
             )
             .on_conflict_do_update(
                 index_elements=["from_artifact_id", "to_artifact_id", "edge_type"],

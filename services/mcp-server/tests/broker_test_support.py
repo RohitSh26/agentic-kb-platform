@@ -107,12 +107,13 @@ async def insert_edge(
     kb_version: str = KB_VERSION,
     confidence: float = 0.9,
     source: str = "graphify",
+    trust_class: str = "EXTRACTED",
 ) -> None:
     await session.execute(
         text(
             "INSERT INTO knowledge_edge (from_artifact_id, to_artifact_id, edge_type,"
-            " confidence, source, kb_version) VALUES (CAST(:from_id AS uuid),"
-            " CAST(:to_id AS uuid), :edge_type, :confidence, :source, :kb_version)"
+            " confidence, source, kb_version, trust_class) VALUES (CAST(:from_id AS uuid),"
+            " CAST(:to_id AS uuid), :edge_type, :confidence, :source, :kb_version, :trust_class)"
         ),
         {
             "from_id": str(from_artifact_id),
@@ -121,6 +122,7 @@ async def insert_edge(
             "confidence": confidence,
             "source": source,
             "kb_version": kb_version,
+            "trust_class": trust_class,
         },
     )
     await session.commit()
