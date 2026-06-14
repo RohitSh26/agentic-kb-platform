@@ -22,6 +22,7 @@ import re
 from collections.abc import Sequence
 from typing import cast
 
+from json_repair import repair_json
 from openai import AsyncAzureOpenAI, AsyncOpenAI, BadRequestError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import ValidationError
@@ -30,6 +31,9 @@ from agentic_kb_builder.domain import Chunk, WikifyGeneration
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
+
+# Small local models occasionally emit malformed JSON; resample a few times before failing.
+_MAX_PARSE_ATTEMPTS = 3
 
 # provider -> (default base_url, default api_key, default model)
 _PROVIDER_DEFAULTS: dict[str, tuple[str, str, str]] = {
@@ -94,13 +98,19 @@ def _clean_items(items: object, keys: tuple[str, ...]) -> list[dict[str, str]]:
 
 
 def _parse_generation(raw: str) -> WikifyGeneration:
+    extracted = _extract_json(raw)
     try:
-        data: object = json.loads(_extract_json(raw))
-    except json.JSONDecodeError as error:
-        logger.error("event=wikify_model_bad_json error=%s", error)
-        raise ValueError(f"model did not return valid JSON: {raw[:200]!r}") from error
-    if not isinstance(data, dict):
-        raise ValueError("model output JSON was not an object")
+        data: object = json.loads(extracted)
+    except json.JSONDecodeError:
+        # Small local models truncate/degenerate (e.g. trailing tabs, an unclosed
+        # object). Salvage what is structurally recoverable rather than discarding a
+        # whole generation; _clean_items still drops any entry that survives malformed.
+        data = repair_json(extracted, return_objects=True)
+        logger.warning("event=wikify_model_json_repaired")
+    if not isinstance(data, dict) or not data:
+        # Pure prose ("I cannot help...") repairs to nothing usable; fail loudly so the
+        # caller's retry loop resamples rather than recording an empty generation.
+        raise ValueError(f"model did not return usable JSON: {raw[:1000]!r}")
     obj = cast("dict[str, object]", data)
     summary = obj.get("summary")
     payload = {
@@ -125,19 +135,25 @@ class ChatModelClient:
         model: str,
         provider: str,
         temperature: float = 0.0,
+        max_tokens: int = 4000,
     ) -> None:
         self._client = client
         self._model = model
         self._temperature = temperature
+        # Without an explicit cap, Ollama truncates output at its tiny default
+        # num_predict and the wikify JSON comes back unterminated. 4000 fits the
+        # whole structured response for the chunk sizes we send.
+        self._max_tokens = max_tokens
         self.model_name = f"{provider}:{model}"
         self.model_params_hash = hashlib.sha256(
-            f"{self.model_name}|temp={temperature}".encode()
+            f"{self.model_name}|temp={temperature}|max_tokens={max_tokens}".encode()
         ).hexdigest()[:16]
 
     @classmethod
     def from_env(cls) -> ChatModelClient:
         provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
         temperature = float(os.environ.get("LLM_TEMPERATURE", "0"))
+        max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "4000"))
         client: AsyncOpenAI | AsyncAzureOpenAI
         if provider == "azure":
             client = AsyncAzureOpenAI(
@@ -156,7 +172,9 @@ class ChatModelClient:
             client = AsyncOpenAI(base_url=os.environ.get("LLM_BASE_URL", base_url), api_key=api_key)
             model = os.environ.get("LLM_MODEL", default_model)
         logger.info("event=model_client_configured provider=%s model=%s", provider, model)
-        return cls(client, model=model, provider=provider, temperature=temperature)
+        return cls(
+            client, model=model, provider=provider, temperature=temperature, max_tokens=max_tokens
+        )
 
     async def generate_wikify(
         self, *, chunks: Sequence[Chunk], prompt_version: str
@@ -165,10 +183,31 @@ class ChatModelClient:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": _user_prompt(chunks)},
         ]
+        # Small local models are non-deterministic even at temperature 0 and
+        # occasionally emit malformed JSON; a fresh sample usually parses, so
+        # retry a few times before failing the whole generation.
+        last_error: ValueError | None = None
+        for attempt in range(_MAX_PARSE_ATTEMPTS):
+            raw = await self._complete(messages)
+            try:
+                return _parse_generation(raw)
+            except ValueError as error:
+                last_error = error
+                logger.warning(
+                    "event=wikify_parse_retry attempt=%d/%d error=%s",
+                    attempt + 1,
+                    _MAX_PARSE_ATTEMPTS,
+                    error,
+                )
+        assert last_error is not None
+        raise last_error
+
+    async def _complete(self, messages: list[ChatCompletionMessageParam]) -> str:
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
                 temperature=self._temperature,
+                max_tokens=self._max_tokens,
                 response_format={"type": "json_object"},
                 messages=messages,
             )
@@ -177,7 +216,9 @@ class ChatModelClient:
             # fenced/prose output, so retry without forcing JSON mode
             logger.warning("event=model_json_mode_unsupported model=%s", self._model)
             response = await self._client.chat.completions.create(
-                model=self._model, temperature=self._temperature, messages=messages
+                model=self._model,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+                messages=messages,
             )
-        raw = response.choices[0].message.content or ""
-        return _parse_generation(raw)
+        return response.choices[0].message.content or ""

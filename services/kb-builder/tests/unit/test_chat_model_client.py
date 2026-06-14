@@ -42,5 +42,19 @@ def test_drops_malformed_concepts_and_facts() -> None:
 
 
 def test_non_json_output_raises_a_clear_error() -> None:
-    with pytest.raises(ValueError, match="did not return valid JSON"):
+    # Pure prose has no JSON to salvage even after repair -> fail loudly (caller resamples).
+    with pytest.raises(ValueError, match="did not return usable JSON"):
         _parse_generation("I cannot help with that.")
+
+
+def test_repairs_truncated_local_model_json() -> None:
+    # gemma3:4b-style degeneration: an unclosed object + trailing tabs. json-repair
+    # salvages the well-formed prefix; malformed entries are still dropped by _clean_items.
+    raw = (
+        '{"summary": "A doc.", "concepts": [],'
+        ' "facts": [{"statement": "s", "quote": "q"},'
+        ' {"statement": "broken", "quote": "x\t\t\t'
+    )
+    generation = _parse_generation(raw)
+    assert generation.summary == "A doc."
+    assert generation.facts[0].quote == "q"
