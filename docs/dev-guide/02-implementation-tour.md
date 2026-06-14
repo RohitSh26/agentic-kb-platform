@@ -1,4 +1,4 @@
-# 02 — Implementation tour (PR-01 → PR-15)
+# 02 — Implementation tour (PR-01 → PR-21)
 
 > A guided walk through the code as it exists today. Read
 > [01 — Design deep dive](01-design-deep-dive.md) first for the *why*; this document is the *how*
@@ -87,8 +87,9 @@ deterministic constraint naming via
 Migrations (`services/kb-builder/migrations/versions/`): `0001` creates the registry; `0002` adds source
 identity + single-active-build; `0003` adds `generation_cache_artifact` + `knowledge_kind`
 (with a backfill of pre-existing cache rows); `0004` adds code spans; `0005` adds the linker
-partial unique index; `0006` adds the `embedding_cache.embedding` vector column. Every migration
-has a tested downgrade.
+partial unique index; `0006` adds the `embedding_cache.embedding` vector column; `0007` adds
+`retrieval_event.status` (PR-10 ledger outcomes); `0008` adds `acl_teams` to `source_item` and
+`knowledge_artifact` (PR-13). Every migration has a tested downgrade.
 
 ## 3. Service-local utilities (the former shared `packages/common`)
 

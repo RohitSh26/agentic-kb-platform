@@ -6,9 +6,9 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
   the Postgres Knowledge Registry, and the architecture invariants with pointers to where each is
   enforced in code.
 - [02 — Implementation tour](02-implementation-tour.md): a guided walk through both planes as
-  implemented (PR-01 → PR-16): contracts, schema, connectors, incremental build engine, wikify,
+  implemented (PR-01 → PR-21): contracts, schema, connectors, incremental build engine, wikify,
   graphify, linker, indexing, the MCP server and Context Broker, security hardening, source
-  configuration, and the portable agent framework.
+  configuration, the portable agent framework, and the deployment/adopter follow-ons.
 - [03 — Local testing](03-local-testing.md): how to run everything on a laptop with a local
   Postgres and in-memory fakes — no Azure resources required.
 

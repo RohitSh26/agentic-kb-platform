@@ -40,6 +40,10 @@ The Context Broker is registered in every host under the single documented serve
 | `context.create_pack` | `context-broker_context.create_pack` | `context-broker/context.create_pack` |
 | `ledger.list_retrievals` | `context-broker_ledger.list_retrievals` | `context-broker/ledger.list_retrievals` |
 
+> The sixth broker tool, `graph.get_neighbors`, maps the same way
+> (`context-broker_graph.get_neighbors` / `context-broker/graph.get_neighbors`) but is granted to
+> no framework agent in V1, so it has no row above.
+
 ## What every rendering MUST preserve
 
 For each canonical manifest, its rendering in each host format must carry:
@@ -89,6 +93,9 @@ new agent invocable by adding it to the orchestrator's `task` allowlist / `agent
 |---|---|---|
 | orchestrator | the five specialists | `evidence-pack-orchestration` · `evidence-citation` |
 | the five specialists + template | none | `context-request-discipline` · `evidence-citation` |
+
+> "template" here is the rendering skeletons `_template.*` only — there is no `agents/_template.md`
+> canon; it is grouped with the specialists because it carries the same specialist-shaped grants.
 
 - **Copilot** (`*.agent.md`, VS Code custom-agent fields): the orchestrator declares
   `agents: [<the five specialist names>]` and `handoffs:` whose targets are those same five

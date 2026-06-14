@@ -92,7 +92,7 @@ kb_build_run(build_id PK, kb_version, status, started_at, completed_at, sources_
              sources_changed, artifacts_created, artifacts_updated, artifacts_deleted, llm_calls,
              embedding_calls, search_docs_upserted, error_summary)
 
-retrieval_event(retrieval_id PK, run_id, context_pack_id, agent_name, tool_name, query_text,
+retrieval_event(retrieval_id PK, run_id, context_pack_id, agent_name, tool_name, status, query_text,
                 normalized_query, retrieval_profile, kb_version, source_filters jsonb,
                 returned_artifact_ids uuid[], reused_evidence_ids uuid[], new_evidence_ids uuid[],
                 cache_hit bool, semantic_reuse bool, tokens_returned int, latency_ms int, created_at)
