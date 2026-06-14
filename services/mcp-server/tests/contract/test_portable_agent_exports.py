@@ -16,6 +16,7 @@ standalone checker, agents/check_parity.py — smoke-tested here by subprocess
 (never imported: services do not import root files, ADR-0008).
 """
 
+import ast
 import json
 import re
 import shutil
@@ -58,6 +59,41 @@ AUTH_REFERENCE_RE = re.compile(
 pytestmark = pytest.mark.skipif(
     not AGENTS_DIR.is_dir(), reason="agents/ manifests not present in this checkout"
 )
+
+
+def _checker_module_constants() -> dict[str, object]:
+    """Extract check_parity.py's module-level constants without importing it.
+
+    ADR-0008 forbids services importing root files, and the checker duplicates these
+    constants on purpose. ast.literal_eval keeps the comparison value-based (not source
+    text), so reformatting the checker never trips this — only a real value drift does.
+    """
+    tree = ast.parse((AGENTS_DIR / "check_parity.py").read_text())
+    values: dict[str, object] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        source = node.value.args[0] if isinstance(node.value, ast.Call) else node.value
+        try:
+            values[target.id] = ast.literal_eval(source)
+        except ValueError:
+            continue
+    return values
+
+
+def test_checker_constants_match_the_contract_test_copies() -> None:
+    # the parser and these constants are duplicated between this suite and
+    # agents/check_parity.py (ADR-0008: the test cannot import the checker); pin that
+    # the two copies agree so a fix in one can't silently diverge from the other
+    constants = _checker_module_constants()
+    assert constants["COPILOT_MAX_BODY_CHARS"] == COPILOT_MAX_BODY_CHARS
+    assert constants["REQUEST_MORE_FIELDS"] == REQUEST_MORE_FIELDS
+    assert constants["SECRET_MARKERS"] == SECRET_MARKERS
+    assert constants["OPENCODE_SKILL_NAME_RE"] == OPENCODE_SKILL_NAME_RE.pattern
+    assert constants["AUTH_REFERENCE_RE"] == AUTH_REFERENCE_RE.pattern
 
 
 def _split(path: Path) -> tuple[list[str], str]:

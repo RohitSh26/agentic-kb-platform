@@ -186,14 +186,13 @@ class ParityChecker:
         )
 
     def discovered_skills(self) -> list[str]:
-        skills: set[str] = set()
+        # anchored to the OpenCode tree (the shipped skill names): per-agent skill
+        # membership checks against this set, and check_skills separately pins that the
+        # copilot tree carries the same set, so the two definitions cannot diverge
         opencode_skills = self.opencode_dir / "skills"
-        if opencode_skills.is_dir():
-            skills |= {p.name for p in opencode_skills.iterdir() if p.is_dir()}
-        copilot_skills = self.copilot_dir / "skills"
-        if copilot_skills.is_dir():
-            skills |= {p.stem for p in copilot_skills.glob("*.md")}
-        return sorted(skills)
+        if not opencode_skills.is_dir():
+            return []
+        return sorted(p.name for p in opencode_skills.iterdir() if p.is_dir())
 
     def canon(self, role: str) -> tuple[dict, str] | None:
         try:
@@ -267,7 +266,8 @@ class ParityChecker:
         expected = [f"context-broker_{tool}" for tool in canon_tools]
         if not isinstance(tools, dict) or list(tools) != expected:
             self.fail(f"{label}: tools map drifted from canonical allowed_tools")
-        elif any(value != "true" for value in tools.values()):
+        if isinstance(tools, dict) and any(value != "true" for value in tools.values()):
+            # independent of the set check above, so both are collected in one run
             self.fail(f"{label}: every tools entry must enable (true)")
         permission = fields.get("permission")
         if not isinstance(permission, dict):
@@ -351,9 +351,13 @@ class ParityChecker:
             expected = [*expected, "agent"]
         if fields.get("tools") != expected:
             self.fail(f"{label}: tools list drifted from canonical allowed_tools")
+        # handoffs are VS Code-only and optional (the cloud agent ignores them); validate
+        # their shape only when present rather than requiring them whenever agents exist
         handoffs = fields.get("handoffs")
-        if agents:
-            if not isinstance(handoffs, list) or [h.get("agent") for h in handoffs] != agents:
+        if handoffs is not None:
+            if not agents:
+                self.fail(f"{label}: handoffs without declared agents")
+            elif not isinstance(handoffs, list) or [h.get("agent") for h in handoffs] != agents:
                 self.fail(f"{label}: handoffs must target exactly the declared agents, in order")
             else:
                 for handoff in handoffs:
@@ -361,8 +365,6 @@ class ParityChecker:
                         self.fail(f"{label}: every handoff needs label + prompt")
                     if handoff.get("send") != "false":
                         self.fail(f"{label}: handoffs must not auto-send (send: false)")
-        elif handoffs is not None:
-            self.fail(f"{label}: handoffs without declared agents")
         if len(body) >= COPILOT_MAX_BODY_CHARS:
             self.fail(f"{label}: body over Copilot's 30k character limit")
         self.check_body(label, canon_fields, canon_body, role, body)
@@ -466,6 +468,17 @@ class ParityChecker:
                 continue
             if not text.strip():
                 self.fail(f".copilot/skills/{skill}.md: empty skill module")
+        # body parity: the two host renderings of a skill must not drift. There is no
+        # canonical source yet (a recorded follow-up); this is the interim gate over the
+        # safety-critical prose. The opencode body is its post-frontmatter content.
+        for skill in sorted(opencode_set & copilot_set):
+            try:
+                _, opencode_body = _read(opencode_skills / skill / "SKILL.md")
+                copilot_text = (copilot_skills / f"{skill}.md").read_text(errors="replace")
+            except (ParseError, OSError):
+                continue  # the per-file checks above already reported the unreadable file
+            if opencode_body.strip() != copilot_text.strip():
+                self.fail(f"skill {skill!r}: opencode and copilot renderings have drifted")
 
     def check_templates(self) -> None:
         slot = "<!-- your agent description here -->"
@@ -500,7 +513,7 @@ class ParityChecker:
                 self.fail(".copilot/agents/_template.agent.md: missing")
             else:
                 try:
-                    fields, _ = _read(copilot_template)
+                    fields, body = _read(copilot_template)
                 except ParseError as error:
                     self.fail(str(error))
                 else:
@@ -516,6 +529,11 @@ class ParityChecker:
                     if isinstance(tools, list) and "agent" in tools:
                         self.fail(
                             ".copilot/agents/_template.agent.md: agent tool is pack-creator-only"
+                        )
+                    if len(body) >= COPILOT_MAX_BODY_CHARS:
+                        self.fail(
+                            ".copilot/agents/_template.agent.md: body over Copilot's 30k "
+                            "character limit"
                         )
                 if slot not in copilot_template.read_text(errors="replace"):
                     self.fail(
@@ -541,6 +559,7 @@ class ParityChecker:
             self.copilot_dir / "mcp" / "repository-settings.json",
             self.copilot_dir / "mcp" / "vscode-mcp.json",
         )
+        parsed: dict[Path, object | None] = {}
         for tree in (self.opencode_dir, self.copilot_dir):
             if not tree.is_dir():
                 continue
@@ -557,15 +576,19 @@ class ParityChecker:
                         )
                 if path.suffix == ".json":
                     config = self.load_json(path)
+                    parsed[path] = config
                     for value in self._authorization_values(config):
                         if not AUTH_REFERENCE_RE.fullmatch(value):
                             self.fail(
                                 f"{path.relative_to(self.root)}: Authorization value is not a "
                                 f"reference: {value!r}"
                             )
-        # two-sided: each shipped MCP config must actually carry an auth reference to scan
+        # two-sided: each shipped MCP config must actually carry an auth reference to scan.
+        # reuse the parse from the scan above — an unreadable file already failed once, so
+        # do not re-parse it or stack a confusing "no reference" failure on the same file
         for path in known_configs:
-            if path.is_file() and not self._authorization_values(self.load_json(path)):
+            config = parsed.get(path)
+            if path.is_file() and config is not None and not self._authorization_values(config):
                 self.fail(
                     f"{path.relative_to(self.root)}: no Authorization reference found to verify"
                 )
