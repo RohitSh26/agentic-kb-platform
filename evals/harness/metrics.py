@@ -75,6 +75,9 @@ def compute_metrics(records: list[RunRecord]) -> dict[str, MetricValue]:
 
     reuse_eligible = [e for e in events if e.status in ("reused", "approved")]
     follow_ups = [e for e in events if e.tool_name == "context.request_more"]
+    # a denied / needs_human_approval follow-up never had a chance to be a semantic
+    # reuse, so the hit rate is over the follow-ups that were actually charged
+    charged_follow_ups = [e for e in follow_ups if e.status in ("approved", "reused")]
     agents = {event.agent_name for event in events}
 
     measured: dict[str, float | None] = {
@@ -87,7 +90,7 @@ def compute_metrics(records: list[RunRecord]) -> dict[str, MetricValue]:
         ),
         "retrieval_calls_per_agent": _ratio(len(events), len(agents)),
         "semantic_cache_hit_rate": _ratio(
-            sum(1 for e in follow_ups if e.semantic_reuse), len(follow_ups)
+            sum(1 for e in charged_follow_ups if e.semantic_reuse), len(charged_follow_ups)
         ),
         "unsupported_claim_rate": _ratio(
             sum(record.unsupported_claims for record in records),

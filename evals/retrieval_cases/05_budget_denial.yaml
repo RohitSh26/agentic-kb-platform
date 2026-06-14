@@ -1,0 +1,33 @@
+id: budget-denial-contractual
+task_type: retrieval_recall
+task: "trace the retention policy and its alert wiring for delivery monitoring"
+approved_context_plan: "find the retention policy and how its job failures alert"
+budget_tokens: 8000
+fixtures:
+  artifacts:
+    - key: retention_policy
+      title: "Session retention policy"
+      body_text: "Session retention is 90 days; an alert fires when the retention job fails."
+      authority_score: 0.9
+  search_seeds:
+    - keyword: retention
+      hits: [retention_policy]
+# delivery-agent has a 1-request allowance: the first distinct question is approved,
+# the second is denied (request allowance exhausted). Denials are contractual broker
+# behavior, not a case failure — so this case represents budget enforcement in the
+# committed benchmark, not just the unit suite.
+script:
+  - tool: context.request_more
+    agent: delivery-agent
+    question: "what alerts exist for the retention job"
+    why_needed: "monitoring the delivery rollout"
+    decision_needed: "whether the retention job has alert coverage"
+    max_tokens: 1000
+  - tool: context.request_more
+    agent: delivery-agent
+    question: "how do webhooks report delivery problems"
+    why_needed: "failure visibility for a different subsystem"
+    decision_needed: "escalation path for webhook failures"
+    max_tokens: 1000
+expected:
+  docs: [retention_policy]

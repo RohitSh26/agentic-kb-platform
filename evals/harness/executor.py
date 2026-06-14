@@ -51,8 +51,14 @@ def _requester(subject: str) -> Requester:
     return Requester(subject=subject, teams=frozenset())
 
 
-# manifest allowances from .claude/rules/token-budgets.md, keyed by the agent
-# names case scripts use as broker subjects
+# Manifest allowances from .claude/rules/token-budgets.md, keyed by the agent names
+# case scripts use as broker subjects (each value is the top of its documented range;
+# test_allowances.py pins that they stay within the rule):
+#   impl-agent     -> implementation: 2 req / 3k-4k
+#   test-agent     -> test:           1 req / 1.5k-2.5k
+#   review-agent   -> code reviewer:  1 req / 1.5k-2.5k
+#   delivery-agent -> delivery planner: 1 req / 1k-1.5k
+#   pr-planner-agent -> PR planner:    1 req / 1k-1.5k
 AGENT_ALLOWANCES: dict[str, AgentAllowance] = {
     "impl-agent": AgentAllowance(max_requests=2, max_tokens=4000),
     "test-agent": AgentAllowance(max_requests=1, max_tokens=2500),
@@ -238,6 +244,10 @@ def _missing_items(
     for key in case.expected.docs:
         if str(key_to_id[key]) not in returned_ids:
             missing.append(f"doc:{key}")
+    # non-doc recall is presence in the broker-returned corpus (pack summary + card
+    # title/summary + expansion text assembled in execute_case — never scripted claims);
+    # doc recall above is the ID-grounded check. Substring presence is a deliberate V1
+    # approximation (a returned-card anchor would need a per-item card reference).
     folded_corpus = corpus.casefold()
     for category, items in (
         ("file", case.expected.files),
