@@ -59,8 +59,23 @@ async def _load_linkable_artifacts(session: AsyncSession) -> list[LinkableArtifa
             KnowledgeArtifact.title,
             KnowledgeArtifact.body_text,
             SourceItem.source_type,
+            SourceItem.external_id,
+            SourceItem.path,
+            SourceItem.branch,
         )
         .join(SourceItem, KnowledgeArtifact.source_id == SourceItem.source_id)
         .where(SourceItem.is_deleted.is_(False))
     )
-    return [LinkableArtifact(*row) for row in rows.tuples()]
+    return [
+        LinkableArtifact(
+            artifact_id=row.artifact_id,
+            artifact_type=row.artifact_type,
+            title=row.title,
+            body_text=row.body_text,
+            source_type=row.source_type,
+            external_id=row.external_id,
+            path=row.path,
+            branch=row.branch,
+        )
+        for row in rows
+    ]

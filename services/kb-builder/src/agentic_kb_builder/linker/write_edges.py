@@ -18,6 +18,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentic_kb_builder.domain import LinkEdgeDraft
+from agentic_kb_builder.domain.schema_versions import RELATION_SCHEMA_VERSION
 from agentic_kb_builder.infrastructure.postgres.models import KnowledgeEdge
 from agentic_kb_builder.structured_logging import get_logger
 
@@ -68,11 +69,18 @@ async def write_link_edges(
                 source=EDGE_SOURCE,
                 kb_version=kb_version,
                 trust_class=EDGE_TRUST_CLASS,
+                relation_schema_version=RELATION_SCHEMA_VERSION,
+                evidence=draft.evidence,
             )
             .on_conflict_do_update(
                 index_elements=["from_artifact_id", "to_artifact_id", "edge_type"],
                 index_where=text("source = 'linker'"),
-                set_={"confidence": draft.confidence, "kb_version": kb_version},
+                set_={
+                    "confidence": draft.confidence,
+                    "kb_version": kb_version,
+                    "relation_schema_version": RELATION_SCHEMA_VERSION,
+                    "evidence": draft.evidence,
+                },
             )
             .returning(text("(xmax = 0)"))
         )
@@ -110,14 +118,20 @@ async def _delete_stale(
             KnowledgeEdge.from_artifact_id,
             KnowledgeEdge.to_artifact_id,
             KnowledgeEdge.edge_type,
+            KnowledgeEdge.evidence,
         ).where(KnowledgeEdge.source == EDGE_SOURCE)
     )
     stale_ids: list[uuid.UUID] = []
     protected = 0
-    for edge_id, from_id, to_id, edge_type in rows.tuples():
+    for edge_id, from_id, to_id, edge_type, evidence in rows.tuples():
         if (from_id, to_id, edge_type) in computed:
             continue
-        if edge_type in protected_edge_types:
+        # protected_edge_types shields edges the SKIPPED semantic pass would have
+        # reproduced — those carry no evidence pointer. A deterministic edge
+        # (evidence set, e.g. cross-domain implements) is always recomputed when
+        # its evidence still exists, so its absence here means the evidence is
+        # genuinely gone: it must be deleted, never protected (invariant 7).
+        if edge_type in protected_edge_types and evidence is None:
             protected += 1
             continue
         stale_ids.append(edge_id)

@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Text, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, Text, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agentic_kb_builder.infrastructure.postgres.models.base import Base
@@ -30,6 +31,17 @@ class KnowledgeEdge(Base):
     trust_class: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'EXTRACTED'")
     )
+    # Relation ontology version this edge was produced under
+    # (docs/contracts/relation-ontology.md). Part of the relationship-judgment
+    # cache key; server default backfills existing rows to version 1.
+    relation_schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    # Deterministic evidence pointer: the matched reference / match key /
+    # changed-file path (relation-ontology.md "Required edge fields"). Nullable
+    # so pre-existing graphify/linker edges are untouched; the cross-domain
+    # linker populates it for every edge it writes.
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

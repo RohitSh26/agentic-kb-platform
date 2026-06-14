@@ -11,6 +11,7 @@ from agentic_kb_builder.connectors.config_loader import (
     load_source_config,
     resolve_token,
 )
+from agentic_kb_builder.connectors.git_metadata import GitMetadataConnector
 from agentic_kb_builder.connectors.github_code import GitHubCodeConnector
 from agentic_kb_builder.connectors.github_doc import GitHubDocConnector
 from agentic_kb_builder.connectors.source_connector import BaseConnector, Connector, FetchBackend
@@ -26,6 +27,7 @@ __all__ = [
     "FilteredFetchBackend",
     "GitHubCodeConnector",
     "GitHubDocConnector",
+    "GitMetadataConnector",
     "SourceConfigError",
     "connectors_from_config",
     "load_source_config",

@@ -89,7 +89,7 @@ def load_source_config(path: str | Path) -> SourceConfig:
     counts = Counter(spec.type for spec in config.sources)
     logger.info(
         "event=source_config_loaded path=%s sources=%d enabled=%d "
-        "github_code=%d github_doc=%d azure_wiki=%d ado_card=%d",
+        "github_code=%d github_doc=%d azure_wiki=%d ado_card=%d git_metadata=%d",
         config_path,
         len(config.sources),
         sum(1 for spec in config.sources if spec.enabled),
@@ -97,6 +97,7 @@ def load_source_config(path: str | Path) -> SourceConfig:
         counts["github_doc"],
         counts["azure_wiki"],
         counts["ado_card"],
+        counts["git_metadata"],
     )
     return config
 

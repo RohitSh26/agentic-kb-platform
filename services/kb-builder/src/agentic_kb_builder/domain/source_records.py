@@ -6,7 +6,7 @@ from pydantic import Field
 
 from agentic_kb_builder.domain.artifact_model import ArtifactModel
 
-SourceType = Literal["github_code", "github_doc", "azure_wiki", "ado_card"]
+SourceType = Literal["github_code", "github_doc", "azure_wiki", "ado_card", "git_metadata"]
 
 
 class SourceRef(ArtifactModel):
@@ -14,7 +14,7 @@ class SourceRef(ArtifactModel):
 
     source_version semantics per connector: github_code/github_doc = commit SHA,
     azure_wiki = page revision (page id goes in external_id, never concatenated),
-    ado_card = revision.
+    ado_card = revision, git_metadata = full commit SHA (one ref per commit).
     """
 
     source_type: SourceType

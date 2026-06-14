@@ -31,7 +31,11 @@ from agentic_kb_builder.application.build_runner import (
     Wikifier,
 )
 from agentic_kb_builder.application.publish_gates import make_publish_gate_validator
-from agentic_kb_builder.connectors import connectors_from_config, load_source_config
+from agentic_kb_builder.connectors import (
+    GitMetadataConnector,
+    connectors_from_config,
+    load_source_config,
+)
 from agentic_kb_builder.connectors.local_fs import local_fs_backend_factory
 from agentic_kb_builder.embeddings import LocalHashEmbedder
 from agentic_kb_builder.graphify import GraphifyGraphifier
@@ -83,6 +87,7 @@ async def run_build(
     collaborators: Collaborators,
     activate: bool,
     allow_large_delta: bool = False,
+    git_metadata: bool = True,
 ) -> KbBuildRun:
     """Run one build into Postgres; activate the new kb_version if every publish
     gate passes (docs/contracts/publish-gates.md). allow_large_delta overrides the
@@ -90,6 +95,12 @@ async def run_build(
     config = load_source_config(sources_path)
     factory = local_fs_backend_factory(Path(workspace), version=version)
     connectors = connectors_from_config(config, factory)
+    if git_metadata:
+        # Cross-domain phase 2 (PR-26): deterministic, zero-LLM commit artifacts
+        # from the local workspace git history. Appended last so its commit
+        # artifacts can resolve changed-file → code edges against code artifacts
+        # produced earlier in the same build.
+        connectors.append(GitMetadataConnector(Path(workspace)))
     runner = BuildRunner(
         session,
         kb_version=kb_version,
@@ -139,6 +150,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--version", default="local", help="source_version stamp (e.g. a git SHA)")
     parser.add_argument("--no-activate", action="store_true", help="build but do not mark active")
     parser.add_argument(
+        "--no-git-metadata",
+        action="store_true",
+        help="skip the git-metadata connector (commit artifacts + cross-domain links)",
+    )
+    parser.add_argument(
         "--allow-large-delta",
         action="store_true",
         help="override the symbol-count-delta publish gate for an intentional large change "
@@ -161,6 +177,7 @@ async def _main(args: argparse.Namespace) -> int:
                 collaborators=default_collaborators(session),
                 activate=not args.no_activate,
                 allow_large_delta=args.allow_large_delta,
+                git_metadata=not args.no_git_metadata,
             )
             active = await get_active_kb_version(session)
     finally:
