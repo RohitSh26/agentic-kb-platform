@@ -15,7 +15,7 @@ Every report and baseline carries exactly these eleven metrics, each as
 | `duplicate_context_tokens` | measured | tokens charged for evidence IDs already delivered earlier in the same run — cards (L0/L1) and expansions (L2) tracked separately, so the first `open_evidence` on a carded ID is new content, not a duplicate |
 | `evidence_reuse_rate` | measured | ledger rows with status `reused` ÷ rows with status `reused` or `approved` |
 | `retrieval_calls_per_agent` | measured | ledger rows ÷ distinct `agent_name` values (per-agent table in the report body) |
-| `semantic_cache_hit_rate` | measured | `semantic_reuse=true` rows ÷ follow-up (`context.request_more`) rows |
+| `semantic_cache_hit_rate` | measured | `semantic_reuse=true` rows ÷ **charged** follow-up (`context.request_more` with status `approved` or `reused`) rows — a denied/escalated follow-up could never be a semantic reuse |
 | `llm_calls_per_build` | not_measured | build-plane metric; no real build runs in the harness |
 | `embedding_calls_per_build` | not_measured | build-plane metric; no real build runs in the harness |
 | `unsupported_claim_rate` | measured_scripted | scripted agent-output claims whose `evidence_ids` fail `validate_evidence_references` against the IDs the broker actually returned ÷ total claims |

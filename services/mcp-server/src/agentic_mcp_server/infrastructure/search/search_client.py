@@ -48,5 +48,7 @@ class FakeSearchClient:
                     current = best.get(hit.artifact_id)
                     if current is None or hit.score > current.score:
                         best[hit.artifact_id] = hit
-        ranked = sorted(best.values(), key=lambda hit: hit.score, reverse=True)
+        # stable secondary key so equal scores order deterministically (artifact_id),
+        # rather than depending on dict iteration order
+        ranked = sorted(best.values(), key=lambda hit: (-hit.score, str(hit.artifact_id)))
         return ranked[:top]

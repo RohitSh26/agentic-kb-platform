@@ -1,10 +1,10 @@
 {
   "schema_version": "1.0.0",
-  "created_at": "2026-06-11T01:32:57.604168+00:00",
-  "git_sha": "a4e4e48",
+  "created_at": "2026-06-14T04:05:52.169129+00:00",
+  "git_sha": "98bc94f",
   "metrics": {
     "context_tokens_per_successful_task": {
-      "value": 58.3,
+      "value": 55.27272727272727,
       "status": "measured"
     },
     "duplicate_context_tokens": {
@@ -12,15 +12,15 @@
       "status": "measured"
     },
     "evidence_reuse_rate": {
-      "value": 0.15789473684210525,
+      "value": 0.14285714285714285,
       "status": "measured"
     },
     "retrieval_calls_per_agent": {
-      "value": 3.8,
+      "value": 4.4,
       "status": "measured"
     },
     "semantic_cache_hit_rate": {
-      "value": 0.14285714285714285,
+      "value": 0.125,
       "status": "measured"
     },
     "llm_calls_per_build": {
