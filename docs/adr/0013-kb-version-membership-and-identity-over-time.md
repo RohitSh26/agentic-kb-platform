@@ -2,8 +2,11 @@
 
 ## Status
 
-**Accepted** (2026-06-14). Ratified by the platform owner; PR-27 implements this model. Production
-cadence confirmed **incremental nightly** (per ADR-0004), so §1 (interval membership) is mandatory.
+**Accepted** (2026-06-14) — the platform owner directed implementation of this design ("complete the
+new design we discussed"); PR-27 implements it. This ADR **assumes** the production cadence is
+incremental nightly (per ADR-0004), which makes §1 (interval membership) mandatory; the cadence
+question in "Open question" below is not yet explicitly answered — if production does full nightly
+rebuilds instead, §1 reduces to a deletion/rename sweep.
 
 ## Context
 
