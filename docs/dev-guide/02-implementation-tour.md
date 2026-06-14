@@ -32,8 +32,8 @@ invalidates the relevant generation cache. (`MCP_SCHEMA_VERSION` lives in the ru
 
 Build-plane schemas, all under `services/kb-builder/src/agentic_kb_builder/`:
 
-- `domain/source_records.py` — `SourceType` (github_code | github_doc | azure_wiki | ado_card),
-  `SourceRef` (mirrors `source_item`: uri, version, repo/branch/path/external_id), and
+- `domain/source_records.py` — `SourceType` (github_code | github_doc | azure_wiki | ado_card |
+  git_metadata), `SourceRef` (mirrors `source_item`: uri, version, repo/branch/path/external_id), and
   `NormalizedContent` (source + normalized text + `content_hash`; same source state must hash
   identically on any machine).
 - `domain/wiki_artifacts.py` — `Chunk`, `ConceptDraft`, `SourceBackedFactDraft`,
@@ -125,6 +125,17 @@ Concrete connectors are thin subclasses: `GitHubCodeConnector` (version = commit
 `AzureWikiConnector` (page revision; `external_id` carries the page id), `AdoCardConnector` (card
 revision; the backend renders card fields deterministically — cards mutate, so we snapshot
 normalized fields, per the raw-storage policy).
+
+`git_metadata.py` (PR-26) is the odd one out — it has no `FetchBackend`; it shells out to the
+local repo's `git log` / `git show` under the workspace root and emits one deterministic `commit`
+artifact per commit (`source_version` = full SHA, `source_uri` = `git:<sha>`). The rendering is
+subject + body + a delimited sorted changed-file list, so the same commit always hashes the same
+and is skipped on rerun. Commit sources are **zero-LLM**: the build runner branches on
+`source_type == "git_metadata"` to write one commit artifact (no wikify, no graphify, no
+`llm_calls`), still embedded and indexed via the shared deterministic paths. A non-repo workspace
+is valid — the connector returns no sources, never an error. The commit artifact's `acl_teams` is
+the **intersection** of the changed files' source ACLs (`acl-source-visibility.md`): a derivation
+only ever narrows visibility, and zero resolvable inputs deny by default.
 
 **Source configuration (PR-14)** — which sources the nightly build ingests is declared in a
 reviewed `sources.yaml` (contract: `docs/contracts/source-config.md`; pinned example:

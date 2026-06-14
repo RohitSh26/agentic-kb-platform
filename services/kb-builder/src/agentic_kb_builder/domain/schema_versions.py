@@ -13,3 +13,7 @@ CHUNKER_VERSION: Final = "1.0.0"
 # whose artifact mappings are empty.
 GRAPHIFY_VERSION: Final = "1.1.0"
 PARSER_CONFIG_VERSION: Final = "1.0.0"
+# Relation ontology version stamped on every linker edge
+# (docs/contracts/relation-ontology.md). Bumping it is part of the
+# relationship-judgment cache key and re-evaluates affected edges.
+RELATION_SCHEMA_VERSION: Final = 1

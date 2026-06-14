@@ -31,6 +31,12 @@ MUST treat an unknown `edge_type` as `AMBIGUOUS` (excluded from default traversa
 one of the above with its required evidence, it is **not created** — it becomes a candidate
 (phase 3 audit table) or an open question, never an edge.
 
+**Producers note (PR-26, phase 2):** the `git_metadata` source produces `commit` knowledge nodes
+(one per local commit), which participate as the `from` endpoint of `implements` (commit →
+work-item, from an explicit AB#/#/GH-/PR# / branch reference) and `mentions` (commit → code_file,
+from a changed-file path). This adds **no new edge type** — the vocabulary above stays closed; it
+only records a new node producer for the existing `implements` / `mentions` rows.
+
 ## Trust class rules
 
 - An edge created by the **deterministic** mechanism (AST extractor, deterministic linker) is

@@ -27,13 +27,22 @@ LinkStrategy = Literal["deterministic", "semantic"]
 
 
 class LinkEdgeDraft(ArtifactModel):
-    """One linker-produced knowledge_edge row (source='linker')."""
+    """One linker-produced knowledge_edge row (source='linker').
+
+    ``evidence`` is the deterministic pointer the relation ontology requires
+    (docs/contracts/relation-ontology.md "Required edge fields"): the matched
+    work-item reference, the changed-file path, or the verbatim match key. Stored
+    as a small JSON object in knowledge_edge.evidence. Optional only because the
+    pre-PR-26 doc/concept rules predate the column; the cross-domain rules always
+    set it.
+    """
 
     from_artifact_id: uuid.UUID
     to_artifact_id: uuid.UUID
     edge_type: LinkerEdgeType
     confidence: float = Field(ge=0.0, le=1.0)
     strategy: LinkStrategy
+    evidence: dict[str, str] | None = None
 
 
 __all__ = ["LinkEdgeDraft", "LinkStrategy", "LinkerEdgeType"]

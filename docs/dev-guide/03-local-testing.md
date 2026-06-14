@@ -133,11 +133,22 @@ Protocol next to its caller and a fake next to its tests — never import an SDK
 
 ## Running an end-to-end build locally
 
-There is no CLI entry point yet (it arrives with the nightly workflow). The supported way to run
-the full pipeline locally **is the integration test suite** — `test_build_engine.py` constructs a
-real `BuildRunner` against your local Postgres with fake connectors/model/embedder/indexer and
-exercises the complete flow: fetch → hash-skip → wikify (cache-gated) → graphify (cache-gated) →
-embed (cache-gated) → index → edges → linker → run accounting → activation gating.
+The `build` CLI (PR-22) runs a full no-cloud build into Postgres — local-FS fetch + Graphify (AST)
++ wikify (local Ollama by default) + local embeddings + the in-memory Search projection, plus the
+`git_metadata` connector (PR-26) that turns local commits into `commit` artifacts and cross-domain
+links:
+
+```sh
+cd services/kb-builder
+export DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/agentic_kb   # migrated DB
+uv run python -m agentic_kb_builder.build --workspace ../.. --sources ./sources.example.yaml
+```
+
+`--no-activate` builds without flipping the active version; `--no-git-metadata` skips the commit
+connector. For a fully hermetic view of the pipeline, the integration suite still drives a real
+`BuildRunner` against your local Postgres with fakes — `test_build_engine.py` exercises the complete
+flow: fetch → hash-skip → wikify (cache-gated) → graphify (cache-gated) → embed (cache-gated) →
+index → edges → linker → run accounting → activation gating.
 
 To watch a full build happen, run one test verbosely with log output:
 

@@ -1,0 +1,14 @@
+# Golden query: why was X changed? (docs/contracts/golden-query-evals.md)
+# Cross-domain (PR-26): a commit `implements` a work-item and `mentions` the code
+# file it touched. The broker must surface the commit + the driving work-item so
+# an agent can answer "why was this file changed?" — underlinking here returns the
+# code but silently drops the card that explains the change.
+case_id: cross-domain/why-was-service-changed-001
+query: Why was src/service.py changed?
+intent: why_was_x_changed
+requester_teams: [platform]
+expected_evidence_ids:
+  - ev_commit_ab4321
+  - ev_card_4321
+expected_edge_types: [mentions, implements]
+min_evidence_recall: 1.0

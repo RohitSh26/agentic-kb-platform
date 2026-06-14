@@ -14,6 +14,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from agentic_kb_builder.domain import LinkEdgeDraft, LinkerEdgeType
+from agentic_kb_builder.linker.cross_domain import (
+    find_cross_domain_links,
+    find_doc_work_item_mentions,
+)
 from agentic_kb_builder.linker.records import (
     CARD_SOURCE_TYPES,
     CODE_ARTIFACT_TYPES,
@@ -111,6 +115,19 @@ def find_deterministic_links(artifacts: Sequence[LinkableArtifact]) -> list[Link
         for code_matcher in code_matchers:
             if _matches(code_matcher, body, body_lower):
                 add(doc, code_matcher.artifact, "mentions", DOC_LINK_CONFIDENCE)
+
+    # Cross-domain deterministic rules (PR-26): commit→work-item implements,
+    # commit→code_file mentions, and doc→work-item mentions. They carry an
+    # evidence pointer; merge them through the same (from,to,edge_type) dedupe so
+    # a logical link is never emitted twice.
+    cross_domain = find_cross_domain_links(artifacts)
+    cross_domain += find_doc_work_item_mentions(docs, artifacts)
+    for draft in cross_domain:
+        key = (draft.from_artifact_id, draft.to_artifact_id, str(draft.edge_type))
+        if key in seen:
+            continue
+        seen.add(key)
+        drafts.append(draft)
 
     logger.info(
         "event=linker_deterministic_matched concepts=%d symbols=%d docs=%d edges=%d",

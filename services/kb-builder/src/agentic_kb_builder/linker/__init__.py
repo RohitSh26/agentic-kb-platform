@@ -1,5 +1,11 @@
 """Linker: connects Wikify knowledge to Graphify code with confidence-scored edges."""
 
+from agentic_kb_builder.linker.cross_domain import (
+    find_cross_domain_links,
+    find_doc_work_item_mentions,
+    parse_sha_references,
+    parse_work_item_references,
+)
 from agentic_kb_builder.linker.deterministic import (
     DOC_LINK_CONFIDENCE,
     IMPLEMENTS_CONFIDENCE,
@@ -28,8 +34,12 @@ __all__ = [
     "LinkableArtifact",
     "ScoredArtifact",
     "SimilarityProvider",
+    "find_cross_domain_links",
     "find_deterministic_links",
+    "find_doc_work_item_mentions",
     "find_semantic_links",
+    "parse_sha_references",
+    "parse_work_item_references",
     "run_linker",
     "write_link_edges",
 ]

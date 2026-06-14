@@ -25,7 +25,9 @@ from agentic_kb_builder.application.cache_gates import (
     chunk_summary_cache_key,
     code_graph_cache_key,
 )
+from agentic_kb_builder.application.write_commit import write_commit_artifact
 from agentic_kb_builder.connectors import Connector
+from agentic_kb_builder.connectors.git_metadata import parse_changed_files
 from agentic_kb_builder.domain import (
     CodeEdgeDraft,
     GraphifyResult,
@@ -308,6 +310,9 @@ class BuildRunner:
         code_key_map: dict[tuple[str, str], uuid.UUID],
         pending_edges: list[_PendingEdges],
     ) -> None:
+        if fetched.source.source_type == "git_metadata":
+            await self._process_commit_source(counters, fetched)
+            return
         source_id = await self._upsert_source_item(fetched)
         artifact_ids = await self._wikify_gated(counters, fetched, source_id)
         if fetched.source.source_type == "github_code":
@@ -328,6 +333,30 @@ class BuildRunner:
             await self._embed_gated(counters, artifact_id)
         if artifact_ids:
             counters.search_docs_upserted += await self._indexer.upsert_documents(artifact_ids)
+
+    async def _process_commit_source(self, counters: _Counters, fetched: NormalizedContent) -> None:
+        """git_metadata path: ONE deterministic commit artifact, zero LLM.
+
+        No wikify, no graphify, no generation-cache row, no llm_calls increment —
+        the rendering is fully deterministic from git, so the content_hash skip
+        (above) handles incrementality. The artifact is still embedded and
+        indexed via the shared deterministic paths so it is retrievable.
+        """
+        source_id = await self._upsert_source_item(fetched)
+        changed_files = parse_changed_files(fetched.text)
+        sha = fetched.source.source_version
+        title = sha[:12] or sha
+        artifact_id = await write_commit_artifact(
+            self._session,
+            source_id=source_id,
+            kb_version=self._kb_version,
+            title=title,
+            body_text=fetched.text,
+            changed_files=changed_files,
+        )
+        counters.artifacts_created += 1
+        await self._embed_gated(counters, artifact_id)
+        counters.search_docs_upserted += await self._indexer.upsert_documents([artifact_id])
 
     async def _wikify_gated(
         self, counters: _Counters, fetched: NormalizedContent, source_id: uuid.UUID
