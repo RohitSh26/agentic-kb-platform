@@ -22,7 +22,7 @@ import re
 from collections.abc import Sequence
 from typing import cast
 
-from openai import AsyncAzureOpenAI, AsyncOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, BadRequestError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import ValidationError
 
@@ -165,11 +165,19 @@ class ChatModelClient:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": _user_prompt(chunks)},
         ]
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            temperature=self._temperature,
-            response_format={"type": "json_object"},
-            messages=messages,
-        )
+        try:
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                temperature=self._temperature,
+                response_format={"type": "json_object"},
+                messages=messages,
+            )
+        except BadRequestError:
+            # some local/older endpoints reject response_format; the parser tolerates
+            # fenced/prose output, so retry without forcing JSON mode
+            logger.warning("event=model_json_mode_unsupported model=%s", self._model)
+            response = await self._client.chat.completions.create(
+                model=self._model, temperature=self._temperature, messages=messages
+            )
         raw = response.choices[0].message.content or ""
         return _parse_generation(raw)
