@@ -15,7 +15,7 @@ stays parity-clean without this repo's test suite (stdlib-only, CI-friendly).
 
 | File here | Where Copilot looks for it |
 |---|---|
-| `agents/orchestrator.agent.md` and the five specialist `*.agent.md` files | `.github/agents/` in your repository, or `~/.copilot/agents/` for a VS Code user profile |
+| `agents/orchestrator.agent.md` and the five specialist `*.agent.md` files | `.github/agents/` in your repository (used by VS Code and the cloud agent), or `~/.copilot/agents/` for a user-level Copilot CLI profile |
 | `agents/_template.agent.md` | copy to `.github/agents/<your-agent>.agent.md`, fill in the `<!-- your agent description here -->` slots and the `name` |
 | `skills/evidence-pack-orchestration.md`, `skills/context-request-discipline.md`, `skills/evidence-citation.md` | host-neutral instruction modules — append the relevant one(s) to an agent body, or add them to your repository custom instructions (`.github/copilot-instructions.md`) |
 | `mcp/repository-settings.json` | repository settings → Copilot → MCP servers (the cloud agent / Copilot CLI configuration JSON) |
