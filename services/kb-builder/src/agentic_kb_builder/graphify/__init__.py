@@ -1,5 +1,6 @@
 """Graphify adapter: parsed code graphs -> canonical code artifacts/edges (architecture §5.2)."""
 
+from agentic_kb_builder.graphify.graphify_backend import GraphifyGraphifier, map_extraction
 from agentic_kb_builder.graphify.keys import (
     ParsedKey,
     endpoint_key,
@@ -33,11 +34,13 @@ __all__ = [
     "EXPOSED_AS_CONFIDENCE",
     "IMPORTS_CONFIDENCE",
     "TESTS_CONFIDENCE",
+    "GraphifyGraphifier",
     "ParsedKey",
     "endpoint_key",
     "file_graph_to_artifacts",
     "file_graph_to_edges",
     "file_key",
+    "map_extraction",
     "parse_file_graph",
     "parse_key",
     "symbol_key",
