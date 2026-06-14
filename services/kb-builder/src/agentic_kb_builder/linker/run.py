@@ -49,6 +49,9 @@ async def run_linker(
 
 
 async def _load_linkable_artifacts(session: AsyncSession) -> list[LinkableArtifact]:
+    # V1 bound: loads every non-deleted artifact (incl. body_text) into memory for the
+    # deterministic/semantic match. Fine at nightly scale; paginate or push the match
+    # server-side if the registry grows large (recorded perf follow-up, KB-4 / #24).
     rows = await session.execute(
         select(
             KnowledgeArtifact.artifact_id,

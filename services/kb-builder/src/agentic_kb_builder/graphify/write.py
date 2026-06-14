@@ -41,6 +41,9 @@ async def write_code_artifacts(
     Flushes so ids are assigned but does not commit — the build runner owns the
     transaction and records the generation-cache row after this returns.
     """
+    # TODO(acl-propagation): acl_teams is left unset, so derived artifacts default to
+    # org-public; propagate source_item.acl_teams here once that follow-up lands
+    # (docs/contracts/postgres-knowledge-registry.md). See test_acl_propagation.
     rows = [
         KnowledgeArtifact(
             artifact_type=draft.artifact_type,

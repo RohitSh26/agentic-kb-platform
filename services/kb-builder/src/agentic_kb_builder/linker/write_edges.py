@@ -97,6 +97,9 @@ async def _delete_stale(
     computed: set[tuple[uuid.UUID, uuid.UUID, str]] = {
         (d.from_artifact_id, d.to_artifact_id, str(d.edge_type)) for d in drafts
     }
+    # V1 bound: loads every linker edge into memory to diff against the computed set.
+    # Fine at nightly scale; replace with a server-side anti-join (DELETE ... WHERE NOT
+    # EXISTS) if the edge count grows large (recorded perf follow-up, KB-4 / #24).
     rows = await session.execute(
         select(
             KnowledgeEdge.edge_id,
