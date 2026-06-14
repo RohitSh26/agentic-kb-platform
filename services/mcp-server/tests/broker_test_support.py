@@ -59,19 +59,21 @@ async def insert_artifact(
     artifact_type: str = "doc_chunk",
     source_uri: str | None = None,
     acl_teams: list[str] | None = None,
+    source_is_deleted: bool = False,
 ) -> uuid.UUID:
     source_id = uuid.uuid4()
     artifact_id = uuid.uuid4()
     await session.execute(
         text(
             "INSERT INTO source_item (source_id, source_type, source_uri, source_version,"
-            " content_hash) VALUES (CAST(:source_id AS uuid), 'github_doc', :source_uri,"
-            " 'rev-1', :content_hash)"
+            " content_hash, is_deleted) VALUES (CAST(:source_id AS uuid), 'github_doc',"
+            " :source_uri, 'rev-1', :content_hash, :is_deleted)"
         ),
         {
             "source_id": str(source_id),
             "source_uri": source_uri or f"https://example.test/{artifact_id}",
             "content_hash": f"hash-{artifact_id}",
+            "is_deleted": source_is_deleted,
         },
     )
     await session.execute(

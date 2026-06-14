@@ -26,6 +26,7 @@ EXPECTED_TOOLS = {
     "context.open_evidence",
     "graph.get_neighbors",
     "ledger.list_retrievals",
+    "context.verify_answer",
 }
 
 

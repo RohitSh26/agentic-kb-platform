@@ -57,7 +57,8 @@ Runtime-plane schemas, under `services/mcp-server/src/agentic_mcp_server/mcp/`:
 - `tool_schemas/` — the Context Broker tool contracts (PR-09), mirrored in
   `docs/contracts/mcp-tools-contract.md`. `base.py` holds `McpModel`
   (frozen, `extra="forbid"`, pinned `schema_version`); `context.py` / `graph.py` / `ledger.py`
-  define request+response pairs for all six V1 tools; `evidence.py` defines `EvidenceCard`
+  define request+response pairs for the broker tools (and `verification.py` adds
+  `context.verify_answer`, the L0 provenance verifier); `evidence.py` defines `EvidenceCard`
   (L0/L1 handle: id, type, title, summary, confidence, authority, `tokens_if_expanded`) and
   `AgentRole`. Policy is encoded in the schema itself: `RequestMoreRequest` requires
   question/why_needed/decision_needed/already_checked/max_tokens (a bare `{"query": ...}`

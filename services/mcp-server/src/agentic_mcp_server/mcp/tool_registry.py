@@ -23,6 +23,10 @@ from agentic_mcp_server.mcp.tool_schemas.ledger import (
     ListRetrievalsRequest,
     ListRetrievalsResponse,
 )
+from agentic_mcp_server.mcp.tool_schemas.verification import (
+    VerificationReceipt,
+    VerifyAnswerRequest,
+)
 
 
 @dataclass(frozen=True)
@@ -38,4 +42,5 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
     "context.open_evidence": ToolSchema(OpenEvidenceRequest, OpenEvidenceResponse),
     "graph.get_neighbors": ToolSchema(GetNeighborsRequest, GetNeighborsResponse),
     "ledger.list_retrievals": ToolSchema(ListRetrievalsRequest, ListRetrievalsResponse),
+    "context.verify_answer": ToolSchema(VerifyAnswerRequest, VerificationReceipt),
 }

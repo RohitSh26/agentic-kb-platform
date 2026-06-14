@@ -3,16 +3,18 @@
 > Versioned tool surface served by mcp-server. Schema before code: every tool
 > has a frozen pydantic request/response model (`extra="forbid"`) in
 > `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`, registered in
-> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.3.0"` (1.1.0 = PR-13:
+> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.4.0"` (1.1.0 = PR-13:
 > `authorization` decision on every retrieval response, `injection_*` markers
 > on cards and expansions; 1.2.0 = PR-18: `read_pack.role` opened from the
 > closed six-role enum to a free-form charset-guarded string — response
 > consumers may now receive team-defined role values; 1.3.0 = PR-23:
 > `graph.get_neighbors` gains `trust_floor` + `include_inferred` (trust-aware
 > traversal, ADR-0011) and `GraphNeighbor` gains `trust_class` +
-> `claim_supporting`).
+> `claim_supporting`; 1.4.0 = PR-24: adds `context.verify_answer`, the L0
+> provenance verifier that returns a verification receipt — additive, the trust
+> boundary of ADR-0011 / `verification-receipt.md`).
 
-## The six V1 tools
+## The V1 tools
 
 | Tool | Purpose |
 |---|---|
@@ -22,6 +24,7 @@
 | `context.open_evidence` | Expand one evidence card to L2/L3 raw text, by handle |
 | `graph.get_neighbors` | Graph traversal over `knowledge_edge` (depth 1–3) |
 | `ledger.list_retrievals` | Retrieval ledger for a run |
+| `context.verify_answer` | L0 provenance verifier; returns a verification receipt |
 
 There is **no** generic unrestricted `kb.search` tool in V1.
 
@@ -35,6 +38,11 @@ There is **no** generic unrestricted `kb.search` tool in V1.
 - `context.open_evidence`: `context_pack_id`, `evidence_id`, `max_tokens`.
 - `graph.get_neighbors`: `artifact_id`, optional `edge_types[]`, `depth` 1–3,
   `trust_floor` (default `EXTRACTED`), `include_inferred` (default `false`).
+- `context.verify_answer`: `answer_id`, `claims[]` (each `claim_id`, `text`,
+  non-empty `evidence_ids[]`), `graph_version` (null ⇒ active),
+  `verifier_levels` (phase 1: `["L0"]`). A request with no claims, or any claim
+  with empty `evidence_ids`, fails schema validation. Full shape and the L0
+  check semantics live in `verification-receipt.md`.
 - `run_id` matches `^[A-Za-z0-9._-]{1,128}$` (log-injection guard).
 - `context.read_pack.role` is **free-form** — adopting teams name their own
   roles (`security_auditor` is as valid as `implementation`); the broker never
@@ -103,6 +111,21 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   (regex, no model calls); flagged content is returned **verbatim**, never
   rewritten — the consumer decides how to treat it, the broker never lets it
   alter policy.
+- `context.verify_answer` returns a **verification receipt**
+  (`verification-receipt.md`): `receipt_schema_version=1`, `answer_hash`
+  (sha256 over the normalized claims, stable for the same normalized input),
+  `graph_version`, `issued_at`, `verifier_levels_run=["L0"]`, `overall ∈
+  {passed, failed, partial}`, and `claim_results[]` (per-claim `result`,
+  the six `L0_*` `checks`, and `failed_reasons[]`). A claim passes L0 iff every
+  cited evidence id exists, is in the served `graph_version`, is ACL-visible to
+  the requester, appears in the requester's retrieval ledger, is not stale
+  (its source not superseded/deleted), and is supported by an `EXTRACTED`
+  edge (an `INFERRED_*` routing hint cannot be the sole support). `overall` is
+  `passed` iff all claims passed, `failed` iff all failed, else `partial`.
+  `client_id` and `signature` are reserved (null) for phase-4 client identity +
+  signing. The verifier performs **no generation**; every call writes a
+  `retrieval_event` logging ids/hashes/outcomes only — never answer or evidence
+  text.
 - `ledger.list_retrievals` returns one record per retrieval event:
   `event_id`, `run_id`, `kb_version`, `agent_name`, `tool`, `status`,
   `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`. The non-run
