@@ -2,7 +2,8 @@
 
 ## Status
 
-**Proposed** (2026-06-14) — needs ratification before PR-27. Blocks `docs/pr-briefs/PR-27`.
+**Accepted** (2026-06-14). Ratified by the platform owner; PR-27 implements this model. Production
+cadence confirmed **incremental nightly** (per ADR-0004), so §1 (interval membership) is mandatory.
 
 ## Context
 
