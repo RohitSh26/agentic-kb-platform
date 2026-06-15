@@ -13,10 +13,10 @@ sources:
     repo: RohitSh26/agentic-kb-platform
     branch: main
     include:
-      # A representative subset keeps this validation run fast + under GitHub rate
-      # limits; widen to "services/**/*.py" for a full build.
-      - "services/kb-builder/src/agentic_kb_builder/graphify/*.py"
-      - "services/kb-builder/src/agentic_kb_builder/application/*.py"
+      # Both services' full source tree — code is zero-LLM (graphify), so widening
+      # scope costs GitHub API calls + local AST time, not LLM tokens.
+      - "services/kb-builder/src/**/*.py"
+      - "services/mcp-server/src/**/*.py"
     exclude:
       - "**/tests/**"
     auth:
@@ -29,6 +29,9 @@ sources:
     branch: main
     include:
       - "docs/adr/0018-code-is-graphify-only.md"
+      - "docs/adr/0013-kb-version-membership-and-identity-over-time.md"
+      - "docs/adr/0017-local-search-projection-parity.md"
+      - "docs/architecture/00-overview.md"
       - "docs/dev-guide/06-end-to-end-walkthrough.md"
       - "README.md"
     auth:

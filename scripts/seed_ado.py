@@ -50,6 +50,32 @@ WIKI_PAGES: list[tuple[str, str]] = [
         "graphify (no LLM); only prose sources (docs, wiki, work items) go through the LLM wikify "
         "step.\n",
     ),
+    (
+        "/Architecture/Evidence Cards",
+        "# Evidence Cards\n\nEvidence is exposed to agents by handle, not as raw text. An evidence "
+        "card (L0/L1) carries a stable id, a short citable claim, and provenance (source uri, "
+        "version, span) — but not the full chunk. An agent opens raw text (L2+) only on demand via "
+        "context.open_evidence, by handle. This keeps the initial Evidence Pack inside the token "
+        "budget and forces every agent claim to cite a verifiable evidence id.\n",
+    ),
+    (
+        "/Architecture/Graph Model",
+        "# Graph Model\n\nThe knowledge graph is V1, not a graph database. Nodes (knowledge "
+        "artifacts) and edges (knowledge_edge: edge_type, confidence, source, kb_version, "
+        "trust_class) live in Postgres tables. Graph behavior — neighborhood expansion, traversal — "
+        "is exposed only through MCP graph tools, so the storage backend can be swapped later "
+        "without changing agents. Edges carry a trust class so traversal can prefer deterministic "
+        "links over LLM-inferred ones.\n",
+    ),
+    (
+        "/Architecture/Code Is Graphify Only",
+        "# Code Is Graphify-Only (ADR-0018)\n\nSource code is never sent to the LLM. Graphify "
+        "extracts code structure deterministically and a Python ast pass recovers each symbol's "
+        "exact source span, which becomes the symbol's citable body_text — no tokens spent, no "
+        "summary invented. The LLM is reserved for prose (docs, wiki pages, work items) and for the "
+        "relationship judge. This keeps nightly build cost proportional to prose change, not "
+        "codebase size.\n",
+    ),
 ]
 
 # (work item type, title, description). Types valid in the Basic process (Epic/Issue/Task);
@@ -80,6 +106,27 @@ WORK_ITEMS: list[tuple[str, str, str]] = [
         "The build plane and publish gates are implemented and exercised in PR CI, but no cron "
         "trigger runs the nightly build against a real source set yet. Add a scheduled workflow "
         "once an Azure target is provisioned.",
+    ),
+    (
+        "Task",
+        "[kb-demo] Add deterministic code search_text (PR-34)",
+        "Phase 2 of ADR-0018: derive a separate search_text from the AST (docstrings, split "
+        "identifiers, signatures, called names) so concept queries reach code symbols, while "
+        "body_text stays the exact citable span. Still zero LLM for code.",
+    ),
+    (
+        "Issue",
+        "[kb-demo] Visualize the knowledge graph as an Obsidian vault",
+        "As a developer I want to export the active kb_version as an Obsidian vault of linked notes "
+        "so I can browse artifacts and their graph edges visually and sanity-check what the build "
+        "produced before pointing agents at it.",
+    ),
+    (
+        "Task",
+        "[kb-demo] Widen graphify scope to the full service source",
+        "Expand the production test source set from a representative subset to both services' full "
+        "src trees to exercise graphify at scale and confirm cross-file import/call edges resolve "
+        "without unresolved-key drops.",
     ),
 ]
 
