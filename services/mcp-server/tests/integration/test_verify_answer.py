@@ -128,6 +128,7 @@ async def _record_retrieval(
     artifact_ids: list[uuid.UUID],
     *,
     subject: str = SUBJECT,
+    kb_version: str = KB_VERSION,
 ) -> None:
     """Simulate that these ids were returned to ``subject`` via the ledger."""
     async with factory() as session:
@@ -138,7 +139,7 @@ async def _record_retrieval(
                 agent_name=subject,
                 tool_name="context.create_pack",
                 status="approved",
-                kb_version=KB_VERSION,
+                kb_version=kb_version,
                 returned_artifact_ids=artifact_ids,
             ),
         )
@@ -254,6 +255,34 @@ async def test_evidence_not_retrieved_by_requester_fails(
     (result,) = receipt.claim_results
     assert result.result == "failed"
     assert receipt.overall == "failed"
+    assert result.checks.L0_in_requester_ledger is False
+    assert "evidence_not_retrieved_by_requester" in result.failed_reasons
+
+
+async def test_evidence_retrieved_only_under_stale_version_fails_ledger(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The artifact IS a member of the active version, but this requester only ever
+    # retrieved it under a different (stale/deactivated) build. The ledger check is
+    # scoped to the served version, so it must fail in_requester_ledger — a stale
+    # retrieval cannot license a citation against the current version (#111).
+    async with factory() as session:
+        evidence = await _seed_supported_artifact(session)
+    await _record_retrieval(factory, [evidence], kb_version=OTHER_VERSION)
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    receipt = await verify_answer(
+        deps,
+        VerifyAnswerRequest(answer_id="a", claims=[_claim("c1", [evidence])]),
+        REQUESTER,
+    )
+
+    (result,) = receipt.claim_results
+    assert result.result == "failed"
+    # Present + in the active version + ACL-visible — only the ledger scope fails.
+    assert result.checks.L0_exists is True
+    assert result.checks.L0_in_active_version is True
+    assert result.checks.L0_acl_visible is True
     assert result.checks.L0_in_requester_ledger is False
     assert "evidence_not_retrieved_by_requester" in result.failed_reasons
 

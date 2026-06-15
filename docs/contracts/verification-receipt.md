@@ -86,8 +86,9 @@ For each cited `evidence_id`:
 1. **exists** — the evidence unit exists.
 2. **in active version** — belongs to the `graph_version` being served.
 3. **acl visible** — the requesting subject is authorised for it (same ACL filter as retrieval).
-4. **in requester ledger** — was actually returned to this requester via the retrieval ledger
-   (an agent cannot cite evidence it never retrieved).
+4. **in requester ledger** — was actually returned to this requester via the retrieval ledger,
+   *under the served `graph_version`* (an agent cannot cite evidence it never retrieved, nor one it
+   retrieved only under a stale/deactivated build).
 5. **not stale** — the evidence's source has not been superseded/deleted in the active version.
 6. **supporting trust ok** — the evidence is `EXTRACTED`-trust (or backed by an `EXTRACTED` edge);
    an `INFERRED_*` routing hint cannot be the sole support for a claim.

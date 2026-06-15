@@ -389,7 +389,9 @@ async def verify_answer(
             # one: nothing belongs to the active version under L0's contract.
             in_version = {}
         exists_anywhere = await fetch_existing_anywhere(session, unique_ids)
-        retrieved = await fetch_subject_retrieved_ids(session, requester.subject)
+        # Scope the ledger to the served version: a citation only retrieved under
+        # a stale/deactivated build must not satisfy in_requester_ledger.
+        retrieved = await fetch_subject_retrieved_ids(session, requester.subject, active_version)
 
         # L0's "resolvable" set: cited ids that are in the active version,
         # ACL-visible, AND retrieved by this requester. L2 may adjudicate a claim's

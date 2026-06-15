@@ -43,10 +43,13 @@ _LIST_EVENTS_QUERY = text(
     """
 )
 
-# Every artifact id this subject has actually had returned to it, across the
-# three evidence-bearing columns. The L0 verifier uses this so an agent cannot
-# cite evidence it never retrieved (verification-receipt.md "in requester
-# ledger"). Attribution is by authenticated session subject = agent_name.
+# Every artifact id this subject had returned to it UNDER A GIVEN kb_version,
+# across the three evidence-bearing columns. The L0 verifier uses this so an
+# agent cannot cite evidence it never retrieved (verification-receipt.md "in
+# requester ledger"), AND cannot pass the ledger check on a citation it only
+# retrieved under a stale/deactivated build — the membership is scoped to the
+# version being verified against. Attribution is by authenticated session
+# subject = agent_name.
 _SUBJECT_RETRIEVED_QUERY = text(
     f"""
     SELECT DISTINCT unnested AS artifact_id
@@ -57,6 +60,7 @@ _SUBJECT_RETRIEVED_QUERY = text(
              || COALESCE(new_evidence_ids, '{{}}')
          ) AS unnested
     WHERE agent_name = :agent_name
+      AND kb_version = :kb_version
     """
 )
 
@@ -125,9 +129,17 @@ async def insert_event(session: AsyncSession, event: RetrievalEventInsert) -> No
     await session.commit()
 
 
-async def fetch_subject_retrieved_ids(session: AsyncSession, agent_name: str) -> set[uuid.UUID]:
-    """Every artifact id ever returned to this subject across all runs."""
-    result = await session.execute(_SUBJECT_RETRIEVED_QUERY, {"agent_name": agent_name})
+async def fetch_subject_retrieved_ids(
+    session: AsyncSession, agent_name: str, kb_version: str
+) -> set[uuid.UUID]:
+    """Every artifact id returned to this subject under ``kb_version`` (all runs).
+
+    Scoped to the version being verified against so a citation retrieved only
+    under a stale/deactivated build cannot satisfy L0's in-requester-ledger check.
+    """
+    result = await session.execute(
+        _SUBJECT_RETRIEVED_QUERY, {"agent_name": agent_name, "kb_version": kb_version}
+    )
     return {row.artifact_id for row in result}
 
 
