@@ -203,6 +203,23 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   ledger logs — see `.claude/rules/token-budgets.md`); 3–5 cards max per
   retrieval after rerank. Per-agent identity binds to the authenticated
   session subject, never to `agent_name`.
+- **Within-retrieval dedupe runs on every retrieval path** (not just
+  cross-query reuse): after rerank and **before** the card cap, near-duplicate
+  candidates (normalized title+summary similarity ≥ the configured
+  `semantic_dupe_threshold`, default 0.90) collapse to the higher-ranked one, so
+  two artifacts that surface as the same card never each consume a card slot.
+  Dropped ids are logged (`event=retrieval_deduped`). Deterministic
+  (token-similarity, no model calls; stable rank-order tie-break).
+- **`create_pack` is never born over its run budget.** After dedupe + the card
+  cap, if the surviving cards' tokens exceed the (clamped) `budget_tokens`, the
+  broker trims the lowest-ranked cards until they fit (logged
+  `event=create_pack_budget_trim`) and reports the trimmed `budget_used_tokens`.
+- **The per-agent follow-up allowance is run-scoped, not pack-scoped.** Re-creating
+  the pack within a run (e.g. against a newly active `kb_version`) reuses the same
+  per-(run, subject) usage counters, so an agent cannot reset its `request_more`
+  allowance by re-creating the pack. `create_pack` itself remains free of the
+  follow-up request/token meter (that meter governs `request_more` /
+  `open_evidence`); only its run-budget trim applies.
 - The broker makes **no LLM or embedding calls** in V1: pack summaries are
   assembled from registry artifacts, and semantic dedupe is a deterministic
   token-similarity measure. Retrieval relevance goes through the `SearchClient`

@@ -22,8 +22,14 @@ from agentic_mcp_server.infrastructure.search.search_client import SearchClient
 
 @dataclass(frozen=True)
 class BrokerSettings:
-    # semantic duplicate threshold: start 0.88-0.92, tune from ledger logs
+    # semantic duplicate threshold for CROSS-query reuse (request_more): start
+    # 0.88-0.92, tune from ledger logs
     semantic_reuse_threshold: float = 0.90
+    # semantic duplicate threshold for WITHIN-retrieval dedupe: two candidate
+    # cards whose normalized title+summary similarity is >= this collapse to one
+    # before the card cap is applied (token-budgets rule: semantic dedupe
+    # 0.88-0.92 BEFORE the 3-5 card cap). Same band as the reuse threshold.
+    semantic_dupe_threshold: float = 0.90
     # 3-5 cards max per retrieval after rerank (token-budgets rule)
     max_cards_per_retrieval: int = 5
     # safety cap on graph traversal fan-out at depth 3

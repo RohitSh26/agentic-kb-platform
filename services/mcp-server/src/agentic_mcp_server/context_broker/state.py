@@ -54,9 +54,18 @@ class EvidencePackState:
 @dataclass
 class PackStore:
     packs: dict[str, EvidencePackState] = field(default_factory=dict)
+    # Per-RUN, per-subject usage shared across every pack of a run. Each new pack
+    # for a run reuses these counters, so an agent cannot reset its per-agent
+    # allowance by re-creating the pack within the run (the create_pack ceiling
+    # bypass): the follow-up meter request_more reads is run-scoped, not
+    # pack-scoped. Outlives any single pack so the ceiling holds across re-packs.
+    run_usage: dict[str, dict[str, AgentUsage]] = field(default_factory=dict)
     # bounds process memory in a long-lived instance; evicted packs remain
     # auditable through the ledger
     max_packs: int = 256
+
+    def usage_for_run(self, run_id: str) -> dict[str, AgentUsage]:
+        return self.run_usage.setdefault(run_id, {})
 
     def create(self, pack: EvidencePackState) -> None:
         while len(self.packs) >= self.max_packs:

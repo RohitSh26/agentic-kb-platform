@@ -43,6 +43,36 @@ from agentic_mcp_server.telemetry.audit import audit_context_access
 logger = logging.getLogger(__name__)
 
 
+def _trim_to_budget(
+    cards: list[EvidenceCard], budget_tokens: int, *, run_id: str
+) -> tuple[list[EvidenceCard], int]:
+    """Drop lowest-ranked cards until the card tokens fit the run budget.
+
+    `cards` arrive in rank order (best first), so trimming from the end keeps the
+    strongest evidence. Logs what it dropped: a pack is never silently born over
+    budget.
+    """
+    kept = list(cards)
+    used = sum(card_tokens(card) for card in kept)
+    dropped: list[str] = []
+    # drop strictly from the tail (lowest-ranked first) so the survivors are
+    # always a rank-ordered prefix — never a hole in the middle of the ranking
+    while kept and used > budget_tokens:
+        victim = kept.pop()
+        used -= card_tokens(victim)
+        dropped.append(victim.evidence_id)
+    if dropped:
+        logger.info(
+            "event=create_pack_budget_trim run_id=%s budget=%d kept=%d dropped=%d dropped_ids=%s",
+            run_id,
+            budget_tokens,
+            len(kept),
+            len(dropped),
+            ",".join(dropped),
+        )
+    return kept, used
+
+
 def _summary(run_id: str, cards: list[EvidenceCard]) -> str:
     if not cards:
         return f"Evidence pack for run {run_id}: no evidence found."
@@ -77,12 +107,18 @@ async def create_pack(
         tool="context.create_pack",
         intent=request.intent,
     )
-    used_tokens = sum(card_tokens(card) for card in cards)
-    open_questions = [] if cards else [f"No evidence found for: {request.task}"]
-
     # the run budget is a server-side control: the requested value is clamped,
     # never trusted (token-budgets rule)
     budget_tokens = min(request.budget_tokens, deps.settings.max_run_budget_tokens)
+    # A pack must never be born over its own run budget. Cards are in rank order
+    # (best first), so drop the lowest-ranked first until the card tokens fit.
+    cards, used_tokens = _trim_to_budget(cards, budget_tokens, run_id=request.run_id)
+    open_questions = [] if cards else [f"No evidence found for: {request.task}"]
+    # The per-agent allowance meter is RUN-scoped (shared across every pack of a
+    # run), so re-creating the pack within a run cannot reset an agent's
+    # request_more allowance — closing the create_pack ceiling bypass while
+    # leaving request_more's own enforcement untouched.
+    run_usage = deps.packs.usage_for_run(request.run_id)
     pack = EvidencePackState(
         context_pack_id=new_pack_id(),
         run_id=request.run_id,
@@ -94,6 +130,7 @@ async def create_pack(
         used_run_tokens=used_tokens,
         cards={card.evidence_id: card for card in cards},
         open_questions=open_questions,
+        agent_usage=run_usage,
     )
     normalized = normalize_query(query)
     pack.history.record(normalized, [card.evidence_id for card in cards])
