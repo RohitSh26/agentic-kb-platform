@@ -12,6 +12,9 @@ from agentic_kb_builder.infrastructure.postgres.models.knowledge_edge import Kno
 from agentic_kb_builder.infrastructure.postgres.models.relationship_candidate import (
     RelationshipCandidate,
 )
+from agentic_kb_builder.infrastructure.postgres.models.relationship_judgment_cache import (
+    RelationshipJudgmentCache,
+)
 from agentic_kb_builder.infrastructure.postgres.models.retrieval_event import RetrievalEvent
 from agentic_kb_builder.infrastructure.postgres.models.source_item import SourceItem
 
@@ -24,6 +27,7 @@ __all__ = [
     "KnowledgeArtifact",
     "KnowledgeEdge",
     "RelationshipCandidate",
+    "RelationshipJudgmentCache",
     "RetrievalEvent",
     "SourceItem",
 ]

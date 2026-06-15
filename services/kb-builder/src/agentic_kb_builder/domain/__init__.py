@@ -20,6 +20,16 @@ from agentic_kb_builder.domain.graph_artifacts import (
     ParsedTest,
     SymbolKind,
 )
+from agentic_kb_builder.domain.judge_records import (
+    INFERRED_EDGE_BUCKETS,
+    JUDGE_RELATION_TYPES,
+    JUDGE_TRUST_BUCKETS,
+    JudgeCandidate,
+    JudgeEndpoint,
+    JudgeRelationType,
+    JudgeTrustBucket,
+    RelationshipJudgment,
+)
 from agentic_kb_builder.domain.link_records import (
     LinkEdgeDraft,
     LinkerEdgeType,
@@ -55,6 +65,9 @@ from agentic_kb_builder.domain.wiki_artifacts import (
 
 __all__ = [
     "ARTIFACT_SCHEMA_VERSION",
+    "INFERRED_EDGE_BUCKETS",
+    "JUDGE_RELATION_TYPES",
+    "JUDGE_TRUST_BUCKETS",
     "AdoCardSourceSpec",
     "ArtifactModel",
     "AuthRef",
@@ -70,6 +83,10 @@ __all__ = [
     "GithubDocSourceSpec",
     "GlobError",
     "GraphifyResult",
+    "JudgeCandidate",
+    "JudgeEndpoint",
+    "JudgeRelationType",
+    "JudgeTrustBucket",
     "KnowledgeKind",
     "LinkEdgeDraft",
     "LinkStrategy",
@@ -82,6 +99,7 @@ __all__ = [
     "ParsedTest",
     "PathFilter",
     "PathSelectSpec",
+    "RelationshipJudgment",
     "SourceBackedFactDraft",
     "SourceConfig",
     "SourceDefaults",

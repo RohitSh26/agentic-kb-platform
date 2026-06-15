@@ -27,7 +27,17 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, BadRequestError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import ValidationError
 
-from agentic_kb_builder.domain import Chunk, WikifyGeneration
+from agentic_kb_builder.domain import (
+    Chunk,
+    JudgeCandidate,
+    RelationshipJudgment,
+    WikifyGeneration,
+)
+from agentic_kb_builder.domain.judge_records import (
+    JUDGE_RELATION_TYPES,
+    JUDGE_TRUST_BUCKETS,
+    guard_quote,
+)
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
@@ -52,6 +62,27 @@ _SYSTEM_PROMPT = (
     "Every fact.quote MUST be an exact substring of the source text, copied "
     "character-for-character — facts whose quote is not found verbatim in the source "
     "are discarded downstream. Prefer 3-7 concepts and 2-6 facts."
+)
+
+
+_JUDGE_SYSTEM_PROMPT = (
+    "You judge whether TWO knowledge artifacts from different domains (e.g. a doc and "
+    "a code file) are genuinely related. Return STRICT JSON only — no prose, no "
+    "markdown fences. Use exactly this schema:\n"
+    '{"relation_type": "documents",\n'
+    ' "trust_bucket": "INFERRED_HIGH | INFERRED_LOW | AMBIGUOUS | REJECTED",\n'
+    ' "supporting_quote": "<verbatim span copied character-for-character from one of '
+    'the two source texts that supports the relationship>",\n'
+    ' "reason": "<1-2 sentences>"}\n'
+    "RULES:\n"
+    "- relation_type MUST be exactly 'documents' (artifact A documents artifact B). "
+    "Never invent any other relation; never output 'related_to'.\n"
+    "- trust_bucket: INFERRED_HIGH = strong explicit evidence; INFERRED_LOW = weak or "
+    "partial; AMBIGUOUS = cannot decide; REJECTED = not a real relationship.\n"
+    "- supporting_quote MUST be an exact substring of one of the two source texts, "
+    "copied character-for-character. A quote not found verbatim is rejected downstream "
+    "and the judgment is downgraded to AMBIGUOUS.\n"
+    "- You judge ONLY these two artifacts; never reference anything else."
 )
 
 
@@ -125,6 +156,55 @@ def _parse_generation(raw: str) -> WikifyGeneration:
         raise ValueError(f"model JSON did not match the wikify schema: {error}") from error
 
 
+def _judge_user_prompt(candidate: JudgeCandidate) -> str:
+    return (
+        f"ARTIFACT A (title: {candidate.from_endpoint.title}):\n"
+        f"{candidate.from_endpoint.evidence_text}\n\n"
+        f"ARTIFACT B (title: {candidate.to_endpoint.title}):\n"
+        f"{candidate.to_endpoint.evidence_text}\n\n"
+        "Does A document B? Return the JSON now."
+    )
+
+
+def _parse_judgment(raw: str) -> RelationshipJudgment:
+    extracted = _extract_json(raw)
+    try:
+        data: object = json.loads(extracted)
+    except json.JSONDecodeError:
+        data = repair_json(extracted, return_objects=True)
+        logger.warning("event=judge_model_json_repaired")
+    if not isinstance(data, dict) or not data:
+        raise ValueError(f"judge did not return usable JSON: {raw[:1000]!r}")
+    obj = cast("dict[str, object]", data)
+    relation = obj.get("relation_type")
+    bucket = obj.get("trust_bucket")
+    quote = obj.get("supporting_quote")
+    reason = obj.get("reason")
+    # A relation outside the judge's allowed vocabulary (incl. the banned
+    # `related_to` or an EXTRACTED-only deterministic relation) is NOT promoted:
+    # the pair is recorded as AMBIGUOUS, never invented as a real edge.
+    if not (isinstance(relation, str) and relation in JUDGE_RELATION_TYPES):
+        logger.warning("event=judge_bad_relation_type value=%r", relation)
+        relation = "documents"
+        bucket = "AMBIGUOUS"
+    # An EXTRACTED (or unknown) bucket from the judge is forced to AMBIGUOUS — the
+    # LLM judge may NEVER assign EXTRACTED (trust-buckets.md).
+    if not (isinstance(bucket, str) and bucket in JUDGE_TRUST_BUCKETS):
+        logger.warning("event=judge_bad_trust_bucket value=%r", bucket)
+        bucket = "AMBIGUOUS"
+    payload = {
+        "relation_type": relation,
+        "trust_bucket": bucket,
+        "supporting_quote": quote if isinstance(quote, str) else "",
+        "reason": reason if isinstance(reason, str) else "",
+    }
+    try:
+        return RelationshipJudgment.model_validate(payload)
+    except ValidationError as error:
+        logger.error("event=judge_model_bad_shape error=%s", error)
+        raise ValueError(f"judge JSON did not match the judgment schema: {error}") from error
+
+
 class ChatModelClient:
     """ModelClient over an OpenAI-compatible (or Azure OpenAI) chat endpoint."""
 
@@ -195,6 +275,41 @@ class ChatModelClient:
                 last_error = error
                 logger.warning(
                     "event=wikify_parse_retry attempt=%d/%d error=%s",
+                    attempt + 1,
+                    _MAX_PARSE_ATTEMPTS,
+                    error,
+                )
+        assert last_error is not None
+        raise last_error
+
+    async def generate_relationship_judgment(
+        self, *, candidate: JudgeCandidate, prompt_version: str
+    ) -> RelationshipJudgment:
+        messages: list[ChatCompletionMessageParam] = [
+            {"role": "system", "content": _JUDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": _judge_user_prompt(candidate)},
+        ]
+        last_error: ValueError | None = None
+        for attempt in range(_MAX_PARSE_ATTEMPTS):
+            raw = await self._complete(messages)
+            try:
+                judgment = _parse_judgment(raw)
+                # Quote-guard at the call boundary (invariant 7): a non-verbatim
+                # supporting_quote downgrades the verdict to AMBIGUOUS so a
+                # fabricated quote can never become an INFERRED edge.
+                guarded = guard_quote(judgment, cited_spans=candidate.cited_spans)
+                if guarded.trust_bucket != judgment.trust_bucket:
+                    logger.warning(
+                        "event=judge_quote_guard_downgrade from=%s to=%s relation=%s",
+                        judgment.trust_bucket,
+                        guarded.trust_bucket,
+                        guarded.relation_type,
+                    )
+                return guarded
+            except ValueError as error:
+                last_error = error
+                logger.warning(
+                    "event=judge_parse_retry attempt=%d/%d error=%s",
                     attempt + 1,
                     _MAX_PARSE_ATTEMPTS,
                     error,

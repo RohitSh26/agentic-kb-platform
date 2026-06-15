@@ -17,6 +17,11 @@ from agentic_kb_builder.linker.deterministic import (
     IMPLEMENTS_CONFIDENCE,
     find_deterministic_links,
 )
+from agentic_kb_builder.linker.judge import JudgeStats, RelationshipJudge, run_judge
+from agentic_kb_builder.linker.judgment_cache import (
+    RelationshipJudgmentCacheGate,
+    relationship_judgment_cache_parts,
+)
 from agentic_kb_builder.linker.records import LinkableArtifact
 from agentic_kb_builder.linker.run import run_linker
 from agentic_kb_builder.linker.run_candidates import run_candidate_generator
@@ -40,7 +45,10 @@ __all__ = [
     "LOW_CONFIDENCE_THRESHOLD",
     "SEMANTIC_ACCEPT_THRESHOLD",
     "CandidateDraft",
+    "JudgeStats",
     "LinkableArtifact",
+    "RelationshipJudge",
+    "RelationshipJudgmentCacheGate",
     "ScoredArtifact",
     "SimilarityProvider",
     "artifact_domain",
@@ -51,7 +59,9 @@ __all__ = [
     "generate_candidates",
     "parse_sha_references",
     "parse_work_item_references",
+    "relationship_judgment_cache_parts",
     "run_candidate_generator",
+    "run_judge",
     "run_linker",
     "write_link_edges",
 ]

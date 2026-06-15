@@ -24,6 +24,14 @@ from harness.cases import BENCHMARK_TASK_TYPES, EvalCase, load_cases
 from harness.executor import execute_case
 from harness.fixtures import clean_registry, require_registry_schema
 from harness.golden import GoldenCase, load_golden_cases
+from harness.judge import cross_domain_recall_lift
+from harness.judge_fixture import (
+    DETERMINISTIC_PAIRS,
+    JUDGED_EDGES,
+)
+from harness.judge_fixture import (
+    EXPECTED_RELATIONS as JUDGE_EXPECTED_RELATIONS,
+)
 from harness.metrics import compute_metrics
 from harness.records import RunRecord
 from harness.report import build_report, render_table, write_report
@@ -162,6 +170,24 @@ def main() -> int:
             f"volume_per_artifact={_fmt(cand.volume_per_artifact)} "
             f"candidates={cand.candidate_count} "
             f"cost_if_judged_tokens={cand.cost_if_judged_tokens}"
+        )
+        # Phase-3B judge quality (docs/contracts/relationship-judgment.md): inferred-edge
+        # precision + cross-domain evidence-recall LIFT over the deterministic-only
+        # baseline. INFERRED edges are routing hints (never claim support), so the win is
+        # reaching cross-domain evidence the deterministic linker missed without dropping
+        # precision below the gate.
+        judge = cross_domain_recall_lift(
+            deterministic_pairs=DETERMINISTIC_PAIRS,
+            inferred_edges=JUDGED_EDGES,
+            expected_relations=JUDGE_EXPECTED_RELATIONS,
+        )
+        print(
+            "relationship judge (phase 3B): "
+            f"inferred_edges={judge.inferred_edges} "
+            f"inferred_edge_precision={_fmt(judge.inferred_edge_precision)} "
+            f"deterministic_recall={_fmt(judge.deterministic_recall)} "
+            f"combined_recall={_fmt(judge.combined_recall)} "
+            f"recall_lift={_fmt(judge.recall_lift)}"
         )
 
     return exit_code(

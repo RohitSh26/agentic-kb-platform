@@ -17,3 +17,7 @@ PARSER_CONFIG_VERSION: Final = "1.0.0"
 # (docs/contracts/relation-ontology.md). Bumping it is part of the
 # relationship-judgment cache key and re-evaluates affected edges.
 RELATION_SCHEMA_VERSION: Final = 1
+# Prompt version for the phase-3B relationship judge (ChatModelClient
+# .generate_relationship_judgment). Part of the relationship-judgment cache key —
+# bumping it re-judges every cached candidate pair.
+JUDGE_PROMPT_VERSION: Final = "1.0.0"

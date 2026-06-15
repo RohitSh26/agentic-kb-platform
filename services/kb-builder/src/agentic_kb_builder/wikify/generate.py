@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 from agentic_kb_builder.domain import NormalizedContent, WikifyArtifactDraft
 from agentic_kb_builder.domain.schema_versions import PROMPT_VERSION
-from agentic_kb_builder.infrastructure.azure_openai.model_client import ModelClient
+from agentic_kb_builder.infrastructure.azure_openai.model_client import WikifyModelClient
 from agentic_kb_builder.structured_logging import get_logger
 from agentic_kb_builder.wikify.chunker import chunk_text
 
@@ -27,7 +27,7 @@ BUILD_TIME_FRESHNESS = 1.0
 
 
 class WikifyGenerator:
-    def __init__(self, model_client: ModelClient) -> None:
+    def __init__(self, model_client: WikifyModelClient) -> None:
         self._model_client = model_client
 
     @property

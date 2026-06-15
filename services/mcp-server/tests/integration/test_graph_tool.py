@@ -254,6 +254,55 @@ async def test_include_inferred_surfaces_inferred_as_non_claim_support(
     assert by_id[nodes["inferred_low"]].claim_supporting is False
 
 
+async def test_llm_judge_inferred_edge_is_routing_hint_only(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # PR-29 confirmation (no rebuild): an edge the LLM judge produced
+    # (source='llm_judge', the phase-3B producer) routes IDENTICALLY to any other
+    # INFERRED_* edge — surfaced only with include_inferred, labelled as a
+    # non-claim-supporting routing hint, and its AMBIGUOUS sibling never returned.
+    async with factory() as session:
+        a = await insert_artifact(session, title="doc A", body_text="a")
+        code = await insert_artifact(
+            session, title="code B", body_text="b", artifact_type="code_chunk"
+        )
+        ambiguous = await insert_artifact(session, title="code C", body_text="c")
+        await insert_edge(
+            session,
+            from_artifact_id=a,
+            to_artifact_id=code,
+            edge_type="documents",
+            trust_class="INFERRED_HIGH",
+            source="llm_judge",
+        )
+        await insert_edge(
+            session,
+            from_artifact_id=a,
+            to_artifact_id=ambiguous,
+            edge_type="documents",
+            trust_class="AMBIGUOUS",
+            source="llm_judge",
+        )
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    # default: a judge INFERRED edge is hidden (claim path stays EXTRACTED-only).
+    default = await get_neighbors(deps, GetNeighborsRequest(artifact_id=a, depth=1), REQUESTER)
+    assert default.neighbors == []
+
+    # include_inferred: the judge edge surfaces, labelled non-claim-supporting;
+    # the AMBIGUOUS judge edge is still excluded.
+    response = await get_neighbors(
+        deps,
+        GetNeighborsRequest(artifact_id=a, depth=1, include_inferred=True),
+        REQUESTER,
+    )
+    by_id = {n.artifact_id: n for n in response.neighbors}
+    assert set(by_id) == {code}
+    assert by_id[code].trust_class == "INFERRED_HIGH"
+    assert by_id[code].edge_source == "llm_judge"
+    assert by_id[code].claim_supporting is False
+
+
 async def test_ambiguous_and_rejected_never_returned(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
