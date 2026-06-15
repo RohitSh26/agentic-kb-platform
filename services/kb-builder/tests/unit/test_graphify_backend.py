@@ -200,6 +200,31 @@ def test_imports_map_to_file_edges_and_drop_externals() -> None:
     assert not any(e.edge_type == "imports" and "os" in e.to_key for e in _result().edges)
 
 
+def test_import_target_honors_source_file_override_no_temp_path_leak() -> None:
+    # Graphify parses a TEMP copy of each file, so every node's source_file is the temp
+    # path and the file node's label is the temp basename. With source_file_override the
+    # file node maps to the real path; the import-edge TARGET must map through the SAME
+    # override (not keep the temp path, which is then dropped at write time as an
+    # unresolved key — the graphify_edge_dropped noise seen on real builds).
+    graph: dict[str, object] = {
+        "nodes": [
+            {
+                "id": "f",
+                "label": "tmpABC.py",
+                "source_file": "/tmp/tmpABC.py",
+                "source_location": "L1",
+            },
+            {"id": "s", "label": "foo()", "source_file": "/tmp/tmpABC.py", "source_location": "L2"},
+        ],
+        "links": [{"source": "f", "target": "s", "relation": "imports"}],
+    }
+    result = map_extraction(
+        graph, source_file_override="services/x/real.py", file_basename_override="tmpABC.py"
+    )
+    # No edge may carry the temp path; the spurious self-import resolves to real.py and drops.
+    assert all("/tmp/" not in e.to_key and "tmpABC" not in e.to_key for e in result.edges)
+
+
 def test_ambiguous_call_site_is_dropped_not_stored() -> None:
     calls = {(e.from_key, e.to_key) for e in _result().edges if e.edge_type == "calls"}
     # L8 `helper()` collides (util.helper vs Service.helper) -> whole site dropped.

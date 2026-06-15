@@ -197,9 +197,16 @@ def map_extraction(
         from_file = node_is_file.get(source_id)
         if from_file is None:
             continue
-        target_file = node_is_file.get(target_id) or _node_source_file(nodes, target_id)
+        target_file = node_is_file.get(target_id)
         if target_file is None:
-            continue
+            # Resolve the target's source file through the SAME override used for nodes,
+            # so a per-file extraction maps the import to the REAL source path, not the
+            # temp file the tool parsed. Without this the target keeps the temp path and
+            # the edge is dropped at write time as an unresolved key (graphify_edge_dropped).
+            raw_target = _node_source_file(nodes, target_id)
+            if raw_target is None:
+                continue
+            target_file = source_file_override if source_file_override is not None else raw_target
         add(file_key(from_file), file_key(target_file), "imports", IMPORTS_CONFIDENCE)
 
     # Calls -> symbol->symbol. Group by call site; a site resolving to >1 distinct target
