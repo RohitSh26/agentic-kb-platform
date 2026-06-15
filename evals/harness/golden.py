@@ -63,6 +63,22 @@ class GoldenCase(BaseModel):
         return self
 
 
+# The coarse source kinds PR-33 derives in the broker (context_broker/temporal.py).
+# Duplicated, not imported, across the service boundary (ADR-0008).
+OrderedKind = Literal["code", "doc", "card", "pr", "adr", "other"]
+
+# Per-intent ordering expectation (PR-33). `lead_kinds` = the kind(s) allowed as
+# PRIMARY (index 0); `include_any` = if non-empty, at least one of these kinds must
+# appear somewhere in the result (the change trail for "why"). Mirrors the broker's
+# intent weighting so a golden case can assert it actually reordered as promised.
+_INTENT_ORDERING: dict[GoldenIntent, tuple[frozenset[OrderedKind], frozenset[OrderedKind]]] = {
+    "how_does_x_work": (frozenset({"code"}), frozenset()),
+    "what_calls_x": (frozenset({"code"}), frozenset()),
+    "why_was_x_changed": (frozenset({"card", "pr", "adr"}), frozenset({"card", "pr", "adr"})),
+    "who_owns_x": (frozenset({"pr", "card", "code"}), frozenset()),
+}
+
+
 @dataclass(frozen=True)
 class GoldenResult:
     """What the broker returned for one golden case — the DB-free input to the
@@ -80,6 +96,11 @@ class GoldenResult:
     expected_edges: dict[str, frozenset[tuple[str, str]]] = field(
         default_factory=dict[str, frozenset[tuple[str, str]]]
     )
+    # PR-33: the ordered source kinds the broker returned (index 0 = primary
+    # evidence), and the ids it flagged PR-33-stale. Empty ⇒ the case does not
+    # assert ordering (phase-0/1 recall-only cases stay unchanged).
+    ordered_kinds: tuple[OrderedKind, ...] = ()
+    stale_primary: bool = False
 
 
 def evidence_recall(result: GoldenResult) -> float:
@@ -95,6 +116,31 @@ def evidence_recall(result: GoldenResult) -> float:
 def acl_leak_count(result: GoldenResult) -> int:
     """Number of must_not_leak_ids that appeared. MUST be 0 (hard gate)."""
     return len(set(result.case.must_not_leak_ids) & result.returned_evidence_ids)
+
+
+def intent_ordering_ok(result: GoldenResult) -> bool | None:
+    """PR-33: did the broker order evidence as the case's intent requires?
+
+    Returns None when the case asserts no ordering (no ordered_kinds), so
+    recall-only golden cases are unaffected. Otherwise True iff:
+      * the PRIMARY (index 0) returned kind is one of the intent's lead kinds
+        (current code first for `how`/`what_calls`; a card/PR/ADR for `why`),
+      * at least one history kind (card/PR/ADR) is present for `why`, and
+      * no PR-33-stale doc was returned as primary evidence.
+    Pure + deterministic — the broker computed the order; this only checks it.
+    """
+    if not result.ordered_kinds:
+        return None
+    lead_kinds, include_any = _INTENT_ORDERING[result.case.intent]
+    primary = result.ordered_kinds[0]
+    if primary not in lead_kinds:
+        return False
+    if result.stale_primary:
+        return False
+    present = set(result.ordered_kinds)
+    # `include_any` non-empty ⇒ at least one of those kinds must be present (the
+    # change trail for "why"). Empty ⇒ no extra inclusion requirement.
+    return not include_any or bool(include_any & present)
 
 
 def missing_expected(result: GoldenResult) -> tuple[str, ...]:
@@ -144,6 +190,10 @@ class GoldenReport:
     cases_below_floor: tuple[str, ...]
     edge_precision: dict[str, float | None]
     edge_recall: dict[str, float | None]
+    # PR-33: case_ids whose returned ordering did NOT satisfy their intent (a card
+    # not surfaced for "why", a stale doc primary for "how", etc.). Empty unless a
+    # case asserts ordering; a non-empty set is a temporal-semantics failure.
+    intent_ordering_failures: tuple[str, ...] = ()
 
 
 def aggregate(results: list[GoldenResult]) -> GoldenReport:
@@ -159,6 +209,7 @@ def aggregate(results: list[GoldenResult]) -> GoldenReport:
             cases_below_floor=(),
             edge_precision={},
             edge_recall={},
+            intent_ordering_failures=(),
         )
     recalls = [evidence_recall(r) for r in results]
     below = tuple(
@@ -175,6 +226,8 @@ def aggregate(results: list[GoldenResult]) -> GoldenReport:
             if score.recall is not None:
                 recall_sums.setdefault(score.edge_type, []).append(score.recall)
 
+    ordering_failures = tuple(r.case.case_id for r in results if intent_ordering_ok(r) is False)
+
     return GoldenReport(
         cases=len(results),
         mean_evidence_recall=sum(recalls) / len(recalls),
@@ -183,6 +236,7 @@ def aggregate(results: list[GoldenResult]) -> GoldenReport:
         cases_below_floor=below,
         edge_precision={k: sum(v) / len(v) for k, v in precision_sums.items()},
         edge_recall={k: sum(v) / len(v) for k, v in recall_sums.items()},
+        intent_ordering_failures=ordering_failures,
     )
 
 

@@ -75,6 +75,7 @@ async def create_pack(
         build_seq=active.build_seq,
         requester=requester,
         tool="context.create_pack",
+        intent=request.intent,
     )
     used_tokens = sum(card_tokens(card) for card in cards)
     open_questions = [] if cards else [f"No evidence found for: {request.task}"]

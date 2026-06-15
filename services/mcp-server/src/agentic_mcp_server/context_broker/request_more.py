@@ -140,6 +140,9 @@ async def request_more(
             await write_ledger("needs_human_approval")
             return _refusal_response(deps, pack, "needs_human_approval", None)
 
+        # A follow-up request is intent-neutral by design (no intent forwarded), so
+        # temporal weighting stays off here — a request_more is a targeted top-up for
+        # a specific question, not an intent-shaped initial pack.
         cards, _ = await retrieve_cards(
             deps,
             query=request.question,

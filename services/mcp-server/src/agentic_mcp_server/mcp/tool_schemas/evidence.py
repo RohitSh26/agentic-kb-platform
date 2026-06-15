@@ -54,3 +54,12 @@ class EvidenceCard(McpModel):
     tokens_if_expanded: int = Field(ge=0)
     injection_flagged: bool = False
     injection_signals: list[str] = Field(default_factory=list)
+    # Temporal semantics (PR-33, ADR-0010/0011 phase 4). Deterministically derived
+    # at read time from already-stored data — ranking/labelling signals only, never
+    # a trust gate. source_kind = code/doc/card/pr/adr/other; temporal_state =
+    # current/superseded; stale_for_intent = the card references a removed/absent
+    # symbol under a structure-seeking intent (a routing hint, NOT primary
+    # evidence). These NEVER affect the verifier's L0 not_stale check.
+    source_kind: Literal["code", "doc", "card", "pr", "adr", "other"] = "other"
+    temporal_state: Literal["current", "superseded"] = "current"
+    stale_for_intent: bool = False
