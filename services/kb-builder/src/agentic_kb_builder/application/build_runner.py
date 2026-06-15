@@ -154,6 +154,41 @@ class BuildRunner:
         """Execute one build. The runner owns the session's transactions: the run
         row is committed up front so the audit record survives a failed build;
         per-source work is committed only when the whole build succeeds."""
+        build_id = await self._start_run()
+        counters = _Counters()
+        try:
+            seen_source_ids, changed_source_ids = await self._process_sources(connectors, counters)
+            await self._finalize_graph(seen_source_ids, changed_source_ids)
+            await self._reconcile_index(build_id, counters)
+            await self._finish_run(build_id, counters, status="completed")
+            await self._session.commit()
+        except Exception as error:
+            # discard partial work, then record the failure in a fresh transaction
+            # so the audit row is never lost (no silent failures).
+            await self._session.rollback()
+            error_summary = f"{type(error).__name__}: {error}"
+            await self._finish_run(build_id, counters, status="failed", error_summary=error_summary)
+            await self._session.commit()
+            logger.error("event=build_run_failed build_id=%s error=%s", build_id, error_summary)
+            raise
+        final = (
+            await self._session.execute(select(KbBuildRun).where(KbBuildRun.build_id == build_id))
+        ).scalar_one()
+        logger.info(
+            "event=build_run_completed build_id=%s sources_seen=%d sources_changed=%d "
+            "llm_calls=%d embedding_calls=%d search_docs_upserted=%d",
+            build_id,
+            counters.sources_seen,
+            counters.sources_changed,
+            counters.llm_calls,
+            counters.embedding_calls,
+            counters.search_docs_upserted,
+        )
+        return final
+
+    async def _start_run(self) -> uuid.UUID:
+        """Allocate the build_seq, persist the running kb_build_run row, and commit
+        it up front so the audit record survives a failed build. Returns build_id."""
         # Monotonic build_seq, assigned once at run start (ADR-0013): the active
         # build's build_seq is the served interval-membership cutoff. nextval is
         # safe under concurrent builds (the SEQUENCE serialises allocation).
@@ -183,120 +218,111 @@ class BuildRunner:
             self._kb_version,
             self._build_seq,
         )
-        counters = _Counters()
+        return build_id
+
+    async def _process_sources(
+        self, connectors: Sequence[Connector], counters: _Counters
+    ) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+        """Fetch every source; skip unchanged ones, process changed ones. Returns
+        (seen_source_ids, changed_source_ids) for the invalidation pass.
+
+        seen_source_ids: every source_item observed this build (by source_id); the
+        deletion sweep retires every live source NOT in this set.
+        changed_source_ids: sources whose CONTENT changed (cache miss ⇒ new
+        artifacts at this build_seq); the supersession sweep retires their PRIOR
+        generation so the new version does not serve both."""
         code_key_map: dict[tuple[str, str], uuid.UUID] = {}
         pending_edges: list[_PendingEdges] = []
-        # source_items seen this build (by source_id): the deletion sweep retires
-        # every live source NOT in this set.
         seen_source_ids: set[uuid.UUID] = set()
-        # source_items whose CONTENT changed this build (cache miss ⇒ new artifacts
-        # written at this build_seq): the invalidation pass retires their PRIOR
-        # generation of artifacts so the new version does not serve both.
         changed_source_ids: set[uuid.UUID] = set()
-        try:
-            for connector in connectors:
-                for ref in await connector.list_sources():
-                    fetched = await connector.fetch(ref)
-                    counters.sources_seen += 1
-                    if await self._is_unchanged(fetched):
-                        source_id = await self._touch_last_seen(fetched)
-                        if source_id is not None:
-                            seen_source_ids.add(source_id)
-                        logger.info(
-                            "event=build_skip_unchanged source_uri=%s content_hash=%s",
-                            ref.source_uri,
-                            fetched.content_hash,
-                        )
-                        continue
-                    counters.sources_changed += 1
-                    changed_id = await self._process_changed_source(
-                        counters, fetched, code_key_map, pending_edges
+        for connector in connectors:
+            for ref in await connector.list_sources():
+                fetched = await connector.fetch(ref)
+                counters.sources_seen += 1
+                if await self._is_unchanged(fetched):
+                    source_id = await self._touch_last_seen(fetched)
+                    if source_id is not None:
+                        seen_source_ids.add(source_id)
+                    logger.info(
+                        "event=build_skip_unchanged source_uri=%s content_hash=%s",
+                        ref.source_uri,
+                        fetched.content_hash,
                     )
-                    seen_source_ids.add(changed_id)
-                    changed_source_ids.add(changed_id)
-            await self._write_pending_edges(code_key_map, pending_edges)
-            await run_linker(
+                    continue
+                counters.sources_changed += 1
+                changed_id = await self._process_changed_source(
+                    counters, fetched, code_key_map, pending_edges
+                )
+                seen_source_ids.add(changed_id)
+                changed_source_ids.add(changed_id)
+        await self._write_pending_edges(code_key_map, pending_edges)
+        return seen_source_ids, changed_source_ids
+
+    async def _finalize_graph(
+        self, seen_source_ids: set[uuid.UUID], changed_source_ids: set[uuid.UUID]
+    ) -> None:
+        """Post-source graph work: deterministic linker, cross-domain candidate
+        generation + judge, then the identity invalidation pass. Runs AFTER all
+        source writes and BEFORE index reconciliation + activation."""
+        await run_linker(
+            self._session,
+            kb_version=self._kb_version,
+            valid_from_seq=self._build_seq,
+            similarity=self._similarity,
+        )
+        # Phase 3A/3B (ADR-0010): the cheap, zero-LLM candidate generator emits
+        # cross-domain candidate pairs (audit only), then the LLM judge (if
+        # configured) rules on them and writes INFERRED_*/AMBIGUOUS edges. Both
+        # run AFTER the deterministic linker (so deterministic facts are excluded
+        # from candidates) and BEFORE invalidation + activation.
+        await run_candidate_generator(
+            self._session,
+            kb_version=self._kb_version,
+            similarity=self._similarity,
+        )
+        if self._judge is not None:
+            await run_judge(
                 self._session,
                 kb_version=self._kb_version,
                 valid_from_seq=self._build_seq,
-                similarity=self._similarity,
+                judge=self._judge,
             )
-            # Phase 3A/3B (ADR-0010): the cheap, zero-LLM candidate generator emits
-            # cross-domain candidate pairs (audit only), then the LLM judge (if
-            # configured) rules on them and writes INFERRED_*/AMBIGUOUS edges. Both
-            # run AFTER the deterministic linker (so deterministic facts are excluded
-            # from candidates) and BEFORE invalidation + activation.
-            await run_candidate_generator(
-                self._session,
-                kb_version=self._kb_version,
-                similarity=self._similarity,
-            )
-            if self._judge is not None:
-                await run_judge(
-                    self._session,
-                    kb_version=self._kb_version,
-                    valid_from_seq=self._build_seq,
-                    judge=self._judge,
-                )
-            # Invalidation pass (ADR-0013) runs AFTER all writes and the linker, but
-            # BEFORE activation: deletion sweep, rename detection, ACL propagation.
-            # Version-scoped — it only flips invalidated_at_seq / acl_teams, never
-            # physically deletes a live row a prior version still serves.
-            await run_invalidation_pass(
-                self._session,
-                build_seq=self._build_seq,
-                seen_source_ids=seen_source_ids,
-                changed_source_ids=changed_source_ids,
-            )
-            # Reconcile the index in BOTH directions before validation, so neither an
-            # orphaned doc nor a missing member can permanently block activation
-            # (invariant 5). delete_orphaned removes index-extras; reconcile_missing
-            # back-fills members the registry has but the index lacks. The DB persists
-            # across builds while the index may not (it was in-memory and gone after a
-            # prior build's process exited, or a fresh/reset file); an incremental
-            # build upserts only changed sources, so without this the index can never
-            # catch up to the registry. Back-fill reprojects from Postgres — no LLM,
-            # no re-embed.
-            orphans_removed = await self._indexer.delete_orphaned()
-            if orphans_removed:
-                logger.info(
-                    "event=build_index_orphans_removed build_id=%s count=%d",
-                    build_id,
-                    orphans_removed,
-                )
-            backfilled = await self._indexer.reconcile_missing()
-            if backfilled:
-                counters.search_docs_upserted += backfilled
-                logger.info(
-                    "event=build_index_backfilled build_id=%s count=%d",
-                    build_id,
-                    backfilled,
-                )
-            await self._finish_run(build_id, counters, status="completed")
-            await self._session.commit()
-        except Exception as error:
-            # discard partial work, then record the failure in a fresh transaction
-            # so the audit row is never lost (no silent failures).
-            await self._session.rollback()
-            error_summary = f"{type(error).__name__}: {error}"
-            await self._finish_run(build_id, counters, status="failed", error_summary=error_summary)
-            await self._session.commit()
-            logger.error("event=build_run_failed build_id=%s error=%s", build_id, error_summary)
-            raise
-        final = (
-            await self._session.execute(select(KbBuildRun).where(KbBuildRun.build_id == build_id))
-        ).scalar_one()
-        logger.info(
-            "event=build_run_completed build_id=%s sources_seen=%d sources_changed=%d "
-            "llm_calls=%d embedding_calls=%d search_docs_upserted=%d",
-            build_id,
-            counters.sources_seen,
-            counters.sources_changed,
-            counters.llm_calls,
-            counters.embedding_calls,
-            counters.search_docs_upserted,
+        # Invalidation pass (ADR-0013) runs AFTER all writes and the linker, but
+        # BEFORE activation: deletion sweep, rename detection, ACL propagation.
+        # Version-scoped — it only flips invalidated_at_seq / acl_teams, never
+        # physically deletes a live row a prior version still serves.
+        await run_invalidation_pass(
+            self._session,
+            build_seq=self._build_seq,
+            seen_source_ids=seen_source_ids,
+            changed_source_ids=changed_source_ids,
         )
-        return final
+
+    async def _reconcile_index(self, build_id: uuid.UUID, counters: _Counters) -> None:
+        """Reconcile the search index in BOTH directions before validation, so
+        neither an orphaned doc nor a missing member can permanently block
+        activation (invariant 5). delete_orphaned removes index-extras;
+        reconcile_missing back-fills members the registry has but the index lacks.
+        The DB persists across builds while the index may not (it was in-memory and
+        gone after a prior build's process exited, or a fresh/reset file); an
+        incremental build upserts only changed sources, so without this the index
+        can never catch up to the registry. Back-fill reprojects from Postgres — no
+        LLM, no re-embed."""
+        orphans_removed = await self._indexer.delete_orphaned()
+        if orphans_removed:
+            logger.info(
+                "event=build_index_orphans_removed build_id=%s count=%d",
+                build_id,
+                orphans_removed,
+            )
+        backfilled = await self._indexer.reconcile_missing()
+        if backfilled:
+            counters.search_docs_upserted += backfilled
+            logger.info(
+                "event=build_index_backfilled build_id=%s count=%d",
+                build_id,
+                backfilled,
+            )
 
     async def _finish_run(
         self,
@@ -450,6 +476,22 @@ class BuildRunner:
         counters.search_docs_upserted += await self._indexer.upsert_documents([artifact_id])
         return source_id
 
+    async def _cache_hit_artifact_ids(
+        self, cache_key: str, *, empty_event: str, source_uri: str
+    ) -> list[uuid.UUID]:
+        """Resolve a generation-cache hit to its output artifact ids. An empty
+        mapping on a hit means a corrupt/unbackfilled cache row; surface it rather
+        than silently dropping artifacts (no silent failures)."""
+        artifact_ids = await self._generation_gate.lookup_artifact_ids(cache_key)
+        if not artifact_ids:
+            logger.warning(
+                "event=%s cache_key=%s source_uri=%s",
+                empty_event,
+                cache_key,
+                source_uri,
+            )
+        return artifact_ids
+
     async def _wikify_gated(
         self, counters: _Counters, fetched: NormalizedContent, source_id: uuid.UUID
     ) -> list[uuid.UUID]:
@@ -463,17 +505,13 @@ class BuildRunner:
         )
         hit = await self._generation_gate.lookup(cache_key)
         if hit is not None:
-            artifact_ids = await self._generation_gate.lookup_artifact_ids(cache_key)
-            if not artifact_ids:
-                # Every known wikifier emits >= 1 draft, so an empty mapping on a
-                # hit almost certainly means a corrupt/unbackfilled cache row;
-                # surface it rather than silently dropping artifacts.
-                logger.warning(
-                    "event=wikify_cache_hit_empty_mapping cache_key=%s source_uri=%s",
-                    cache_key,
-                    fetched.source.source_uri,
-                )
-            return artifact_ids
+            # Every known wikifier emits >= 1 draft, so an empty mapping on a hit
+            # almost certainly means a corrupt/unbackfilled cache row.
+            return await self._cache_hit_artifact_ids(
+                cache_key,
+                empty_event="wikify_cache_hit_empty_mapping",
+                source_uri=fetched.source.source_uri,
+            )
         drafts = await self._wikifier.wikify(fetched)
         counters.llm_calls += 1
         # write_wikify_artifacts flushes BEFORE the cache row is recorded (same
@@ -521,16 +559,13 @@ class BuildRunner:
             parser_config_version=PARSER_CONFIG_VERSION,
         )
         if await self._generation_gate.lookup(cache_key) is not None:
-            artifact_ids = await self._generation_gate.lookup_artifact_ids(cache_key)
-            if not artifact_ids:
-                # Every file graph yields at least its code_file artifact, so an
-                # empty mapping on a hit means a corrupt/unbackfilled cache row.
-                logger.warning(
-                    "event=graphify_cache_hit_empty_mapping cache_key=%s source_uri=%s",
-                    cache_key,
-                    ref.source_uri,
-                )
-            return artifact_ids
+            # Every file graph yields at least its code_file artifact, so an empty
+            # mapping on a hit means a corrupt/unbackfilled cache row.
+            return await self._cache_hit_artifact_ids(
+                cache_key,
+                empty_event="graphify_cache_hit_empty_mapping",
+                source_uri=ref.source_uri,
+            )
         result = await self._graphifier.graphify(fetched)
         key_to_id = await write_code_artifacts(
             self._session,

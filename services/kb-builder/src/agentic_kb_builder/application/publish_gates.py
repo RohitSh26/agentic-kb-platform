@@ -64,6 +64,19 @@ SYMBOL_COUNT_DELTA_THRESHOLD = 0.25  # |new - prev| / prev, override via allow_l
 EVIDENCE_RECALL_FLOOR = 0.95  # golden-query evidence_recall (proxy in phase 1)
 
 
+async def _completed_run(session: AsyncSession, kb_version: str) -> KbBuildRun | None:
+    """The 'completed' kb_build_run under gate (activation has not run yet), or
+    None. Gates that need both run fields (extractor_failures, allow_large_delta)
+    and the build_seq read this once instead of re-querying for each."""
+    return (
+        await session.execute(
+            select(KbBuildRun).where(
+                KbBuildRun.kb_version == kb_version, KbBuildRun.status == "completed"
+            )
+        )
+    ).scalar_one_or_none()
+
+
 async def _build_seq_for(session: AsyncSession, kb_version: str) -> int:
     """The build_seq of the build under gate (interval-membership cutoff S).
 
@@ -146,13 +159,7 @@ async def extractor_error_rate_gate(session: AsyncSession, kb_version: str) -> G
     denominator is the code_file artifacts this build produced. No files extracted
     (e.g. a docs-only build) trivially passes — there is nothing to fail.
     """
-    run = (
-        await session.execute(
-            select(KbBuildRun).where(
-                KbBuildRun.kb_version == kb_version, KbBuildRun.status == "completed"
-            )
-        )
-    ).scalar_one_or_none()
+    run = await _completed_run(session, kb_version)
     failures = run.extractor_failures if run is not None else 0
     seq = await _build_seq_for(session, kb_version)
     files = await _count_artifacts(session, seq, "code_file")
@@ -177,13 +184,7 @@ async def symbol_count_delta_gate(session: AsyncSession, kb_version: str) -> Gat
     The override (allow_large_delta on kb_build_run) is honoured here and logged;
     no previous active version (first build) trivially passes — there is no baseline.
     """
-    run = (
-        await session.execute(
-            select(KbBuildRun).where(
-                KbBuildRun.kb_version == kb_version, KbBuildRun.status == "completed"
-            )
-        )
-    ).scalar_one_or_none()
+    run = await _completed_run(session, kb_version)
     override = bool(run.allow_large_delta) if run is not None else False
     seq = await _build_seq_for(session, kb_version)
     previous_seq = await _previous_active_seq(session, kb_version)
