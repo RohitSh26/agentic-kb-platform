@@ -42,7 +42,11 @@ failure).
 
 `quote` and `assertion` are optional and additive: a phase-1 caller that omits them keeps the exact
 behaviour it had. `verifier_levels` defaults to `["L0"]`; higher levels run only when requested (and
-admitted by policy). `verifier_levels_run` reflects exactly what ran.
+admitted by policy). `verifier_levels_run` reflects which levels were **active** for the request
+(requested and admitted) — not that each produced a verdict for every claim. A level can be active
+yet adjudicate no claim (e.g. L3 is active but every claim was already resolved by L2, so the
+entailment model never runs). The authoritative per-claim signal is always the `checks.*` field:
+a `null` check means that level produced no verdict for that claim.
 
 ### Response (the receipt)
 
