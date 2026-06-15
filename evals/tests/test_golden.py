@@ -18,6 +18,7 @@ from harness.golden import (
     aggregate,
     edge_scores,
     evidence_recall,
+    intent_ordering_ok,
     load_golden_cases,
     missing_expected,
 )
@@ -128,6 +129,50 @@ def test_aggregate_empty_is_null_not_zero() -> None:
     assert report.cases == 0
     assert report.mean_evidence_recall is None
     assert report.cases_below_floor == ()
+
+
+def test_intent_ordering_none_when_case_asserts_no_order() -> None:
+    # recall-only cases (no ordered_kinds) are unaffected by PR-33 ordering.
+    result = _result(_case(), returned_evidence_ids=frozenset({"ev_a"}))
+    assert intent_ordering_ok(result) is None
+
+
+def test_how_intent_requires_code_primary() -> None:
+    case = _case(intent="how_does_x_work")
+    good = _result(case, ordered_kinds=("code", "doc"))
+    bad = _result(case, ordered_kinds=("doc", "code"))
+    assert intent_ordering_ok(good) is True
+    assert intent_ordering_ok(bad) is False
+
+
+def test_how_intent_fails_when_stale_doc_primary() -> None:
+    case = _case(intent="how_does_x_work")
+    # primary kind is code but a stale doc was surfaced as primary evidence
+    result = _result(case, ordered_kinds=("code", "doc"), stale_primary=True)
+    assert intent_ordering_ok(result) is False
+
+
+def test_why_intent_requires_history_kinds_present() -> None:
+    case = _case(intent="why_was_x_changed")
+    with_card = _result(case, ordered_kinds=("card", "code"))
+    code_only = _result(case, ordered_kinds=("code",))
+    assert intent_ordering_ok(with_card) is True
+    assert intent_ordering_ok(code_only) is False
+
+
+def test_aggregate_collects_ordering_failures() -> None:
+    good = _result(
+        _case(case_id="g/ok", intent="how_does_x_work"),
+        returned_evidence_ids=frozenset({"ev_a", "ev_b"}),
+        ordered_kinds=("code", "doc"),
+    )
+    bad = _result(
+        _case(case_id="g/bad-order", intent="how_does_x_work"),
+        returned_evidence_ids=frozenset({"ev_a", "ev_b"}),
+        ordered_kinds=("doc", "code"),
+    )
+    report = aggregate([good, bad])
+    assert report.intent_ordering_failures == ("g/bad-order",)
 
 
 def test_seed_golden_set_loads_with_unique_ids() -> None:

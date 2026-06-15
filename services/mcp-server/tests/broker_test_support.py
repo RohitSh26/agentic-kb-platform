@@ -76,17 +76,19 @@ async def insert_artifact(
     path: str | None = None,
     span_start: int | None = None,
     span_end: int | None = None,
+    source_type: str = "github_doc",
 ) -> uuid.UUID:
     source_id = uuid.uuid4()
     artifact_id = uuid.uuid4()
     await session.execute(
         text(
             "INSERT INTO source_item (source_id, source_type, source_uri, source_version,"
-            " path, content_hash, is_deleted) VALUES (CAST(:source_id AS uuid), 'github_doc',"
+            " path, content_hash, is_deleted) VALUES (CAST(:source_id AS uuid), :source_type,"
             " :source_uri, 'rev-1', :path, :content_hash, :is_deleted)"
         ),
         {
             "source_id": str(source_id),
+            "source_type": source_type,
             "source_uri": source_uri or f"https://example.test/{artifact_id}",
             "path": path,
             "content_hash": f"hash-{artifact_id}",

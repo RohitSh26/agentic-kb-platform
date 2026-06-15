@@ -53,7 +53,11 @@ There is **no** generic unrestricted `kb.search` tool in V1.
 ## Request highlights
 
 - `context.create_pack`: `run_id`, `task`, `approved_context_plan`,
-  `retrieval_profile`, `budget_tokens ≥ 1`.
+  `retrieval_profile`, `budget_tokens ≥ 1`, optional `intent` (PR-33) ∈
+  `how_does_x_work | why_was_x_changed | who_owns_x | what_calls_x`. `intent` is
+  a **ranking hint only**: it drives the broker's transparent temporal
+  re-weighting (below) and never changes ACL, version membership, or the L0
+  verifier. Omitting it ⇒ neutral (pre-PR-33) ranking.
 - `context.request_more` **requires** `context_pack_id`, `agent_name`,
   `question`, `why_needed`, `decision_needed`, `already_checked_evidence_ids`,
   `max_tokens`. A bare `{"query": ...}` fails schema validation.
@@ -117,6 +121,22 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   artifacts). A fully-denied `open_evidence` is a tool error
   (`evidence not available`) — the same error as a missing artifact or an id
   that was never in the pack, so none of the three is distinguishable.
+- Evidence cards carry **temporal semantics** (PR-33, ADR-0010/0011 phase 4),
+  derived deterministically (no LLM) from already-stored data: `source_kind` ∈
+  `code | doc | card | pr | adr | other` (from `source_type` + `artifact_type`),
+  `temporal_state` ∈ `current | superseded` (from version-membership
+  `invalidated_at_seq` + source `is_deleted`), and `stale_for_intent` (true when
+  a doc references a removed/absent code symbol under a structure-seeking intent).
+  When `create_pack.intent` (or `request_more`) is supplied, the broker
+  **transparently re-weights** the candidate set — current code lifted for
+  `how_does_x_work` / `what_calls_x`, cards/PRs/ADRs lifted for
+  `why_was_x_changed`, ownership/recent commits for `who_owns_x`, superseded and
+  stale docs downranked. The weighting is **logged** (`event=temporal_weight*`),
+  **deterministic** (stable tie-break by `artifact_id`), and is a ranking/label
+  signal ONLY: it never removes historical evidence (a `why` query still sees it),
+  never promotes a contradicting doc into claim support, and is **independent of
+  the L0 `not_stale` verifier check** — a doc downranked here still passes L0 if
+  its source is in the active version.
 - `graph.get_neighbors` is **trust-aware** (ADR-0011, `trust-buckets.md`).
   Each returned `GraphNeighbor` carries the connecting edge's `trust_class` and
   a `claim_supporting` flag (true only for `EXTRACTED`). `trust_floor` defaults

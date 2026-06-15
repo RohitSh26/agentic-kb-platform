@@ -24,10 +24,28 @@ SOURCE_ITEM_TABLE = "source_item"
 _FETCH_ARTIFACTS_QUERY = text(
     f"""
     SELECT a.artifact_id, a.artifact_type, a.title, a.body_text, a.knowledge_kind,
-           a.authority_score, a.acl_teams, s.source_uri
+           a.authority_score, a.acl_teams, a.invalidated_at_seq,
+           s.source_uri, s.source_type, s.is_deleted
     FROM {KNOWLEDGE_ARTIFACT_TABLE} a
     JOIN {SOURCE_ITEM_TABLE} s ON s.source_id = a.source_id
     WHERE a.artifact_id = ANY(CAST(:artifact_ids AS uuid[]))
+      AND a.valid_from_seq <= :build_seq
+      AND (a.invalidated_at_seq IS NULL OR a.invalidated_at_seq > :build_seq)
+    """
+)
+
+# Current code-symbol titles that are MEMBERS of the active build_seq. PR-33's
+# stale-doc signal compares a doc's referenced symbols against this set: a doc
+# that names a symbol absent here references a removed/absent symbol and is
+# downranked for `how_does_x_work` (a routing hint, never primary). Derived from
+# already-stored data — no LLM, no schema change. NULL titles are excluded.
+_CODE_SYMBOL_TITLES_TABLE = "knowledge_artifact"
+_FETCH_CURRENT_SYMBOL_TITLES_QUERY = text(
+    f"""
+    SELECT DISTINCT a.title
+    FROM {_CODE_SYMBOL_TITLES_TABLE} a
+    WHERE a.artifact_type IN ('code_symbol', 'code_file', 'endpoint')
+      AND a.title IS NOT NULL
       AND a.valid_from_seq <= :build_seq
       AND (a.invalidated_at_seq IS NULL OR a.invalidated_at_seq > :build_seq)
     """
@@ -45,6 +63,13 @@ class ArtifactRow:
     source_uri: str
     # empty = org-public; non-empty = requester team set must intersect
     acl_teams: tuple[str, ...] = ()
+    # Temporal-derivation inputs (PR-33). All already-stored; no new generation.
+    # source_type drives the source KIND; invalidated_at_seq + source_is_deleted
+    # drive the current/superseded state. These are RANKING signals only and do
+    # not affect membership (the WHERE clause already enforced membership).
+    source_type: str | None = None
+    invalidated_at_seq: int | None = None
+    source_is_deleted: bool = False
 
 
 async def fetch_artifacts(
@@ -69,6 +94,9 @@ async def fetch_artifacts(
             authority_score=row.authority_score,
             source_uri=row.source_uri,
             acl_teams=tuple(row.acl_teams),
+            source_type=row.source_type,
+            invalidated_at_seq=row.invalidated_at_seq,
+            source_is_deleted=row.is_deleted,
         )
         for row in result
     ]
@@ -84,3 +112,15 @@ async def fetch_artifacts(
             build_seq,
         )
     return artifacts
+
+
+async def fetch_current_symbol_titles(session: AsyncSession, build_seq: int) -> set[str]:
+    """Titles of code symbols/files that are MEMBERS of the active `build_seq`.
+
+    The reference set PR-33's stale-doc signal compares doc references against: a
+    doc that names a symbol NOT in this set references a removed/absent symbol.
+    Read-only over already-stored data (no LLM); membership-filtered like
+    fetch_artifacts so a symbol removed by a later build is not counted current.
+    """
+    result = await session.execute(_FETCH_CURRENT_SYMBOL_TITLES_QUERY, {"build_seq": build_seq})
+    return {row.title for row in result if row.title}

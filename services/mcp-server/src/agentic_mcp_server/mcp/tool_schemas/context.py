@@ -22,12 +22,25 @@ from agentic_mcp_server.mcp.tool_schemas.evidence import (
 RUN_ID_PATTERN = r"^[A-Za-z0-9._-]{1,128}$"
 
 
+# Query intent (PR-33, golden-query-evals.md `intent`): drives the broker's
+# transparent temporal re-weighting (current code first for `how`, cards/PRs/ADRs
+# for `why`). Optional + additive — omitting it ⇒ neutral (pre-PR-33) ranking. It
+# is a RANKING hint only; it never changes ACL, membership, or the L0 verifier.
+QueryIntent = Literal[
+    "how_does_x_work",
+    "why_was_x_changed",
+    "who_owns_x",
+    "what_calls_x",
+]
+
+
 class CreatePackRequest(McpModel):
     run_id: str = Field(pattern=RUN_ID_PATTERN)
     task: str = Field(min_length=1)
     approved_context_plan: str = Field(min_length=1)
     retrieval_profile: str = Field(min_length=1)
     budget_tokens: int = Field(ge=1)
+    intent: QueryIntent | None = None
 
 
 class CreatePackResponse(McpModel):

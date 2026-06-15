@@ -39,6 +39,12 @@ phase 4 temporal weighting; recorded from phase 0 so cases are stable.
   many are correct (precision) and how many of the expected relations were found (recall). Reported
   per relation type so a weak relation can't hide behind a strong one.
 - **acl_leak_count** = number of `must_not_leak_ids` that appeared. MUST be 0.
+- **intent_ordering_ok** (PR-33) = did the broker order returned evidence as the case's
+  `intent` requires? `None` when the case asserts no ordering (recall-only cases are
+  unaffected); else `True` iff the **primary** (first) returned `source_kind` is a lead kind
+  for the intent (current code for `how_does_x_work` / `what_calls_x`; a card/PR/ADR for
+  `why_was_x_changed`), at least one history kind is present for `why`, and **no PR-33-stale
+  doc is primary**. `aggregate` reports `intent_ordering_failures` (offending `case_id`s).
 - **token cost** per case (already tracked) — guards against buying recall with budget blowout.
 
 ## Gate thresholds (see publish-gates.md for the authoritative numbers)
@@ -55,3 +61,6 @@ phase 4 temporal weighting; recorded from phase 0 so cases are stable.
 - Phase 1: first real golden queries for code-structure (symbols/imports/calls) — doubles as the
   graphify acceptance test.
 - Phase 2+: cross-domain golden queries; relation precision/recall as enforcing gates.
+- Phase 4 (PR-33): `intent`-tagged ordering metric (`intent_ordering_ok`) over the broker's
+  deterministic temporal weighting — current code first for `how`, cards/PRs/ADRs included for
+  `why`, no stale doc primary for `how`.
