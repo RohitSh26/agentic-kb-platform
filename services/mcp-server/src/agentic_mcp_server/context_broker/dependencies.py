@@ -11,6 +11,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from agentic_mcp_server.auth.client_identity import ClientIdentity, ClientRegistry
 from agentic_mcp_server.auth.rbac import Requester, TeamAclAuthorization, teams_from_claims
 from agentic_mcp_server.context_broker.authorization import AuthorizationPolicy
 from agentic_mcp_server.context_broker.budgets import BudgetPolicy
@@ -52,6 +53,11 @@ class BrokerDeps:
     # requested (the verifier drops it from verifier_levels_run); a configured
     # client + an "L3" request runs the cached entailment check.
     entailment_client: EntailmentClient | None = None
+    # Client/app identity registry (PR-32): authenticated client_id -> scopes +
+    # verification_required policy. Default empty ⇒ every client resolves to the
+    # unregistered, non-scope-gated, non-verification-required identity (existing
+    # behaviour unchanged for deployments that ship no registry).
+    client_registry: ClientRegistry = field(default_factory=ClientRegistry)
 
 
 def current_requester() -> Requester:
@@ -62,3 +68,19 @@ def current_requester() -> Requester:
         raise ToolError("no authenticated session")
     subject = token.subject or token.client_id or "unknown"
     return Requester(subject=subject, teams=teams_from_claims(token.claims or {}))
+
+
+def current_client_identity(registry: ClientRegistry) -> ClientIdentity:
+    """Resolve the client/app identity for the request from the authenticated token.
+
+    The client is identified by the verified bearer token's ``client_id`` claim — the
+    same authenticated session ``current_requester`` reads, never a request-body field.
+    The registry maps that client_id to its scopes + verification policy; an absent
+    client resolves to the unregistered identity (no scopes, verification not required).
+    Fails closed on a missing session, exactly like ``current_requester``.
+    """
+    token = get_access_token()
+    if token is None:
+        raise ToolError("no authenticated session")
+    client_id = token.client_id or token.subject or "unknown"
+    return registry.resolve(client_id)

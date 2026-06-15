@@ -33,6 +33,8 @@ from agentic_mcp_server.mcp.tool_schemas.verification import (
     ClaimInput,
     ClaimReceipt,
     L0Checks,
+    PlatformTrustDecision,
+    PlatformTrustRequest,
     VerificationReceipt,
     VerifyAnswerRequest,
 )
@@ -56,6 +58,8 @@ __all__ = [
     "McpModel",
     "OpenEvidenceRequest",
     "OpenEvidenceResponse",
+    "PlatformTrustDecision",
+    "PlatformTrustRequest",
     "ReadPackRequest",
     "ReadPackResponse",
     "RequestMoreRequest",

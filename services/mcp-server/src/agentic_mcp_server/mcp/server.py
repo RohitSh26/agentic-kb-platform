@@ -13,6 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from agentic_mcp_server.auth import build_entra_verifier
+from agentic_mcp_server.auth.client_identity import ClientRegistry, parse_client_registry
 from agentic_mcp_server.config import SERVER_NAME, load_config
 from agentic_mcp_server.context_broker.budgets import BudgetPolicy, parse_agent_allowances
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps, BrokerSettings
@@ -38,12 +39,14 @@ def build_server(
     search_client: SearchClient | None = None,
     settings: BrokerSettings | None = None,
     budget_policy: BudgetPolicy | None = None,
+    client_registry: ClientRegistry | None = None,
 ) -> FastMCP:
     deps = BrokerDeps(
         session_factory=session_factory,
         search_client=search_client or PostgresKeywordSearchClient(session_factory),
         settings=settings or BrokerSettings(),
         budget_policy=budget_policy or BudgetPolicy(),
+        client_registry=client_registry or ClientRegistry(),
     )
     server = FastMCP(name=SERVER_NAME, auth=auth, middleware=[TelemetryMiddleware()])
 
@@ -66,9 +69,12 @@ def create_app() -> FastMCP:
     config = load_config()
     allowances = parse_agent_allowances(config.agent_allowances_json)
     logger.info("event=agent_allowances_loaded subjects=%d", len(allowances))
+    client_registry = parse_client_registry(config.client_registry_json)
+    logger.info("event=client_registry_loaded clients=%d", len(client_registry.policies))
     engine = create_engine(config.database_url)
     return build_server(
         auth=build_entra_verifier(config),
         session_factory=create_session_factory(engine),
         budget_policy=BudgetPolicy(allowances=allowances),
+        client_registry=client_registry,
     )

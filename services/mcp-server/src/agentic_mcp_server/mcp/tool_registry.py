@@ -24,6 +24,8 @@ from agentic_mcp_server.mcp.tool_schemas.ledger import (
     ListRetrievalsResponse,
 )
 from agentic_mcp_server.mcp.tool_schemas.verification import (
+    PlatformTrustDecision,
+    PlatformTrustRequest,
     VerificationReceipt,
     VerifyAnswerRequest,
 )
@@ -43,4 +45,5 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
     "graph.get_neighbors": ToolSchema(GetNeighborsRequest, GetNeighborsResponse),
     "ledger.list_retrievals": ToolSchema(ListRetrievalsRequest, ListRetrievalsResponse),
     "context.verify_answer": ToolSchema(VerifyAnswerRequest, VerificationReceipt),
+    "context.platform_trust": ToolSchema(PlatformTrustRequest, PlatformTrustDecision),
 }

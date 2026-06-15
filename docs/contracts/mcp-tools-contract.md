@@ -3,7 +3,7 @@
 > Versioned tool surface served by mcp-server. Schema before code: every tool
 > has a frozen pydantic request/response model (`extra="forbid"`) in
 > `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`, registered in
-> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.6.0"` (1.1.0 = PR-13:
+> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.7.0"` (1.1.0 = PR-13:
 > `authorization` decision on every retrieval response, `injection_*` markers
 > on cards and expansions; 1.2.0 = PR-18: `read_pack.role` opened from the
 > closed six-role enum to a free-form charset-guarded string — response
@@ -22,7 +22,18 @@
 > L0-L2 could not adjudicate deterministically and adds `L3_entailment` to claim
 > `checks`; the receipt's reserved `signature` is now populated (HMAC-SHA256) and
 > a non-secret `key_id` is added so a host can validate it statelessly. All
-> additive: an L0-only caller is unchanged).
+> additive: an L0-only caller is unchanged; 1.7.0 = PR-32: client/app identity +
+> scopes + official-client enforcement (ADR-0011 §6). A request now carries a
+> registered **client identity** (resolved from the authenticated client
+> credential, NOT a request field) alongside the per-user subject. The verifier
+> stamps the validated `client_id` into the receipt AND binds it into the signed
+> payload, so a receipt for client A does NOT validate for client B
+> (cross-client reuse rejected). Adds `context.platform_trust`, the
+> official-client gate: a `verification_required` client is platform-trusted
+> ONLY with a valid, client-matched, passing receipt; a clear STRUCTURED denial
+> otherwise; a non-opted-in client is unaffected. Client scopes ADDITIVELY gate
+> the tool surface and compose WITH (never replace) the user team ACLs. All
+> additive: a deployment that ships no client registry is unchanged).
 
 ## The V1 tools
 
@@ -35,6 +46,7 @@
 | `graph.get_neighbors` | Graph traversal over `knowledge_edge` (depth 1–3) |
 | `ledger.list_retrievals` | Retrieval ledger for a run |
 | `context.verify_answer` | L0 provenance verifier; returns a verification receipt |
+| `context.platform_trust` | Official-client gate: is the client's answer platform-trusted? |
 
 There is **no** generic unrestricted `kb.search` tool in V1.
 
@@ -132,10 +144,26 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   (its source not superseded/deleted), and is supported by an `EXTRACTED`
   edge (an `INFERRED_*` routing hint cannot be the sole support). `overall` is
   `passed` iff all claims passed, `failed` iff all failed, else `partial`.
-  `client_id` and `signature` are reserved (null) for phase-4 client identity +
-  signing. The verifier performs **no generation**; every call writes a
-  `retrieval_event` logging ids/hashes/outcomes only — never answer or evidence
-  text.
+  The verifier stamps the **validated** `client_id` (the authenticated client
+  identity, never a request field) into the receipt and **binds it into the
+  signed payload**, so a receipt is scoped to the client it was issued to — a
+  valid receipt for client A does NOT validate for client B. `signature` /
+  `key_id` are populated when a signing key is configured (PR-31). The verifier
+  performs **no generation**; every call writes a `retrieval_event` logging
+  ids/hashes/outcomes only — never answer or evidence text.
+- `context.platform_trust` is the **official-client gate** (ADR-0011 §6). It
+  takes an optional `receipt` (the one the client got from
+  `context.verify_answer`) and returns a `PlatformTrustDecision`
+  (`status ∈ {trusted, denied, not_required}`, `client_id`,
+  `verification_required`, `reason`). The calling client's identity comes from
+  the authenticated session. For a client whose registry policy sets
+  `verification_required`, `status` is `trusted` **only** with a valid,
+  client-matched, **passing** receipt; otherwise `denied` with a stable `reason`
+  (`verification_required_no_receipt`, `receipt_unsigned`,
+  `receipt_client_mismatch`, `receipt_signature_invalid`,
+  `receipt_overall_not_passed`) — never a silent pass. A client that did **not**
+  opt into `verification_required` gets `not_required` (its behaviour is
+  unchanged).
 - `ledger.list_retrievals` returns one record per retrieval event:
   `event_id`, `run_id`, `kb_version`, `agent_name`, `tool`, `status`,
   `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`. The non-run
@@ -201,6 +229,25 @@ There is **no** generic unrestricted `kb.search` tool in V1.
 - Unauthenticated requests are rejected at the transport (401) and never reach
   a tool. `/health` is the only unauthenticated route and discloses nothing but
   service name and active `kb_version`.
+- A request carries BOTH the per-user subject (`Requester`) **and** a registered
+  **client/app identity** (`ClientIdentity`: `client_id`, `scopes`,
+  `verification_required`), resolved in the auth layer from the authenticated
+  client credential (the bearer token's `client_id`) — never a request field.
+  The client registry is config-driven via the optional `MCP_CLIENT_REGISTRY`
+  env var: a JSON object `{client_id: {scopes?: [str],
+  verification_required?: bool, secret_env?: str}}`. It carries **identifiers +
+  policy only** — any client secret is referenced by env/Key Vault **NAME**
+  (`secret_env`), never a value; a value-shaped key (`secret`, `client_secret`,
+  `key`, `password`, `credential`) fails the boot. Malformed config fails the
+  boot (it never silently grants/denies). A client **absent** from the registry
+  resolves to an unregistered identity (no scopes, `verification_required=false`)
+  — deployments that ship no registry are unchanged, and verification is **never**
+  made mandatory for a non-opted-in client.
+- Client **scopes** gate the tool surface **additively**: a registered client
+  must hold a tool's required scope (`context.read`, `graph.read`, `ledger.read`,
+  `context.verify`) or the call is denied before the broker runs. This composes
+  WITH (it never replaces or widens) the per-team user ACL — defence in depth.
+  An unregistered client is never scope-gated (opt-in only).
 
 ## Versioning
 

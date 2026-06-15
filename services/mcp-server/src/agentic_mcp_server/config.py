@@ -19,6 +19,11 @@ class ServerConfig:
     # raw MCP_AGENT_ALLOWANCES value (subject -> allowance JSON); optional —
     # parsed fail-fast by context_broker.budgets.parse_agent_allowances
     agent_allowances_json: str | None = None
+    # raw MCP_CLIENT_REGISTRY value (client_id -> scopes + verification policy JSON);
+    # optional — parsed fail-fast by auth.client_identity.parse_client_registry.
+    # Identifiers + policy only; any client secret is referenced by env/Key Vault NAME
+    # (a 'secret_env' field), never a value (PR-32).
+    client_registry_json: str | None = None
 
 
 def load_config() -> ServerConfig:
@@ -34,4 +39,5 @@ def load_config() -> ServerConfig:
         entra_tenant_id=os.environ["MCP_ENTRA_TENANT_ID"],
         entra_audience=os.environ["MCP_ENTRA_AUDIENCE"],
         agent_allowances_json=os.environ.get("MCP_AGENT_ALLOWANCES"),
+        client_registry_json=os.environ.get("MCP_CLIENT_REGISTRY"),
     )

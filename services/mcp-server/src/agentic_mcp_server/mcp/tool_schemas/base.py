@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-MCP_SCHEMA_VERSION = "1.6.0"
+MCP_SCHEMA_VERSION = "1.7.0"
 
 
 class McpModel(BaseModel):
@@ -16,4 +16,4 @@ class McpModel(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal["1.6.0"] = MCP_SCHEMA_VERSION
+    schema_version: Literal["1.7.0"] = MCP_SCHEMA_VERSION
