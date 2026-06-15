@@ -50,6 +50,7 @@ from agentic_kb_builder.infrastructure.local_search import LocalFileSearchClient
 from agentic_kb_builder.infrastructure.postgres.models import KbBuildRun
 from agentic_kb_builder.infrastructure.postgres.session import create_engine, create_session_factory
 from agentic_kb_builder.linker.embedding_similarity import EmbeddingSimilarityProvider
+from agentic_kb_builder.linker.judge import RelationshipJudge
 from agentic_kb_builder.linker.semantic import SimilarityProvider
 from agentic_kb_builder.structured_logging import configure_logging, get_logger
 from agentic_kb_builder.wikify.generate import WikifyGenerator
@@ -67,6 +68,7 @@ class Collaborators:
     indexer: SearchIndexer
     search_client: SearchClient  # backs the activation consistency validator
     similarity: SimilarityProvider | None = None  # semantic linker; None ⇒ skipped (ADR-0019)
+    judge: RelationshipJudge | None = None  # Phase-3B relationship judge; None ⇒ candidates only
 
 
 def default_collaborators(session: AsyncSession, *, index_path: Path) -> Collaborators:
@@ -81,16 +83,23 @@ def default_collaborators(session: AsyncSession, *, index_path: Path) -> Collabo
     into the linker so the prose<->code semantic pass runs (ADR-0019); otherwise it stays
     None and that pass is skipped, keeping the default build offline + deterministic."""
     client = LocalFileSearchClient(index_path)
+    model = ChatModelClient.from_env()
     similarity: SimilarityProvider | None = None
     if os.environ.get("EMBEDDINGS_PROVIDER"):
         similarity = EmbeddingSimilarityProvider(session, OllamaEmbedder.from_env())
+    # The relationship judge (Phase 3B) promotes candidates — including the new
+    # embedding-similarity ones — into trusted cross-domain edges. It costs one LLM
+    # call per UNCACHED candidate (cached by content+prompt+model version), so it is
+    # opt-in via RELATIONSHIP_JUDGE; without it candidates are generated but not judged.
+    judge: RelationshipJudge | None = model if os.environ.get("RELATIONSHIP_JUDGE") else None
     return Collaborators(
-        wikifier=WikifyGenerator(ChatModelClient.from_env()),
+        wikifier=WikifyGenerator(model),
         graphifier=GraphifyGraphifier(),
         embedder=LocalHashEmbedder(),
         indexer=SearchDocUpserter(session, client),
         search_client=client,
         similarity=similarity,
+        judge=judge,
     )
 
 
@@ -133,6 +142,7 @@ async def run_build(
         embedder=collaborators.embedder,
         indexer=collaborators.indexer,
         similarity=collaborators.similarity,
+        judge=collaborators.judge,
     )
     run = await runner.run(connectors)
     logger.info(
