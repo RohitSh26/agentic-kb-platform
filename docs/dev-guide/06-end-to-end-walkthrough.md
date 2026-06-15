@@ -191,41 +191,77 @@ answer it makes trusted must carry a receipt.*
 
 ## Going further locally
 
-### Build from your real sources (GitHub + ADO)
+### Build from your real sources (GitHub + Azure DevOps) — full runbook
 
-The demo builds from this repo's git history so it needs no credentials. To build from **real
-sources**, use `services/kb-builder/sources.example.yaml` — it shows all four source types, each with
-`auth.token_env` naming the **environment variable** that holds a PAT (never the token value itself).
+The `make demo` flow builds from this repo's git history with no credentials. This runbook builds a
+KB from your **real** GitHub repos and Azure DevOps Wiki + Work Items via the **production fetch
+backend** (no local filesystem).
 
 **You don't put URLs in the config — you put identifiers, and each connector builds the canonical
-SaaS URL from them.** The base hosts are hardcoded in the connectors; you supply only org/project/repo:
+SaaS URL.** The base hosts (`api.github.com`, `dev.azure.com`) are hardcoded; you supply only the
+org/project/repo:
 
-| Source type | Fields you set | URL the connector builds |
-| --- | --- | --- |
-| `github_code` / `github_doc` | `repo: owner/name`, `branch` | `https://api.github.com/repos/{owner}/{name}/…`, pinned to the branch's commit SHA |
-| `azure_wiki` | `organization`, `project`, `wiki` | `https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki}/…` (resolves the wiki's backing-git head SHA, then lists/reads pages) |
-| `ado_card` | `organization`, `project` (+ `area_path` / `work_item_types` / `states`) | `https://dev.azure.com/{organization}/{project}/_apis/wit/wiql` (query), then `/_apis/wit/workitems?ids=…` |
+| Source type | Fields you set | URL the connector builds | Pipeline |
+| --- | --- | --- | --- |
+| `github_code` | `repo: owner/name`, `branch` | `https://api.github.com/repos/{owner}/{name}/…` (pinned to the branch SHA) | **graphify — zero LLM** (ADR-0018) |
+| `github_doc` | `repo: owner/name`, `branch` | same host, doc files | **wikify — LLM** |
+| `azure_wiki` | `organization`, `project`, `wiki` | `https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki}/…` (pinned to the wiki's git head) | **wikify — LLM** |
+| `ado_card` | `organization`, `project` (+ `area_path` / `work_item_types` / `states`) | `https://dev.azure.com/{organization}/{project}/_apis/wit/wiql` → `/_apis/wit/workitems?ids=…` | **wikify — LLM** |
 
-So the example's `contoso` / `platform` / `platform.wiki` are **placeholders** — replace them with
-*your* Azure DevOps org, project, and wiki name (your `dev.azure.com/<your-org>`), and your GitHub
-`owner/repo`. Then run with the production fetch backend:
+> **Code is zero-LLM (ADR-0018).** Only the *prose* sources (`github_doc`, `azure_wiki`, `ado_card`)
+> go through the LLM (wikify). A `github_code`-only build needs **no LLM at all**. If you include any
+> prose source, configure an LLM first (Ollama running, or `LLM_BASE_URL` / `LLM_API_KEY` /
+> `LLM_MODEL` for an OpenAI-compatible endpoint — see dev-guide 04 §switching LLMs).
+
+**1. Get the code + tokens** (separate machine):
+
+```sh
+git checkout main && git pull origin main && make sync
+export GITHUB_TOKEN=ghp_...   # GitHub PAT — classic with `repo` scope, OR a fine-grained PAT
+                              # GRANTED to the repo with Contents: Read
+export ADO_PAT=...            # Azure DevOps PAT — scopes: Wiki (Read), Work Items (Read)
+```
+
+**2. Write your sources config.** Copy `services/kb-builder/sources.example.yaml` and replace the
+placeholders (`RohitSh26/...`, `contoso` / `platform` / `platform.wiki`) with **your** GitHub
+`owner/repo` and **your** Azure DevOps `organization` / `project` / `wiki`. Keep only the source
+types you want (e.g. drop the ADO entries for a GitHub-only run).
+
+**3. Build into a fresh database, with the production backend:**
 
 ```sh
 cd services/kb-builder
-export GITHUB_TOKEN=...   # a GitHub PAT with repo read
-export ADO_PAT=...        # an Azure DevOps PAT (Wiki + Work Items read)
-# real code/docs go through wikify (LLM) — point at Ollama or an OpenAI-compatible endpoint first
-DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/agentic_kb \
-  uv run python -m agentic_kb_builder.build \
-    --workspace . --sources ./sources.example.yaml --backend production
+DB="postgresql+asyncpg://$USER@localhost:5432/agentic_kb"
+dropdb --if-exists --force agentic_kb && createdb agentic_kb
+DATABASE_URL="$DB" uv run alembic upgrade head
+DATABASE_URL="$DB" uv run python -m agentic_kb_builder.build \
+  --workspace . --sources ./your-sources.yaml --backend production
+# expect: build status : active  (and event=build_summary)
 ```
 
-> **Status:** all four backends are **implemented and unit-tested** — GitHub (code + docs, pinned to
-> a commit SHA), Azure DevOps Wiki (pinned to the wiki's git head), and ADO Work Items (WIQL query +
-> work-item batch fetch). Each pins to a deterministic version so an unchanged source re-build is
-> byte-identical. The only connector item still on the backlog is **managed-identity auth** as an
-> alternative to PATs (ADR-0015 / #106). Real builds need an LLM for the wikify step (unlike the
-> zero-LLM demo).
+**4. Serve it and drive the tools** (reuses the demo's server + smoke against your real KB):
+
+```sh
+cd ../..
+SKIP_BUILD=1 DEMO_DB=agentic_kb PGHOST=localhost ./scripts/e2e-local.sh
+```
+
+#### Troubleshooting fetch errors
+The fetch errors name the likely cause. If a GitHub/ADO request fails:
+- **`returned 404 (… private and the token cannot access it …)`** — the repo/wiki/project is private
+  and the PAT can't see it (GitHub returns 404, not 403, to avoid leaking existence). Fix: a classic
+  PAT needs `repo` scope; a fine-grained PAT must be *granted to that repository*; an ADO PAT needs
+  Wiki/Work-Item **Read**. Verify quickly:
+  `curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/<owner>/<repo>/branches/<branch>`
+- **`returned 401 (bad or expired credentials …)`** — the token value is wrong/expired; re-export it
+  in *this* shell (the build reads `os.environ`, so it must be exported, not just set).
+- **`returned 403 (… scope, SSO …)`** — missing scope, org SSO not authorized for the PAT, or rate
+  limited.
+
+> **Status:** all four backends are implemented and unit-tested. GitHub fetch is exercised against
+> the live API; the ADO Wiki + Work Item backends are unit-tested against mocked transports — your
+> run may be their first against a *real* ADO instance, so expect to iron out auth/format specifics.
+> Managed-identity auth (instead of PATs) is the one connector item still on the backlog (#106).
 
 ### Other directions
 

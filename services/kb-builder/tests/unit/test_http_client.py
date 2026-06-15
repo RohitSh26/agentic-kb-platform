@@ -89,9 +89,27 @@ async def test_non_retryable_4xx_raises_immediately(monkeypatch: pytest.MonkeyPa
 
     client = AsyncHttpClient(transport=httpx.MockTransport(handler))
     async with client:
-        with pytest.raises(HttpFetchError):
+        # The 404 message must name the likely cause (private resource / token access),
+        # not just the bare status — most provider 404s are an auth/visibility problem.
+        with pytest.raises(HttpFetchError, match=r"private.*token cannot access"):
             await client.get_json("https://api.example.com/missing")
     assert len(calls) == 1  # 404 is not retried
+
+
+@pytest.mark.parametrize(
+    ("status", "needle"),
+    [(401, "credentials"), (403, "scope"), (404, "token cannot access"), (418, "returned 418")],
+)
+async def test_error_message_hints_name_the_likely_cause(
+    monkeypatch: pytest.MonkeyPatch, status: int, needle: str
+) -> None:
+    monkeypatch.setattr("agentic_kb_builder.connectors.http_client.asyncio.sleep", _no_sleep)
+    client = AsyncHttpClient(
+        transport=httpx.MockTransport(lambda _req: httpx.Response(status))
+    )
+    async with client:
+        with pytest.raises(HttpFetchError, match=needle):
+            await client.get_json("https://api.example.com/x")
 
 
 async def test_token_never_logged(

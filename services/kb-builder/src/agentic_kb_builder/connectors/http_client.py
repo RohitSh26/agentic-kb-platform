@@ -34,6 +34,25 @@ class HttpFetchError(Exception):
     """A request failed permanently (non-retryable status, or retries exhausted)."""
 
 
+#: Actionable hints for the auth/visibility statuses that cause most setup pain. The
+#: provider (GitHub / Azure DevOps) returns 404 for a private resource a valid token
+#: can't see, so a bare "returned 404" is misleading — name the likely cause.
+_STATUS_HINTS = {
+    401: "bad or expired credentials — check the token value in its auth env var",
+    403: "forbidden — the token lacks the required scope, SSO is not authorized, or you are rate-limited",
+    404: (
+        "not found, OR the resource is private and the token cannot access it — "
+        "verify the PAT's scope and that it is granted to this repo/org/project"
+    ),
+}
+
+
+def _http_error_message(method: str, url: str, status: int) -> str:
+    base = f"{method} {url} returned {status}"
+    hint = _STATUS_HINTS.get(status)
+    return f"{base} ({hint})" if hint else base
+
+
 class AsyncHttpClient:
     """Thin async wrapper over httpx with auth injection + bounded retry/backoff.
 
@@ -165,7 +184,7 @@ class AsyncHttpClient:
                     url,
                     response.status_code,
                 )
-                raise HttpFetchError(f"{method} {url} returned {response.status_code}")
+                raise HttpFetchError(_http_error_message(method, url, response.status_code))
 
             logger.info(
                 "event=http_fetch_ok method=%s url=%s status=%d bytes=%d",
