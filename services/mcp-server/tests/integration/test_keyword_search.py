@@ -1,8 +1,9 @@
 """PostgresKeywordSearchClient against a real (local) Postgres registry.
 
 The local/default relevance backend behind the SearchClient seam: title hits
-weigh 2, body hits 1, results are scoped to one kb_version, and LIKE
-metacharacters in queries are treated as literals.
+weigh 2, body hits 1, results are scoped to the active build's interval
+MEMBERSHIP (version-membership.md), and LIKE metacharacters in queries are
+treated as literals.
 """
 
 from collections.abc import AsyncIterator
@@ -31,12 +32,17 @@ def factory() -> async_sessionmaker[AsyncSession]:
     return make_session_factory()
 
 
+# Active build_seq for these tests; rows with valid_from_seq <= 5 and not
+# invalidated at/below 5 are members of the served set.
+ACTIVE_SEQ = 5
+
+
 @pytest.fixture(autouse=True)
 async def registry(factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[None]:
     async with factory() as session:
         await require_registry_schema(session)
         await clean_registry(session)
-        await insert_build_run(session, KB_VERSION, "active")
+        await insert_build_run(session, KB_VERSION, "active", build_seq=ACTIVE_SEQ)
     yield
 
 
@@ -51,23 +57,33 @@ async def test_title_hits_outrank_body_hits(factory: async_sessionmaker[AsyncSes
         await insert_artifact(session, title="Unrelated", body_text="graph traversal")
     client = PostgresKeywordSearchClient(factory)
 
-    hits = await client.search("payment", kb_version=KB_VERSION, top=10)
+    hits = await client.search("payment", build_seq=ACTIVE_SEQ, top=10)
 
     assert [hit.artifact_id for hit in hits] == [title_hit, body_hit]
     assert hits[0].score > hits[1].score
 
 
-async def test_results_are_scoped_to_the_requested_kb_version(
+async def test_results_are_scoped_to_membership(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """Membership, not label-equality: an artifact invalidated at or before the
+    active build_seq is excluded; a still-live one introduced earlier is served."""
     async with factory() as session:
+        # Invalidated at seq 3 (< active 5) ⇒ not a member of the served set.
         await insert_artifact(
-            session, title="Payment validation", body_text="old", kb_version="kb-old"
+            session,
+            title="Payment validation",
+            body_text="old",
+            valid_from_seq=1,
+            invalidated_at_seq=3,
         )
-        current = await insert_artifact(session, title="Payment validation", body_text="new")
+        # Introduced at seq 2, still live ⇒ a member even though it predates 5.
+        current = await insert_artifact(
+            session, title="Payment validation", body_text="new", valid_from_seq=2
+        )
     client = PostgresKeywordSearchClient(factory)
 
-    hits = await client.search("payment", kb_version=KB_VERSION, top=10)
+    hits = await client.search("payment", build_seq=ACTIVE_SEQ, top=10)
 
     assert [hit.artifact_id for hit in hits] == [current]
 
@@ -80,9 +96,9 @@ async def test_like_metacharacters_are_matched_literally(
     client = PostgresKeywordSearchClient(factory)
 
     # "%" normalizes away entirely; a query of only punctuation yields no tokens
-    assert await client.search("%%%", kb_version=KB_VERSION, top=10) == []
+    assert await client.search("%%%", build_seq=ACTIVE_SEQ, top=10) == []
 
 
 async def test_empty_query_returns_no_hits(factory: async_sessionmaker[AsyncSession]) -> None:
     client = PostgresKeywordSearchClient(factory)
-    assert await client.search("   ", kb_version=KB_VERSION, top=10) == []
+    assert await client.search("   ", build_seq=ACTIVE_SEQ, top=10) == []

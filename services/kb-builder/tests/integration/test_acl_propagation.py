@@ -1,10 +1,14 @@
-"""Derived knowledge artifacts default to org-public acl_teams (KB-5 / #25).
+"""ACL propagation onto derived artifacts (PR-27, ADR-0013 §3).
 
-The wikify and graphify writers construct KnowledgeArtifact rows WITHOUT acl_teams,
-so derived artifacts inherit the server default (empty array = org-public). Propagating
-source_item.acl_teams onto them is a recorded follow-up
-(docs/contracts/postgres-knowledge-registry.md); this pins the current behavior so the
-gap stays visible — and a future propagation change deliberately flips this test.
+A derived artifact is visible only where its source is, so kb-builder propagates
+source_item.acl_teams onto its derived artifacts at build time:
+
+- the wikify/graphify writers stamp the source ACL on NEWLY written artifacts;
+- the invalidation pass propagates an ACL-only change (even content-unchanged ⇒
+  cache hit) onto a source's live artifacts.
+
+Both are covered here. This replaces the earlier test that PINNED the gap
+(derived artifacts defaulting to org-public); ADR-0013 closes it.
 """
 
 import os
@@ -17,7 +21,10 @@ from alembic.config import Config
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from agentic_kb_builder.application.invalidation import run_invalidation_pass
+from agentic_kb_builder.domain import WikifyArtifactDraft
 from agentic_kb_builder.infrastructure.postgres.models import KnowledgeArtifact, SourceItem
+from agentic_kb_builder.wikify.write import write_wikify_artifacts
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
@@ -43,7 +50,7 @@ def migrated_db() -> Iterator[None]:
 
 
 @requires_db
-async def test_derived_artifact_defaults_to_org_public_acl(migrated_db: None) -> None:
+async def test_writer_propagates_source_acl_onto_new_artifacts(migrated_db: None) -> None:
     assert TEST_DATABASE_URL is not None
     engine = create_async_engine(TEST_DATABASE_URL)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -51,26 +58,87 @@ async def test_derived_artifact_defaults_to_org_public_acl(migrated_db: None) ->
         async with factory() as session:
             source = SourceItem(
                 source_type="github_doc",
-                source_uri="repo://acl-propagation-test",
+                source_uri="repo://acl-writer-test",
                 source_version="1",
-                content_hash="hash:acl-propagation-test",
+                content_hash="hash:acl-writer-test",
+                acl_teams=["team-secure"],
                 is_deleted=False,
             )
             session.add(source)
             await session.flush()
-            # mirrors write_wikify_artifacts / write_code_artifacts: acl_teams unset
+            ids = await write_wikify_artifacts(
+                session,
+                source_id=source.source_id,
+                kb_version="kb-acl-writer",
+                valid_from_seq=1,
+                acl_teams=["team-secure"],
+                drafts=[
+                    WikifyArtifactDraft(
+                        artifact_type="summary",
+                        title="derived",
+                        body_text="derived body",
+                        knowledge_kind="interpreted",
+                        authority_score=0.8,
+                        freshness_score=1.0,
+                    )
+                ],
+            )
+            stored = (
+                await session.execute(
+                    select(KnowledgeArtifact.acl_teams).where(
+                        KnowledgeArtifact.artifact_id == ids[0]
+                    )
+                )
+            ).scalar_one()
+            assert list(stored) == ["team-secure"], (
+                "a newly written derived artifact must inherit its source's acl_teams"
+            )
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+@requires_db
+async def test_invalidation_propagates_acl_change_onto_live_artifacts(migrated_db: None) -> None:
+    """An ACL-only change (content unchanged ⇒ cache hit) must still land: the
+    invalidation pass overwrites the source's live artifacts' acl_teams."""
+    assert TEST_DATABASE_URL is not None
+    engine = create_async_engine(TEST_DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            source = SourceItem(
+                source_type="github_doc",
+                source_uri="repo://acl-prop-test",
+                source_version="1",
+                content_hash="hash:acl-prop-test",
+                acl_teams=["team-restricted"],  # the NEW (tightened) source ACL
+                is_deleted=False,
+            )
+            session.add(source)
+            await session.flush()
+            # an EXISTING (cache-hit-carried) derived artifact still org-public.
             artifact = KnowledgeArtifact(
                 artifact_type="summary",
                 source_id=source.source_id,
                 title="derived",
                 body_text="derived body",
-                kb_version="kb-acl-test",
+                kb_version="kb-acl-old",
+                valid_from_seq=1,
                 knowledge_kind="interpreted",
                 authority_score=0.8,
                 freshness_score=1.0,
+                acl_teams=[],
             )
             session.add(artifact)
             await session.flush()
+
+            result = await run_invalidation_pass(
+                session, build_seq=2, seen_source_ids={source.source_id}
+            )
+
+            assert result.acl_sources_propagated == 1
+            assert result.acl_artifacts_updated == 1
             stored = (
                 await session.execute(
                     select(KnowledgeArtifact.acl_teams).where(
@@ -78,7 +146,53 @@ async def test_derived_artifact_defaults_to_org_public_acl(migrated_db: None) ->
                     )
                 )
             ).scalar_one()
-            assert list(stored) == [], "derived artifacts must default to org-public (empty acl)"
+            assert list(stored) == ["team-restricted"], (
+                "an ACL-only change must propagate onto the source's live artifacts"
+            )
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+@requires_db
+async def test_idempotent_acl_propagation_does_not_churn(migrated_db: None) -> None:
+    """A rebuild on an unchanged source ACL propagates nothing (no churn)."""
+    assert TEST_DATABASE_URL is not None
+    engine = create_async_engine(TEST_DATABASE_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            source = SourceItem(
+                source_type="github_doc",
+                source_uri="repo://acl-idem-test",
+                source_version="1",
+                content_hash="hash:acl-idem-test",
+                acl_teams=["team-x"],
+                is_deleted=False,
+            )
+            session.add(source)
+            await session.flush()
+            artifact = KnowledgeArtifact(
+                artifact_type="summary",
+                source_id=source.source_id,
+                title="derived",
+                body_text="derived body",
+                kb_version="kb-idem",
+                valid_from_seq=1,
+                knowledge_kind="interpreted",
+                authority_score=0.8,
+                freshness_score=1.0,
+                acl_teams=["team-x"],  # already matches the source
+            )
+            session.add(artifact)
+            await session.flush()
+
+            result = await run_invalidation_pass(
+                session, build_seq=2, seen_source_ids={source.source_id}
+            )
+
+            assert result.acl_sources_propagated == 0
+            assert result.acl_artifacts_updated == 0
             await session.rollback()
     finally:
         await engine.dispose()

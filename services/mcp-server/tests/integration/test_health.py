@@ -40,12 +40,15 @@ async def clean_build_runs() -> AsyncIterator[None]:
     yield
 
 
-async def _insert_build_run(kb_version: str, status: str) -> None:
+async def _insert_build_run(kb_version: str, status: str, build_seq: int) -> None:
     factory = make_session_factory()
     async with factory() as session:
         await session.execute(
-            text("INSERT INTO kb_build_run (kb_version, status) VALUES (:kb_version, :status)"),
-            {"kb_version": kb_version, "status": status},
+            text(
+                "INSERT INTO kb_build_run (kb_version, build_seq, status)"
+                " VALUES (:kb_version, :build_seq, :status)"
+            ),
+            {"kb_version": kb_version, "build_seq": build_seq, "status": status},
         )
         await session.commit()
 
@@ -61,8 +64,8 @@ async def test_health_without_active_version_is_not_ready(server: FastMCP) -> No
 
 
 async def test_health_returns_active_kb_version(server: FastMCP) -> None:
-    await _insert_build_run("kb-2026-06-10", "active")
-    await _insert_build_run("kb-2026-06-09", "superseded")
+    await _insert_build_run("kb-2026-06-10", "active", build_seq=2)
+    await _insert_build_run("kb-2026-06-09", "superseded", build_seq=1)
     async with asgi_http_client(server) as health_client:
         response = await health_client.get("/health")
     assert response.status_code == 200

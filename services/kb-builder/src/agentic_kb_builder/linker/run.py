@@ -24,9 +24,14 @@ async def run_linker(
     session: AsyncSession,
     *,
     kb_version: str,
+    valid_from_seq: int = 0,
     similarity: SimilarityProvider | None = None,
 ) -> tuple[int, int, int]:
-    """Compute and persist linker edges; return (inserted, refreshed, deleted)."""
+    """Compute and persist linker edges; return (inserted, refreshed, deleted).
+
+    valid_from_seq stamps newly inserted linker edges (interval membership,
+    ADR-0013); a refreshed edge keeps its original valid_from_seq.
+    """
     artifacts = await _load_linkable_artifacts(session)
     drafts = find_deterministic_links(artifacts)
     # With no provider the semantic pass is skipped, so its implements edges
@@ -44,7 +49,11 @@ async def run_linker(
         existing_pairs = {(d.from_artifact_id, d.to_artifact_id, str(d.edge_type)) for d in drafts}
         drafts += await find_semantic_links(similarity, unlinked, existing_pairs=existing_pairs)
     return await write_link_edges(
-        session, kb_version=kb_version, drafts=drafts, protected_edge_types=protected
+        session,
+        kb_version=kb_version,
+        valid_from_seq=valid_from_seq,
+        drafts=drafts,
+        protected_edge_types=protected,
     )
 
 

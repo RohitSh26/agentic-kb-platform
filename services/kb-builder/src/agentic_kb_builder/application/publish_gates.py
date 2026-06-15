@@ -21,7 +21,7 @@ would block otherwise-valid builds.
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from sqlalchemy import func, select, update
+from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentic_kb_builder.application.active_version import ValidationHook
@@ -64,6 +64,37 @@ SYMBOL_COUNT_DELTA_THRESHOLD = 0.25  # |new - prev| / prev, override via allow_l
 EVIDENCE_RECALL_FLOOR = 0.95  # golden-query evidence_recall (proxy in phase 1)
 
 
+async def _build_seq_for(session: AsyncSession, kb_version: str) -> int:
+    """The build_seq of the build under gate (interval-membership cutoff S).
+
+    The gates evaluate "the served set" of THIS build by membership against its
+    own build_seq, not by kb_version label-equality (version-membership.md). The
+    build under gate is 'completed' (activation has not run yet).
+    """
+    return (
+        await session.execute(
+            select(KbBuildRun.build_seq).where(
+                KbBuildRun.kb_version == kb_version, KbBuildRun.status == "completed"
+            )
+        )
+    ).scalar_one()
+
+
+def _members(seq: int) -> ColumnElement[bool]:
+    """Boolean clause: a knowledge_artifact row is a member of version `seq`."""
+    return (KnowledgeArtifact.valid_from_seq <= seq) & (
+        (KnowledgeArtifact.invalidated_at_seq.is_(None))
+        | (KnowledgeArtifact.invalidated_at_seq > seq)
+    )
+
+
+def _edge_members(seq: int) -> ColumnElement[bool]:
+    """Boolean clause: a knowledge_edge row is a member of version `seq`."""
+    return (KnowledgeEdge.valid_from_seq <= seq) & (
+        (KnowledgeEdge.invalidated_at_seq.is_(None)) | (KnowledgeEdge.invalidated_at_seq > seq)
+    )
+
+
 @dataclass(frozen=True)
 class GateResult:
     """One gate's outcome. measured_value is the number recorded on kb_build_run
@@ -80,26 +111,30 @@ class GateResult:
 Gate = Callable[[AsyncSession, str], Awaitable[GateResult]]
 
 
-async def _previous_active_kb_version(session: AsyncSession, kb_version: str) -> str | None:
-    """The kb_version still serving (status active) — never the build under gate."""
+async def _previous_active_seq(session: AsyncSession, kb_version: str) -> int | None:
+    """The build_seq still serving (status active) — never the build under gate.
+
+    Used as the membership cutoff for the previous version's served set (e.g. the
+    symbol-count-delta baseline), so the comparison counts what MCP actually
+    serves, not just rows the prior build labelled.
+    """
     return (
         await session.execute(
-            select(KbBuildRun.kb_version).where(
+            select(KbBuildRun.build_seq).where(
                 KbBuildRun.status == "active", KbBuildRun.kb_version != kb_version
             )
         )
     ).scalar_one_or_none()
 
 
-async def _count_artifacts(session: AsyncSession, kb_version: str, artifact_type: str) -> int:
+async def _count_artifacts(session: AsyncSession, seq: int, artifact_type: str) -> int:
+    """Count artifacts of `artifact_type` that are MEMBERS of version `seq`
+    (the served set), not merely rows labelled with this build's kb_version."""
     return (
         await session.execute(
             select(func.count())
             .select_from(KnowledgeArtifact)
-            .where(
-                KnowledgeArtifact.kb_version == kb_version,
-                KnowledgeArtifact.artifact_type == artifact_type,
-            )
+            .where(_members(seq), KnowledgeArtifact.artifact_type == artifact_type)
         )
     ).scalar_one()
 
@@ -119,7 +154,8 @@ async def extractor_error_rate_gate(session: AsyncSession, kb_version: str) -> G
         )
     ).scalar_one_or_none()
     failures = run.extractor_failures if run is not None else 0
-    files = await _count_artifacts(session, kb_version, "code_file")
+    seq = await _build_seq_for(session, kb_version)
+    files = await _count_artifacts(session, seq, "code_file")
     attempted = files + failures
     rate = (failures / attempted) if attempted else 0.0
     passed = rate <= EXTRACTOR_ERROR_RATE_THRESHOLD
@@ -149,15 +185,16 @@ async def symbol_count_delta_gate(session: AsyncSession, kb_version: str) -> Gat
         )
     ).scalar_one_or_none()
     override = bool(run.allow_large_delta) if run is not None else False
-    previous = await _previous_active_kb_version(session, kb_version)
-    new_symbols = await _count_artifacts(session, kb_version, "code_symbol")
-    if previous is None:
+    seq = await _build_seq_for(session, kb_version)
+    previous_seq = await _previous_active_seq(session, kb_version)
+    new_symbols = await _count_artifacts(session, seq, "code_symbol")
+    if previous_seq is None:
         logger.info(
             "event=publish_gate gate=symbol_count_delta kb_version=%s baseline=none passed=true",
             kb_version,
         )
         return GateResult(name="symbol_count_delta", passed=True, measured_value=0.0)
-    prev_symbols = await _count_artifacts(session, previous, "code_symbol")
+    prev_symbols = await _count_artifacts(session, previous_seq, "code_symbol")
     delta = abs(new_symbols - prev_symbols) / prev_symbols if prev_symbols else 0.0
     within = delta <= SYMBOL_COUNT_DELTA_THRESHOLD
     passed = within or override
@@ -190,13 +227,14 @@ async def no_dangling_citations_gate(session: AsyncSession, kb_version: str) -> 
     the cited fact can never be opened to its source span (the L2 path). Counts
     such artifacts; any > 0 fails. measured_value is the dangling count.
     """
+    seq = await _build_seq_for(session, kb_version)
     dangling = (
         await session.execute(
             select(func.count())
             .select_from(KnowledgeArtifact)
             .outerjoin(SourceItem, KnowledgeArtifact.source_id == SourceItem.source_id)
             .where(
-                KnowledgeArtifact.kb_version == kb_version,
+                _members(seq),
                 KnowledgeArtifact.body_text.is_not(None),
                 (SourceItem.source_id.is_(None)) | (SourceItem.is_deleted.is_(True)),
             )
@@ -214,36 +252,37 @@ async def no_dangling_citations_gate(session: AsyncSession, kb_version: str) -> 
 
 
 async def edge_evidence_integrity_gate(session: AsyncSession, kb_version: str) -> GateResult:
-    """Every knowledge_edge has an allowed edge_type AND both endpoints exist.
+    """Every edge that is a MEMBER of this build has an allowed edge_type AND both
+    endpoints are MEMBERS of this build (no-ghost-edges, PR-27 / ADR-0013).
 
-    Two integrity classes: an edge_type outside the closed ontology
-    (relation-ontology.md), or an endpoint artifact missing from THIS kb_version
-    (a ghost endpoint). Either fails the build. measured_value is the total
-    offending edge count.
+    This is the enforcing no-ghost-edges gate. Scoped by interval membership, not
+    kb_version label-equality (version-membership.md): a legitimate cross-version
+    edge (introduced earlier, still live) passes because its endpoints are members
+    of the served set; an edge to an invalidated/absent artifact fails. Two
+    integrity classes: an edge_type outside the closed ontology
+    (relation-ontology.md), or a ghost endpoint (an endpoint not a member of this
+    build). Either fails the build. measured_value is the total offending count.
     """
+    seq = await _build_seq_for(session, kb_version)
     bad_type = (
         await session.execute(
             select(func.count())
             .select_from(KnowledgeEdge)
             .where(
-                KnowledgeEdge.kb_version == kb_version,
+                _edge_members(seq),
                 KnowledgeEdge.edge_type.notin_(sorted(ALLOWED_EDGE_TYPES)),
             )
         )
     ).scalar_one()
-    valid_ids = (
-        select(KnowledgeArtifact.artifact_id)
-        .where(KnowledgeArtifact.kb_version == kb_version)
-        .scalar_subquery()
-    )
+    member_ids = select(KnowledgeArtifact.artifact_id).where(_members(seq)).scalar_subquery()
     dangling_endpoint = (
         await session.execute(
             select(func.count())
             .select_from(KnowledgeEdge)
             .where(
-                KnowledgeEdge.kb_version == kb_version,
-                (KnowledgeEdge.from_artifact_id.notin_(valid_ids))
-                | (KnowledgeEdge.to_artifact_id.notin_(valid_ids)),
+                _edge_members(seq),
+                (KnowledgeEdge.from_artifact_id.notin_(member_ids))
+                | (KnowledgeEdge.to_artifact_id.notin_(member_ids)),
             )
         )
     ).scalar_one()
@@ -251,15 +290,61 @@ async def edge_evidence_integrity_gate(session: AsyncSession, kb_version: str) -
     passed = offending == 0
     log = logger.info if passed else logger.error
     log(
-        "event=publish_gate gate=edge_evidence_integrity kb_version=%s bad_type=%d "
-        "dangling_endpoint=%d passed=%s",
+        "event=publish_gate gate=no_ghost_edges kb_version=%s seq=%d bad_type=%d "
+        "ghost_endpoint=%d passed=%s",
         kb_version,
+        seq,
         bad_type,
         dangling_endpoint,
         passed,
     )
     return GateResult(
         name="edge_evidence_integrity", passed=passed, measured_value=float(offending)
+    )
+
+
+async def relation_precision_gate(session: AsyncSession, kb_version: str) -> GateResult:
+    """Per-edge_type relation precision >= 0.9 for relations in production (PR-27).
+
+    Split into two parts (publish-gates.md, ADR-0013):
+
+    - ENFORCING here: the registry-derivable integrity of the served edge set —
+      every edge that is a MEMBER of this build and was produced by the
+      deterministic linker (source='linker', the cross-domain relations in
+      production) MUST carry an evidence pointer (relation-ontology.md "Required
+      edge fields": an edge without a valid evidence pointer MUST NOT be written).
+      A member linker edge with NULL evidence is a precision violation that the
+      registry can prove without the golden set, so it blocks activation.
+    - SEAM (logged, non-blocking): the authoritative per-edge_type precision over a
+      labelled golden set is computed by the evals harness (make eval-run), the
+      same seam as evidence_recall — kb-builder cannot import evals/ (ADR-0008).
+
+    measured_value is the count of member linker edges missing an evidence pointer.
+    """
+    seq = await _build_seq_for(session, kb_version)
+    missing_evidence = (
+        await session.execute(
+            select(func.count())
+            .select_from(KnowledgeEdge)
+            .where(
+                _edge_members(seq),
+                KnowledgeEdge.source == "linker",
+                KnowledgeEdge.evidence.is_(None),
+            )
+        )
+    ).scalar_one()
+    passed = missing_evidence == 0
+    log = logger.info if passed else logger.error
+    log(
+        "event=publish_gate gate=relation_precision kb_version=%s seq=%d "
+        "member_linker_edges_missing_evidence=%d seam=evals_harness passed=%s",
+        kb_version,
+        seq,
+        missing_evidence,
+        passed,
+    )
+    return GateResult(
+        name="relation_precision", passed=passed, measured_value=float(missing_evidence)
     )
 
 
@@ -281,7 +366,8 @@ async def evidence_recall_gate(session: AsyncSession, kb_version: str) -> GateRe
     real recall gate becomes enforcing in the harness as the golden set grows
     (phase 2), wired through this same seam without a schema change.
     """
-    symbols = await _count_artifacts(session, kb_version, "code_symbol")
+    seq = await _build_seq_for(session, kb_version)
+    symbols = await _count_artifacts(session, seq, "code_symbol")
     if symbols:
         linked = (
             await session.execute(
@@ -293,9 +379,9 @@ async def evidence_recall_gate(session: AsyncSession, kb_version: str) -> GateRe
                     | (KnowledgeEdge.to_artifact_id == KnowledgeArtifact.artifact_id),
                 )
                 .where(
-                    KnowledgeArtifact.kb_version == kb_version,
+                    _members(seq),
                     KnowledgeArtifact.artifact_type == "code_symbol",
-                    KnowledgeEdge.kb_version == kb_version,
+                    _edge_members(seq),
                 )
             )
         ).scalar_one()
@@ -359,10 +445,12 @@ def compose_gates(gates: list[Gate]) -> ValidationHook:
 
 
 def make_publish_gate_validator(consistency: ValidationHook) -> ValidationHook:
-    """The phase-1 publish gate, composing the existing index-consistency validator
-    FIRST with the new registry gates. Index consistency is the existing gate
-    (make_consistency_validator); the rest extend it. Phase-2 gates (relation
-    precision, no-ghost-edges) are intentionally absent — skipped, not failed.
+    """The publish gate, composing the existing index-consistency validator FIRST
+    with the registry gates. Index consistency is the existing gate
+    (make_consistency_validator); the rest extend it. Phase-2 gates are now
+    ENFORCING (PR-27 / ADR-0013): no-ghost-edges (edge_evidence_integrity_gate,
+    membership-scoped) and the registry-derivable part of relation precision
+    (relation_precision_gate). evidence_recall stays on the evals-harness seam.
     """
 
     async def index_consistency_gate(session: AsyncSession, kb_version: str) -> GateResult:
@@ -375,6 +463,7 @@ def make_publish_gate_validator(consistency: ValidationHook) -> ValidationHook:
             symbol_count_delta_gate,
             no_dangling_citations_gate,
             edge_evidence_integrity_gate,
+            relation_precision_gate,
             evidence_recall_gate,
         ]
     )

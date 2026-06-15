@@ -18,6 +18,8 @@ async def write_wikify_artifacts(
     *,
     source_id: uuid.UUID,
     kb_version: str,
+    valid_from_seq: int = 0,
+    acl_teams: list[str] | None = None,
     drafts: Sequence[WikifyArtifactDraft],
 ) -> list[uuid.UUID]:
     """Insert one knowledge_artifact row per draft and return ids in draft order.
@@ -25,11 +27,13 @@ async def write_wikify_artifacts(
     Flushes so ids are assigned, but does not commit — the caller (the build
     runner) owns the transaction and must record the generation-cache row in
     the same transaction after this returns.
+
+    valid_from_seq stamps the introducing build (interval membership, ADR-0013);
+    acl_teams propagates the source's ACL onto the derived artifact (a derived
+    artifact is visible only where its source is — closes the acl-propagation
+    TODO for newly written rows; the invalidation pass propagates ACL onto
+    cache-hit-carried rows whose source ACL changed).
     """
-    # TODO(acl-propagation): acl_teams is left unset, so derived artifacts default to
-    # org-public; propagate source_item.acl_teams here once that follow-up lands
-    # (docs/contracts/postgres-knowledge-registry.md). test_acl_propagation pins the
-    # current org-public default so the gap stays visible.
     artifacts = [
         KnowledgeArtifact(
             artifact_type=draft.artifact_type,
@@ -38,6 +42,8 @@ async def write_wikify_artifacts(
             body_text=draft.body_text,
             content_hash=content_hash(draft.body_text),
             kb_version=kb_version,
+            valid_from_seq=valid_from_seq,
+            acl_teams=list(acl_teams or []),
             knowledge_kind=draft.knowledge_kind,
             authority_score=draft.authority_score,
             freshness_score=draft.freshness_score,

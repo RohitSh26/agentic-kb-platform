@@ -82,6 +82,16 @@ source's artifacts in the new build; edge ACL stays the read-time endpoint inter
 (`acl-source-visibility.md`), so a now-restricted endpoint hides its edges automatically. Closes the
 `write.py` `TODO(acl-propagation)`.
 
+**`acl_teams` is the ONE field updated in place on live artifacts — a deliberate exception to the
+immutable-row rule (§1).** Every other change is expressed as invalidate-and-reissue, but a
+permission change (especially a *revocation*) must take effect on every version that is still served,
+not only future ones — leaving a prior active version serving an artifact under a now-revoked ACL
+would be a live access leak. So propagation overwrites `acl_teams` on the live row rather than
+reissuing. This trades exact historical-ACL reconstruction (we do not retain "who could see this in
+version N-2") for fail-safe current enforcement, which is the correct bias for access control. It is
+never a widening risk: visibility is enforced at read and edge ACL is the endpoint intersection, so a
+propagated change can only restrict or re-scope what a requester sees, never broaden it (invariant 6).
+
 ### 4. Phase-2 gates become enforcing only after §1
 
 `no-ghost-edges` and per-`edge_type` relation precision flip from skipped to enforcing **once

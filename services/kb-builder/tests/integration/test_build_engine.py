@@ -893,8 +893,8 @@ async def test_graphify_cache_hit_still_feeds_code_artifacts_to_index(
 
 @requires_db
 async def test_validation_gates_activation(session: AsyncSession) -> None:
-    run_v1 = KbBuildRun(kb_version="v1", status="completed")
-    run_v2 = KbBuildRun(kb_version="v2", status="completed")
+    run_v1 = KbBuildRun(kb_version="v1", build_seq=1, status="completed")
+    run_v2 = KbBuildRun(kb_version="v2", build_seq=2, status="completed")
     session.add_all([run_v1, run_v2])
     await session.flush()
 
@@ -915,7 +915,7 @@ async def test_validation_gates_activation(session: AsyncSession) -> None:
     run_v2_after = await session.get(KbBuildRun, run_v2.build_id)
     assert run_v2_after is not None and run_v2_after.status == "validation_failed"
 
-    run_v3 = KbBuildRun(kb_version="v3", status="completed")
+    run_v3 = KbBuildRun(kb_version="v3", build_seq=3, status="completed")
     session.add(run_v3)
     await session.flush()
     assert await activate_kb_version(session, run_v3.build_id, passes) is True

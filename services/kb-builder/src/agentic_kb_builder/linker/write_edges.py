@@ -3,9 +3,12 @@
 Upserts target the partial unique index uq_knowledge_edge_linker
 (from, to, edge_type WHERE source='linker'): a rerun refreshes confidence and
 kb_version in place instead of accreting a copy per version, so graph queries
-never see duplicates. Linker edges absent from the computed set are deleted —
-their textual evidence is gone, and serving them would fabricate links
-(invariant 7). Edges below LOW_CONFIDENCE_THRESHOLD are written but flagged
+never see duplicates. Linker edges absent from the computed set are
+SOFT-invalidated (invalidated_at_seq = this build's seq), never physically
+deleted: their textual evidence is gone so the active version stops serving them
+(invariant 7), but prior active versions that served them stay byte-reconstructable
+(ADR-0013 §1, invariant 5). A re-appearing edge is revived by the upsert resetting
+invalidated_at_seq to NULL. Edges below LOW_CONFIDENCE_THRESHOLD are written but flagged
 with a structured log so the eval harness can audit them — uncertain links are
 recorded as low confidence, never silently promoted to facts.
 """
@@ -13,7 +16,7 @@ recorded as low confidence, never silently promoted to facts.
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +38,7 @@ async def write_link_edges(
     session: AsyncSession,
     *,
     kb_version: str,
+    valid_from_seq: int = 0,
     drafts: Sequence[LinkEdgeDraft],
     protected_edge_types: frozenset[str] = frozenset(),
 ) -> tuple[int, int, int]:
@@ -68,10 +72,16 @@ async def write_link_edges(
                 confidence=draft.confidence,
                 source=EDGE_SOURCE,
                 kb_version=kb_version,
+                valid_from_seq=valid_from_seq,
                 trust_class=EDGE_TRUST_CLASS,
                 relation_schema_version=RELATION_SCHEMA_VERSION,
                 evidence=draft.evidence,
             )
+            # On conflict the edge already exists from a prior build: refresh its
+            # confidence/label/evidence but KEEP the original valid_from_seq — it
+            # has been a member since first introduced (immutability, ADR-0013).
+            # invalidated_at_seq is reset to NULL because a recomputed linker edge
+            # is, by definition, live again this build.
             .on_conflict_do_update(
                 index_elements=["from_artifact_id", "to_artifact_id", "edge_type"],
                 index_where=text("source = 'linker'"),
@@ -80,6 +90,7 @@ async def write_link_edges(
                     "kb_version": kb_version,
                     "relation_schema_version": RELATION_SCHEMA_VERSION,
                     "evidence": draft.evidence,
+                    "invalidated_at_seq": None,
                 },
             )
             .returning(text("(xmax = 0)"))
@@ -89,29 +100,41 @@ async def write_link_edges(
             inserted += 1
         else:
             refreshed += 1
-    deleted = await _delete_stale(session, drafts, protected_edge_types)
+    invalidated = await _invalidate_stale(
+        session, drafts, protected_edge_types, invalidated_at_seq=valid_from_seq
+    )
     await session.flush()
     logger.info(
-        "event=linker_edges_written kb_version=%s inserted=%d refreshed=%d deleted=%d",
+        "event=linker_edges_written kb_version=%s inserted=%d refreshed=%d invalidated=%d",
         kb_version,
         inserted,
         refreshed,
-        deleted,
+        invalidated,
     )
-    return inserted, refreshed, deleted
+    return inserted, refreshed, invalidated
 
 
-async def _delete_stale(
+async def _invalidate_stale(
     session: AsyncSession,
     drafts: Sequence[LinkEdgeDraft],
     protected_edge_types: frozenset[str],
+    *,
+    invalidated_at_seq: int,
 ) -> int:
+    """Soft-invalidate live linker edges absent from the computed set.
+
+    Sets invalidated_at_seq = this build's seq instead of deleting (ADR-0013 §1):
+    the edge stops being served by this and later versions but stays a member of
+    every prior version, so a previously active version remains byte-reconstructable
+    (invariant 5). Only currently-LIVE edges (invalidated_at_seq IS NULL) are
+    considered; an already-invalidated edge is left untouched.
+    """
     computed: set[tuple[uuid.UUID, uuid.UUID, str]] = {
         (d.from_artifact_id, d.to_artifact_id, str(d.edge_type)) for d in drafts
     }
-    # V1 bound: loads every linker edge into memory to diff against the computed set.
-    # Fine at nightly scale; replace with a server-side anti-join (DELETE ... WHERE NOT
-    # EXISTS) if the edge count grows large (recorded perf follow-up, KB-4 / #24).
+    # V1 bound: loads every live linker edge into memory to diff against the computed
+    # set. Fine at nightly scale; replace with a server-side anti-join (UPDATE ... WHERE
+    # NOT EXISTS) if the edge count grows large (recorded perf follow-up, KB-4 / #24).
     rows = await session.execute(
         select(
             KnowledgeEdge.edge_id,
@@ -119,7 +142,10 @@ async def _delete_stale(
             KnowledgeEdge.to_artifact_id,
             KnowledgeEdge.edge_type,
             KnowledgeEdge.evidence,
-        ).where(KnowledgeEdge.source == EDGE_SOURCE)
+        ).where(
+            KnowledgeEdge.source == EDGE_SOURCE,
+            KnowledgeEdge.invalidated_at_seq.is_(None),
+        )
     )
     stale_ids: list[uuid.UUID] = []
     protected = 0
@@ -130,25 +156,31 @@ async def _delete_stale(
         # reproduced — those carry no evidence pointer. A deterministic edge
         # (evidence set, e.g. cross-domain implements) is always recomputed when
         # its evidence still exists, so its absence here means the evidence is
-        # genuinely gone: it must be deleted, never protected (invariant 7).
+        # genuinely gone: it must be invalidated, never protected (invariant 7).
         if edge_type in protected_edge_types and evidence is None:
             protected += 1
             continue
         stale_ids.append(edge_id)
         logger.info(
-            "event=linker_edge_deleted reason=evidence_gone edge_id=%s from=%s to=%s edge_type=%s",
+            "event=linker_edge_invalidated reason=evidence_gone edge_id=%s from=%s to=%s "
+            "edge_type=%s invalidated_at_seq=%d",
             edge_id,
             from_id,
             to_id,
             edge_type,
+            invalidated_at_seq,
         )
     if protected:
         logger.warning(
-            "event=linker_stale_deletion_skipped reason=pass_skipped edge_types=%s count=%d",
+            "event=linker_stale_invalidation_skipped reason=pass_skipped edge_types=%s count=%d",
             sorted(protected_edge_types),
             protected,
         )
     if not stale_ids:
         return 0
-    await session.execute(delete(KnowledgeEdge).where(KnowledgeEdge.edge_id.in_(stale_ids)))
+    await session.execute(
+        update(KnowledgeEdge)
+        .where(KnowledgeEdge.edge_id.in_(stale_ids))
+        .values(invalidated_at_seq=invalidated_at_seq)
+    )
     return len(stale_ids)

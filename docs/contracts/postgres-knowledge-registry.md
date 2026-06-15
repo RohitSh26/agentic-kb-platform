@@ -37,26 +37,37 @@ and the migrations. Summary:
 | Table | Purpose | Written by |
 |---|---|---|
 | `source_item` | Source identity (`source_type`, `source_uri`, `source_version`, `content_hash`) + normalized text + `acl_teams`. Drives incremental skip. | kb-builder |
-| `knowledge_artifact` | Chunks, summaries, concepts, source-backed facts, code artifacts (with spans). `knowledge_kind` ∈ interpreted / source_backed. Carries `acl_teams`. | kb-builder |
-| `knowledge_edge` | Graph edges: `edge_type`, `confidence`, `source` (graphify/linker), `kb_version`. The V1 graph store — no graph DB. | kb-builder |
+| `knowledge_artifact` | Chunks, summaries, concepts, source-backed facts, code artifacts (with spans). `knowledge_kind` ∈ interpreted / source_backed. Carries `acl_teams`, the validity interval (`valid_from_seq`, `invalidated_at_seq`), and the rename link `prior_identity_id`. | kb-builder |
+| `knowledge_edge` | Graph edges: `edge_type`, `confidence`, `source` (graphify/linker), `kb_version`, and the validity interval (`valid_from_seq`, `invalidated_at_seq`). The V1 graph store — no graph DB. | kb-builder |
 | `generation_cache` / `generation_cache_artifact` | Cache key ⇒ generated outputs ⇒ produced artifacts. | kb-builder |
 | `embedding_cache` | Embedding call gate, keyed `(artifact_id, text_hash, embedding_model)`. The vector itself is stored as a float array (`ARRAY(double precision)` — no pgvector in V1), so the Search index rebuilds without re-embedding. | kb-builder |
-| `kb_build_run` | One row per nightly build: `kb_version`, `status` (`running`/`completed`/`failed`/`validation_failed`/`active`/`superseded`), counters, timestamps. | kb-builder |
+| `kb_build_run` | One row per nightly build: `kb_version`, `build_seq` (monotonic BIGINT, UNIQUE — the interval-membership cutoff), `status` (`running`/`completed`/`failed`/`validation_failed`/`active`/`superseded`), counters, timestamps. | kb-builder |
 | `retrieval_event` | Ledger: one row per MCP retrieval call — `run_id`, `context_pack_id`, `agent_name`, `tool_name`, `status`, `query_text`/`normalized_query`, `retrieval_profile`, `kb_version`, `source_filters`, `returned_artifact_ids`, `reused_evidence_ids`, `new_evidence_ids`, `cache_hit`, `semantic_reuse`, `tokens_returned`, `latency_ms`, `created_at`. | **mcp-server** |
 
 ## Columns mcp-server depends on (pinned by its contract tests)
 
-- `kb_build_run.kb_version` (text), `kb_build_run.status` (text) — active-version
-  lookup for `/health` and for serving evidence.
+- `kb_build_run.kb_version` (text), `kb_build_run.build_seq` (bigint),
+  `kb_build_run.status` (text) — active-version lookup for `/health` and for
+  serving evidence. The broker resolves the active build's `build_seq` and serves
+  by **interval membership**, not `kb_version` label-equality
+  (`version-membership.md`, ADR-0013).
+- `knowledge_artifact.valid_from_seq` / `invalidated_at_seq` (bigint) and
+  `knowledge_edge.valid_from_seq` / `invalidated_at_seq` (bigint) — the membership
+  predicate the broker filters every artifact/edge/provenance/graph/search query
+  by: `valid_from_seq <= S AND (invalidated_at_seq IS NULL OR invalidated_at_seq
+  > S)` for the active build's `build_seq` `S`. Added by kb-builder migration 0012.
+  `knowledge_artifact.prior_identity_id` (uuid) is the rename link (history
+  survives a path change).
 - `retrieval_event` full row shape — written by the Context Broker (PR-10).
 - `knowledge_artifact.acl_teams` (`text[]`, NOT NULL, default `'{}'`; added by
   kb-builder migration 0008, also on `source_item`) — the broker's
   `team_acl_v1` filter input. Empty array = org-public (any authenticated
   subject); non-empty = visible only to requesters whose team set intersects.
-  An artifact's effective ACL in V1 is its own `acl_teams`; connectors
-  propagate `source_item.acl_teams` onto derived artifacts at build time
-  (population is a kb-builder follow-up — the empty default keeps current
-  behavior until then).
+  An artifact's effective ACL in V1 is its own `acl_teams`; kb-builder propagates
+  `source_item.acl_teams` onto derived artifacts at build time — newly written
+  derived artifacts inherit it from the writer, and the invalidation pass
+  (PR-27 / ADR-0013) propagates an ACL-only change onto a source's live artifacts
+  even on a content-unchanged cache hit.
 
 `ledger.list_retrievals` (see `mcp-tools-contract.md`) maps its response from this
 table: `tool` ← `tool_name`, `evidence_ids` ← `reused_evidence_ids` ∪

@@ -23,6 +23,10 @@ class EvidencePackState:
     context_pack_id: str
     run_id: str
     kb_version: str
+    # The active build's build_seq when the pack was created: every later
+    # read/expand/request_more on this pack serves the SAME membership snapshot
+    # (version-membership.md), pinning the pack to one consistent version.
+    build_seq: int
     retrieval_profile: str
     summary: str
     budget_tokens: int

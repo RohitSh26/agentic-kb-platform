@@ -64,18 +64,27 @@ def authorization_decision(deps: BrokerDeps) -> AuthorizationDecision:
 
 
 async def retrieve_cards(
-    deps: BrokerDeps, *, query: str, kb_version: str, requester: Requester, tool: str
+    deps: BrokerDeps,
+    *,
+    query: str,
+    kb_version: str,
+    build_seq: int,
+    requester: Requester,
+    tool: str,
 ) -> tuple[list[EvidenceCard], list[ArtifactRow]]:
-    """Run the full retrieval path and return ranked cards plus their artifacts."""
+    """Run the full retrieval path and return ranked cards plus their artifacts.
+
+    Both the search hints and the Postgres hydration are scoped by interval
+    membership against `build_seq` (version-membership.md); `kb_version` is the
+    label carried into the audit log only.
+    """
     top = deps.settings.max_cards_per_retrieval
-    hits = await deps.search_client.search(
-        query, kb_version=kb_version, top=top * _SEARCH_OVERSAMPLE
-    )
+    hits = await deps.search_client.search(query, build_seq=build_seq, top=top * _SEARCH_OVERSAMPLE)
     if not hits:
         return [], []
     scores = {hit.artifact_id: hit.score for hit in hits}
     async with deps.session_factory() as session:
-        artifacts = await fetch_artifacts(session, list(scores), kb_version)
+        artifacts = await fetch_artifacts(session, list(scores), build_seq)
     allowed = deps.authorization.filter_artifacts(requester, artifacts)
     allowed_ids = {artifact.artifact_id for artifact in allowed}
     ranked = sorted(allowed, key=lambda a: _rank_key(a, scores), reverse=True)[:top]

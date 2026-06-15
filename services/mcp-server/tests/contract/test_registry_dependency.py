@@ -9,6 +9,7 @@ registry must break this test, not production health checks.
 from pathlib import Path
 
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import (
+    BUILD_SEQ_COLUMN,
     KB_BUILD_RUN_TABLE,
     KB_VERSION_COLUMN,
     STATUS_COLUMN,
@@ -29,6 +30,7 @@ REGISTRY_CONTRACT = REPO_ROOT / "docs" / "contracts" / "postgres-knowledge-regis
 PINNED_NAMES = (
     KB_BUILD_RUN_TABLE,
     KB_VERSION_COLUMN,
+    BUILD_SEQ_COLUMN,
     STATUS_COLUMN,
     KNOWLEDGE_ARTIFACT_TABLE,
     SOURCE_ITEM_TABLE,
@@ -41,6 +43,7 @@ PINNED_NAMES = (
 def test_pinned_names_match_the_registry_contract() -> None:
     assert KB_BUILD_RUN_TABLE == "kb_build_run"
     assert KB_VERSION_COLUMN == "kb_version"
+    assert BUILD_SEQ_COLUMN == "build_seq"
     assert STATUS_COLUMN == "status"
     assert KNOWLEDGE_ARTIFACT_TABLE == "knowledge_artifact"
     assert SOURCE_ITEM_TABLE == "source_item"

@@ -123,7 +123,7 @@ async def test_model_round_trip_each_table() -> None:
                     embedding_hash="hash-emb",
                     azure_search_doc_id="doc-1",
                 ),
-                KbBuildRun(kb_version="2026-06-10.1", status="succeeded"),
+                KbBuildRun(kb_version="2026-06-10.1", build_seq=1, status="succeeded"),
                 RetrievalEvent(
                     run_id="run-1",
                     agent_name="orchestrator",

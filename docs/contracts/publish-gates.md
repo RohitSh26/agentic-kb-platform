@@ -21,8 +21,12 @@ the rollback automatic (the previous active version is never touched until the n
 | ACL leak                  | golden-query `acl_leak_count == 0`                                                              | 1     |
 | no dangling citations      | every citeable fact's evidence pointer resolves within the new version                          | 1     |
 | edge evidence integrity    | every `knowledge_edge` has a valid evidence pointer + an allowed `edge_type` (ontology)         | 1     |
-| relation precision         | per-`edge_type` `edge_precision ≥ 0.9` for relations in production                              | 2     |
-| no ghost edges             | invalidation ran: no edge references a deleted/renamed artifact (`identity-over-time`)          | 2     |
+| relation precision         | per-`edge_type` `edge_precision ≥ 0.9` for relations in production                              | 2 (enforcing) |
+| no ghost edges             | invalidation ran: no edge references a deleted/renamed artifact (`identity-over-time`)          | 2 (enforcing) |
+
+Gates marked "phase" `2 (enforcing)` are **enforcing as of PR-27 / ADR-0013** — once membership is
+interval-based (`version-membership.md`), they can be evaluated over the **served set** of the build
+under gate without flagging legitimate cross-version edges, so they now block activation.
 
 `*` Phase 1 ships the evidence-recall gate against the seed golden set; it becomes strict as the set
 grows. A gate not yet applicable to the current phase is skipped, not failed.
@@ -36,8 +40,16 @@ golden set, which lives in `evals/` and cannot be imported by kb-builder (servic
 ADR-0008). So evidence-recall is enforced by the evals harness (`make eval-run`,
 `harness/golden.py` — `evidence_recall`, `acl_leak_count`, per-`edge_type` precision/recall) and is
 SKIPPED (logs a registry-derivable proxy, never blocks) inside activation in phase 1. It tightens to
-enforcing through the same seam as the golden set grows. Phase-2 gates (relation precision, no ghost
-edges) remain inert (skipped) until their producing mechanism exists.
+enforcing through the same seam as the golden set grows.
+
+**Phase-2 wiring (PR-27, ADR-0013):** with interval membership in place
+(`version-membership.md`), the **no-ghost-edges** gate is now REAL and ENFORCING: every edge that is
+a **member** of the build under gate's `build_seq` must have both endpoints also members of that
+`build_seq` (no edge to an invalidated/absent artifact). It is scoped by the membership predicate,
+not `= kb_version`. The **relation-precision** gate's registry-derivable integrity part (every
+edge that is a member carries an allowed `edge_type` from the closed ontology and a resolvable
+evidence pointer) is enforcing here over members; its authoritative per-`edge_type` precision over a
+labelled golden set stays on the same evals-harness seam as evidence-recall (`make eval-run`).
 
 ## Override
 

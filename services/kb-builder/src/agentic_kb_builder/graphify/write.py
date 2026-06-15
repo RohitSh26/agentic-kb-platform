@@ -37,16 +37,20 @@ async def write_code_artifacts(
     *,
     source_id: uuid.UUID,
     kb_version: str,
+    valid_from_seq: int = 0,
+    acl_teams: list[str] | None = None,
     drafts: Sequence[CodeArtifactDraft],
 ) -> dict[str, uuid.UUID]:
     """Insert one knowledge_artifact row per draft; return symbolic key -> uuid.
 
     Flushes so ids are assigned but does not commit — the build runner owns the
     transaction and records the generation-cache row after this returns.
+
+    valid_from_seq stamps the introducing build (interval membership, ADR-0013);
+    acl_teams propagates the code source's ACL onto the derived artifact (closes
+    the acl-propagation TODO for newly written rows; the invalidation pass
+    propagates ACL onto cache-hit-carried rows whose source ACL changed).
     """
-    # TODO(acl-propagation): acl_teams is left unset, so derived artifacts default to
-    # org-public; propagate source_item.acl_teams here once that follow-up lands
-    # (docs/contracts/postgres-knowledge-registry.md). See test_acl_propagation.
     rows = [
         KnowledgeArtifact(
             artifact_type=draft.artifact_type,
@@ -55,6 +59,8 @@ async def write_code_artifacts(
             body_text=draft.body_text,
             content_hash=content_hash(draft.body_text) if draft.body_text is not None else None,
             kb_version=kb_version,
+            valid_from_seq=valid_from_seq,
+            acl_teams=list(acl_teams or []),
             knowledge_kind="source_backed",
             authority_score=CODE_AUTHORITY,
             freshness_score=BUILD_TIME_FRESHNESS,
@@ -78,6 +84,7 @@ async def write_code_edges(
     session: AsyncSession,
     *,
     kb_version: str,
+    valid_from_seq: int = 0,
     repo: str,
     drafts: Sequence[CodeEdgeDraft],
     key_to_id: Mapping[tuple[str, str], uuid.UUID],
@@ -111,6 +118,7 @@ async def write_code_edges(
                 confidence=draft.confidence,
                 source=EDGE_SOURCE,
                 kb_version=kb_version,
+                valid_from_seq=valid_from_seq,
                 trust_class=EDGE_TRUST_CLASS,
             )
         )

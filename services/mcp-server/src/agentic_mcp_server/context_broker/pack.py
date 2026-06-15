@@ -25,7 +25,7 @@ from agentic_mcp_server.context_broker.state import (
     new_pack_id,
 )
 from agentic_mcp_server.domain.query_text import normalize_query
-from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_kb_version
+from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_version
 from agentic_mcp_server.infrastructure.postgres.artifacts import fetch_artifacts
 from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
     RetrievalEventInsert,
@@ -56,8 +56,8 @@ async def create_pack(
     started = time.monotonic()
     query = f"{request.task} {request.approved_context_plan}"
     async with deps.session_factory() as session:
-        kb_version = await fetch_active_kb_version(session)
-    if kb_version is None:
+        active = await fetch_active_version(session)
+    if active is None:
         await write_error_event(
             deps,
             tool_name="context.create_pack",
@@ -66,11 +66,13 @@ async def create_pack(
             query_text=query,
         )
         raise ToolError("no active kb_version; the knowledge base has not been built yet")
+    kb_version = active.kb_version
 
     cards, _ = await retrieve_cards(
         deps,
         query=query,
         kb_version=kb_version,
+        build_seq=active.build_seq,
         requester=requester,
         tool="context.create_pack",
     )
@@ -84,6 +86,7 @@ async def create_pack(
         context_pack_id=new_pack_id(),
         run_id=request.run_id,
         kb_version=kb_version,
+        build_seq=active.build_seq,
         retrieval_profile=request.retrieval_profile,
         summary=_summary(request.run_id, cards),
         budget_tokens=budget_tokens,
@@ -155,7 +158,7 @@ async def read_pack(
     all_cards = list(pack.cards.values())
     async with deps.session_factory() as session:
         artifacts = await fetch_artifacts(
-            session, [card.artifact_id for card in all_cards], pack.kb_version
+            session, [card.artifact_id for card in all_cards], pack.build_seq
         )
     allowed_ids = {
         artifact.artifact_id

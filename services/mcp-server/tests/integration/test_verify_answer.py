@@ -70,11 +70,15 @@ async def _seed_supported_artifact(
     source_is_deleted: bool = False,
     with_extracted_edge: bool = True,
     inferred_only: bool = False,
+    valid_from_seq: int = 0,
+    invalidated_at_seq: int | None = None,
 ) -> uuid.UUID:
     """An artifact plus, by default, an incident EXTRACTED edge (claim support).
 
     ``inferred_only`` instead gives it only an INFERRED_HIGH edge, so it exists
     but is supported solely by a routing hint (L0_supporting_trust_ok = false).
+    The validity interval (valid_from_seq / invalidated_at_seq) controls whether
+    the artifact is a MEMBER of the active build_seq (version-membership.md).
     """
     artifact = await insert_artifact(
         session,
@@ -83,9 +87,16 @@ async def _seed_supported_artifact(
         body_text="x",
         acl_teams=acl_teams,
         source_is_deleted=source_is_deleted,
+        valid_from_seq=valid_from_seq,
+        invalidated_at_seq=invalidated_at_seq,
     )
     neighbor = await insert_artifact(
-        session, kb_version=kb_version, title="neighbor", body_text="y"
+        session,
+        kb_version=kb_version,
+        title="neighbor",
+        body_text="y",
+        valid_from_seq=valid_from_seq,
+        invalidated_at_seq=invalidated_at_seq,
     )
     if inferred_only:
         await insert_edge(
@@ -95,6 +106,8 @@ async def _seed_supported_artifact(
             edge_type="documents",
             kb_version=kb_version,
             trust_class="INFERRED_HIGH",
+            valid_from_seq=valid_from_seq,
+            invalidated_at_seq=invalidated_at_seq,
         )
     elif with_extracted_edge:
         await insert_edge(
@@ -104,6 +117,8 @@ async def _seed_supported_artifact(
             edge_type="calls",
             kb_version=kb_version,
             trust_class="EXTRACTED",
+            valid_from_seq=valid_from_seq,
+            invalidated_at_seq=invalidated_at_seq,
         )
     return artifact
 
@@ -246,8 +261,13 @@ async def test_evidence_not_retrieved_by_requester_fails(
 async def test_evidence_from_another_version_fails(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    # The active build_seq is 1 (insert_build_run default); seeding the evidence
+    # at valid_from_seq=2 makes it a member of a LATER version only — it exists in
+    # the registry but is NOT a member of the served set (version-membership.md).
     async with factory() as session:
-        evidence = await _seed_supported_artifact(session, kb_version=OTHER_VERSION)
+        evidence = await _seed_supported_artifact(
+            session, kb_version=OTHER_VERSION, valid_from_seq=2
+        )
     await _record_retrieval(factory, [evidence])
     deps = make_broker_deps(factory, FakeSearchClient())
 

@@ -20,6 +20,7 @@ from agentic_kb_builder.application.active_version import get_active_kb_version
 from agentic_kb_builder.application.publish_gates import (
     edge_evidence_integrity_gate,
     no_dangling_citations_gate,
+    relation_precision_gate,
     symbol_count_delta_gate,
 )
 from agentic_kb_builder.build import Collaborators, run_build
@@ -338,3 +339,78 @@ async def test_failed_gate_records_reason_and_keeps_prev_active(
     assert failed.status == "validation_failed"
     assert failed.failed_gate == "edge_evidence_integrity"
     assert failed.gate_measured_value == 1.0
+
+
+@requires_db
+async def test_ghost_edge_blocks_no_ghost_edges_gate(session: AsyncSession, tmp_path: Path) -> None:
+    """ENFORCING no-ghost-edges (PR-27/ADR-0013): a member edge whose endpoint is
+    NOT a member of this build (invalidated) is a ghost ⇒ the gate fails. Scoped by
+    membership, not kb_version label-equality."""
+    workspace, sources = _workspace(tmp_path)
+    await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-gate.ghost",
+        version="local",
+        collaborators=_collaborators(session),
+        activate=False,
+    )
+    seq = (
+        await session.execute(
+            text("SELECT build_seq FROM kb_build_run WHERE kb_version = 'v-gate.ghost'")
+        )
+    ).scalar_one()
+    # Invalidate ONE endpoint of a live member edge AT this build_seq: the edge
+    # stays a member (still live) but now points at a non-member ⇒ a ghost.
+    await session.execute(
+        text(
+            "UPDATE knowledge_artifact SET invalidated_at_seq = :seq WHERE artifact_id = ("
+            "  SELECT to_artifact_id FROM knowledge_edge"
+            "  WHERE kb_version = 'v-gate.ghost' LIMIT 1)"
+        ),
+        {"seq": seq},
+    )
+    await session.commit()
+
+    result = await edge_evidence_integrity_gate(session, "v-gate.ghost")
+    assert not result.passed
+    assert result.measured_value is not None and result.measured_value >= 1.0
+
+
+@requires_db
+async def test_member_linker_edge_without_evidence_blocks_relation_precision(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    """ENFORCING relation precision (registry-derivable part, PR-27/ADR-0013): a
+    member linker edge with a NULL evidence pointer violates the ontology's
+    'required edge fields' ⇒ the gate fails. A clean build passes."""
+    workspace, sources = _workspace(tmp_path)
+    await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-gate.relprec",
+        version="local",
+        collaborators=_collaborators(session),
+        activate=False,
+    )
+    # A clean build passes the gate (graphify edges are source='graphify', the
+    # gate only checks source='linker').
+    clean = await relation_precision_gate(session, "v-gate.relprec")
+    assert clean.passed
+
+    # Force a member linker edge with NULL evidence (a precision violation).
+    await session.execute(
+        text(
+            "UPDATE knowledge_edge SET source = 'linker', evidence = NULL "
+            "WHERE kb_version = 'v-gate.relprec' "
+            "AND edge_id = (SELECT edge_id FROM knowledge_edge "
+            "WHERE kb_version = 'v-gate.relprec' LIMIT 1)"
+        )
+    )
+    await session.commit()
+
+    result = await relation_precision_gate(session, "v-gate.relprec")
+    assert not result.passed
+    assert result.measured_value == 1.0

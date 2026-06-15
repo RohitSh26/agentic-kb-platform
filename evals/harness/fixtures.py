@@ -47,8 +47,15 @@ async def seed_case_fixtures(
     session: AsyncSession, fixtures: Fixtures, search: FakeSearchClient
 ) -> dict[str, uuid.UUID]:
     """Insert the case's artifacts and seed the fake search; returns key -> artifact_id."""
+    # build_seq is the interval-membership cutoff (version-membership.md, ADR-0013):
+    # the broker resolves the active build's build_seq and serves rows whose
+    # valid_from_seq <= it. Seeded artifacts default to valid_from_seq=0, so any
+    # build_seq >= 0 makes them members; 1 keeps it simple.
     await session.execute(
-        text("INSERT INTO kb_build_run (kb_version, status) VALUES (:kb_version, 'active')"),
+        text(
+            "INSERT INTO kb_build_run (kb_version, build_seq, status)"
+            " VALUES (:kb_version, 1, 'active')"
+        ),
         {"kb_version": KB_VERSION},
     )
     ids: dict[str, uuid.UUID] = {}

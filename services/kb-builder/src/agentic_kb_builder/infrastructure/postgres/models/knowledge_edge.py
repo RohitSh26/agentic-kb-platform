@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, Text, text
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, Integer, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,6 +42,14 @@ class KnowledgeEdge(Base):
     # so pre-existing graphify/linker edges are untouched; the cross-domain
     # linker populates it for every edge it writes.
     evidence: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Interval membership (docs/contracts/version-membership.md, ADR-0013): same
+    # predicate as knowledge_artifact. valid_from_seq is the introducing build_seq;
+    # invalidated_at_seq is set when the edge leaves the KB (an endpoint deleted or
+    # renamed away). NULL while live.
+    valid_from_seq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    invalidated_at_seq: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -52,6 +60,7 @@ class KnowledgeEdge(Base):
         Index("ix_knowledge_edge_kb_version_trust_class", "kb_version", "trust_class"),
         Index("ix_knowledge_edge_from_artifact_id", "from_artifact_id"),
         Index("ix_knowledge_edge_to_artifact_id", "to_artifact_id"),
+        Index("ix_knowledge_edge_membership", "valid_from_seq", "invalidated_at_seq"),
         Index(
             "uq_knowledge_edge_linker",
             "from_artifact_id",

@@ -21,7 +21,7 @@ from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.error_ledger import write_error_event
 from agentic_mcp_server.context_broker.retrieval import authorization_decision
 from agentic_mcp_server.context_broker.trust import admits, is_claim_supporting
-from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_kb_version
+from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_version
 from agentic_mcp_server.infrastructure.postgres.artifacts import ArtifactRow, fetch_artifacts
 from agentic_mcp_server.infrastructure.postgres.edges import fetch_edges_touching
 from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
@@ -58,8 +58,8 @@ async def get_neighbors(
     started = time.monotonic()
     suppressed: list[uuid.UUID] = []
     async with deps.session_factory() as session:
-        kb_version = await fetch_active_kb_version(session)
-        if kb_version is None:
+        active = await fetch_active_version(session)
+        if active is None:
             await write_error_event(
                 deps,
                 tool_name=_TOOL_NAME,
@@ -67,6 +67,8 @@ async def get_neighbors(
                 query_text=str(request.artifact_id),
             )
             raise ToolError("no active kb_version; the knowledge base has not been built yet")
+        kb_version = active.kb_version
+        build_seq = active.build_seq
 
         edge_types = request.edge_types or None
         cap = deps.settings.max_graph_neighbors
@@ -76,7 +78,7 @@ async def get_neighbors(
 
         # the root is hop 0: an unauthorized start node must not reveal its
         # connectivity, so denial yields the same empty result as an unknown id
-        root_rows = await fetch_artifacts(session, [request.artifact_id], kb_version)
+        root_rows = await fetch_artifacts(session, [request.artifact_id], build_seq)
         if deps.authorization.filter_artifacts(requester, root_rows):
             frontier = [request.artifact_id]
         else:
@@ -86,7 +88,7 @@ async def get_neighbors(
         for distance in range(1, request.depth + 1):
             if not frontier or len(found) >= cap:
                 break
-            edges = await fetch_edges_touching(session, frontier, kb_version, edge_types)
+            edges = await fetch_edges_touching(session, frontier, build_seq, edge_types)
             frontier_set = set(frontier)
             candidates: list[_Found] = []
             for edge in edges:
@@ -124,7 +126,7 @@ async def get_neighbors(
             # filter each hop BEFORE expanding the frontier: an unauthorized
             # node is neither returned nor traversed through
             artifacts = await fetch_artifacts(
-                session, [candidate.artifact_id for candidate in candidates], kb_version
+                session, [candidate.artifact_id for candidate in candidates], build_seq
             )
             allowed_by_id = {
                 artifact.artifact_id: artifact

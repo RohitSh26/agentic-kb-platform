@@ -30,7 +30,7 @@ from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.error_ledger import write_error_event
 from agentic_mcp_server.context_broker.trust import CLAIM_SUPPORTING
-from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_kb_version
+from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_version
 from agentic_mcp_server.infrastructure.postgres.provenance import (
     ProvenanceRow,
     fetch_existing_anywhere,
@@ -179,8 +179,8 @@ async def verify_answer(
     answer_hash = _normalized_answer_hash(request)
 
     async with deps.session_factory() as session:
-        active_version = await fetch_active_kb_version(session)
-        if active_version is None:
+        active = await fetch_active_version(session)
+        if active is None:
             await write_error_event(
                 deps,
                 tool_name=_TOOL_NAME,
@@ -188,6 +188,7 @@ async def verify_answer(
                 query_text=request.answer_id,
             )
             raise ToolError("no active kb_version; the knowledge base has not been built yet")
+        active_version = active.kb_version
 
         # null graph_version ⇒ active; a pinned version must equal the served
         # one (we serve exactly the last successful active version, invariant 5).
@@ -205,7 +206,7 @@ async def verify_answer(
 
         if graph_version == active_version:
             in_version = await fetch_provenance(
-                session, unique_ids, graph_version, extracted_bucket=CLAIM_SUPPORTING
+                session, unique_ids, active.build_seq, extracted_bucket=CLAIM_SUPPORTING
             )
         else:
             # A pinned non-active version is, by construction, not the served

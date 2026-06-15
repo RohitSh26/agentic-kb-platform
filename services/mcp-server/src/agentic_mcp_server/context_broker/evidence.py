@@ -67,7 +67,7 @@ async def open_evidence(
         raise ToolError(f"evidence not available: {request.evidence_id}")
 
     async with deps.session_factory() as session:
-        artifacts = await fetch_artifacts(session, [card.artifact_id], pack.kb_version)
+        artifacts = await fetch_artifacts(session, [card.artifact_id], pack.build_seq)
     allowed = deps.authorization.filter_artifacts(requester, artifacts)
     if not allowed:
         audit_context_access(

@@ -17,10 +17,12 @@ KNOWLEDGE_ARTIFACT_TABLE = "knowledge_artifact"
 SOURCE_ITEM_TABLE = "source_item"
 KNOWLEDGE_EDGE_TABLE = "knowledge_edge"
 
-# Per cited id within the served kb_version: existence, ACL set, source state
-# (is_deleted ⇒ superseded/deleted ⇒ stale), and whether at least one incident
-# edge is claim-supporting (EXTRACTED). The edge join is left so an artifact
-# with no incident edge still returns a row (supporting_trust_ok = false).
+# Per cited id within the served version (by interval membership, ADR-0013):
+# existence, ACL set, source state (is_deleted ⇒ superseded/deleted ⇒ stale), and
+# whether at least one incident edge is claim-supporting (EXTRACTED). The artifact
+# and both edge subqueries filter by the SAME membership predicate against the
+# active build_seq, never kb_version label-equality. The edge join is left so an
+# artifact with no incident edge still returns a row (supporting_trust_ok = false).
 _FETCH_PROVENANCE_QUERY = text(
     f"""
     SELECT a.artifact_id,
@@ -28,21 +30,24 @@ _FETCH_PROVENANCE_QUERY = text(
            a.acl_teams,
            EXISTS (
                SELECT 1 FROM {KNOWLEDGE_EDGE_TABLE} e
-               WHERE e.kb_version = a.kb_version
+               WHERE e.valid_from_seq <= :build_seq
+                 AND (e.invalidated_at_seq IS NULL OR e.invalidated_at_seq > :build_seq)
                  AND e.trust_class = :extracted
                  AND (e.from_artifact_id = a.artifact_id
                       OR e.to_artifact_id = a.artifact_id)
            ) AS has_extracted_edge,
            EXISTS (
                SELECT 1 FROM {KNOWLEDGE_EDGE_TABLE} e
-               WHERE e.kb_version = a.kb_version
+               WHERE e.valid_from_seq <= :build_seq
+                 AND (e.invalidated_at_seq IS NULL OR e.invalidated_at_seq > :build_seq)
                  AND (e.from_artifact_id = a.artifact_id
                       OR e.to_artifact_id = a.artifact_id)
            ) AS has_any_edge
     FROM {KNOWLEDGE_ARTIFACT_TABLE} a
     JOIN {SOURCE_ITEM_TABLE} s ON s.source_id = a.source_id
     WHERE a.artifact_id = ANY(CAST(:artifact_ids AS uuid[]))
-      AND a.kb_version = :kb_version
+      AND a.valid_from_seq <= :build_seq
+      AND (a.invalidated_at_seq IS NULL OR a.invalidated_at_seq > :build_seq)
     """
 )
 
@@ -74,7 +79,7 @@ class ProvenanceRow:
 async def fetch_provenance(
     session: AsyncSession,
     artifact_ids: list[uuid.UUID],
-    kb_version: str,
+    build_seq: int,
     *,
     extracted_bucket: str,
 ) -> dict[uuid.UUID, ProvenanceRow]:
@@ -82,7 +87,7 @@ async def fetch_provenance(
         _FETCH_PROVENANCE_QUERY,
         {
             "artifact_ids": artifact_ids,
-            "kb_version": kb_version,
+            "build_seq": build_seq,
             "extracted": extracted_bucket,
         },
     )
