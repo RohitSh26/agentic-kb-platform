@@ -5,6 +5,7 @@ team claims), never from request fields like agent_name or role — those are
 correlation and view selectors only.
 """
 
+import re
 from dataclasses import dataclass, field
 
 from fastmcp.exceptions import ToolError
@@ -66,6 +67,18 @@ class BrokerDeps:
     client_registry: ClientRegistry = field(default_factory=ClientRegistry)
 
 
+# The subject is echoed verbatim into key=value structured logs across the broker
+# (ledger, verify, audit). A token subject is not charset-constrained, so a crafted
+# value could carry whitespace/newlines/`=` and forge log fields. Replace every char
+# outside this safe set with "_" at the single identity chokepoint so no downstream
+# log line can be spoofed (log-injection guard, same intent as the run_id pattern).
+_SUBJECT_UNSAFE = re.compile(r"[^A-Za-z0-9._@-]")
+
+
+def _sanitize_subject(subject: str) -> str:
+    return _SUBJECT_UNSAFE.sub("_", subject)
+
+
 def current_requester() -> Requester:
     # fail closed: org-public artifacts are "any *authenticated* subject", so a
     # missing token must never synthesize an identity that passes that branch
@@ -77,7 +90,9 @@ def current_requester() -> Requester:
     subject = token.subject or token.client_id
     if not subject:
         raise ToolError("authenticated session carries no subject")
-    return Requester(subject=subject, teams=teams_from_claims(token.claims or {}))
+    return Requester(
+        subject=_sanitize_subject(subject), teams=teams_from_claims(token.claims or {})
+    )
 
 
 def current_client_identity(registry: ClientRegistry) -> ClientIdentity:

@@ -41,14 +41,13 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from fastmcp.exceptions import ToolError
 
 from agentic_mcp_server.auth.client_identity import ClientIdentity
-from agentic_mcp_server.auth.rbac import Requester
+from agentic_mcp_server.auth.rbac import Requester, acl_admits
 from agentic_mcp_server.context_broker.claim_ledger import adjudicate_typed_fact
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.entailment import (
@@ -342,13 +341,6 @@ def _evidence_uuids(claim: ClaimInput) -> list[uuid.UUID]:
     return out
 
 
-def _acl_admits(requester: Requester, acl_teams: Collection[str] | None) -> bool:
-    """team_acl_v1 visibility for one row: empty/absent ACL ⇒ org-public, else any
-    shared team. The single source of the verifier's ACL predicate (used for both the
-    resolvable set and the acl_visible set) so the two cannot drift apart."""
-    return not acl_teams or bool(requester.teams.intersection(acl_teams))
-
-
 def _deterministic_pass(
     claims: list[ClaimInput],
     ctx: _EvidenceContext,
@@ -580,7 +572,7 @@ async def verify_answer(
         resolvable_ids = frozenset(
             uid
             for uid, row in in_version.items()
-            if uid in retrieved and _acl_admits(requester, row.acl_teams)
+            if uid in retrieved and acl_admits(requester, row.acl_teams)
         )
         # L1's quote-substring guard (invariant 7): fetch the body text of the
         # RESOLVABLE cited units only, in the same session. The id set is already
@@ -615,7 +607,7 @@ async def verify_answer(
     acl_visible = {
         artifact_id
         for artifact_id, row in in_version.items()
-        if _acl_admits(requester, row.acl_teams)
+        if acl_admits(requester, row.acl_teams)
     }
 
     ctx = _EvidenceContext(

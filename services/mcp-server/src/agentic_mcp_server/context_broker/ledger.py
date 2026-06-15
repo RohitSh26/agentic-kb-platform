@@ -31,7 +31,7 @@ async def list_retrievals(
 ) -> ListRetrievalsResponse:
     started = time.monotonic()
     async with deps.session_factory() as session:
-        rows = await list_events(session, request.run_id)
+        rows = await list_events(session, request.run_id, requester.subject)
         kb_version = await fetch_active_kb_version(session) or "-"
         await insert_event(
             session,

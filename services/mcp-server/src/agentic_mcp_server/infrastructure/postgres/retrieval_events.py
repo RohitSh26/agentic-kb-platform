@@ -32,6 +32,11 @@ _INSERT_EVENT_QUERY = text(
     """
 )
 
+# Subject-scoped: a caller sees ONLY its own events for the run. The ledger
+# carries another agent's returned/reused/new evidence UUIDs and token spend, so
+# a run_id is not a grant to read every co-agent's activity (invariant 6). An
+# orchestrator that legitimately needs the whole run is a recorded follow-up
+# (operator/run-owner role), not a V1 default — see mcp-tools-contract.md.
 _LIST_EVENTS_QUERY = text(
     f"""
     SELECT retrieval_id, run_id, kb_version, agent_name, tool_name,
@@ -39,6 +44,7 @@ _LIST_EVENTS_QUERY = text(
            reused_evidence_ids, new_evidence_ids, created_at
     FROM {RETRIEVAL_EVENT_TABLE}
     WHERE run_id = :run_id
+      AND agent_name = :agent_name
     ORDER BY created_at, retrieval_id
     """
 )
@@ -143,8 +149,11 @@ async def fetch_subject_retrieved_ids(
     return {row.artifact_id for row in result}
 
 
-async def list_events(session: AsyncSession, run_id: str) -> list[RetrievalEventRow]:
-    result = await session.execute(_LIST_EVENTS_QUERY, {"run_id": run_id})
+async def list_events(
+    session: AsyncSession, run_id: str, agent_name: str
+) -> list[RetrievalEventRow]:
+    """The requesting subject's own events for ``run_id`` (subject-scoped, invariant 6)."""
+    result = await session.execute(_LIST_EVENTS_QUERY, {"run_id": run_id, "agent_name": agent_name})
     return [
         RetrievalEventRow(
             retrieval_id=row.retrieval_id,

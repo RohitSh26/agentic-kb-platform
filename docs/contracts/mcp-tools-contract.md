@@ -188,10 +188,12 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   `event_id`, `run_id`, `kb_version`, `agent_name`, `tool`, `status`,
   `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`. The non-run
   sentinel `run_id = "-"` is rejected (it aggregates every subject's
-  non-run-scoped activity and is operator-only). V1 accepts that ledger
-  records are visible to any authenticated subject that knows the `run_id`
-  (artifact UUIDs in `evidence_ids` confirm existence); run-scoped ledger
-  authorization is a recorded follow-up, not a V1 guarantee.
+  non-run-scoped activity and is operator-only). **Results are subject-scoped:**
+  the listing is filtered to the requesting authenticated session subject's own
+  events (`agent_name = requester.subject`), so a `run_id` is not a grant to read
+  a co-agent's returned/reused/new evidence UUIDs or token spend (invariant 6).
+  A run-owner/orchestrator view spanning every subject of its run is a recorded
+  follow-up (an operator/run-owner role), not a V1 default.
 
 ## Server-side policy (not prompt-enforced)
 

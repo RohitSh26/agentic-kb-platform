@@ -354,6 +354,43 @@ async def test_acl_invisible_evidence_fails(
     assert "evidence_acl_invisible" in result.failed_reasons
 
 
+async def test_previously_retrieved_but_now_acl_invisible_fails_on_acl_not_not_found(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # MCP-F4: the requester DID retrieve this artifact (it is in their ledger), but
+    # its team membership has since been restricted to a team the requester no longer
+    # holds. The verifier must report L0_acl_visible=False with REASON_ACL_INVISIBLE —
+    # NOT not_found and NOT not_retrieved. The artifact exists, is in the active
+    # version, and is in the requester's ledger; only ACL visibility flips.
+    async with factory() as session:
+        evidence = await _seed_supported_artifact(session, acl_teams=["secret-team"])
+    # Record that the requester retrieved it — only ACL visibility is the gate now.
+    await _record_retrieval(factory, [evidence])
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    # Requester carries no teams ⇒ the now-restricted artifact is invisible.
+    receipt = await verify_answer(
+        deps,
+        VerifyAnswerRequest(answer_id="ans-revoked", claims=[_claim("c1", [evidence])]),
+        REQUESTER,
+    )
+
+    (result,) = receipt.claim_results
+    assert result.result == "failed"
+    assert receipt.overall == "failed"
+    checks = result.checks
+    # It exists, is in the active version, and the requester retrieved it...
+    assert checks.L0_exists is True
+    assert checks.L0_in_active_version is True
+    assert checks.L0_in_requester_ledger is True
+    # ...but ACL visibility was revoked: this is the ONLY failing L0 check.
+    assert checks.L0_acl_visible is False
+    assert "evidence_acl_invisible" in result.failed_reasons
+    # Specifically NOT not_found / not_retrieved — the failure is ACL, not absence.
+    assert "evidence_not_found" not in result.failed_reasons
+    assert "evidence_not_retrieved_by_requester" not in result.failed_reasons
+
+
 async def test_stale_evidence_fails(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
