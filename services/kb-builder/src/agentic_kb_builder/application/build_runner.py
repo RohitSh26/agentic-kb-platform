@@ -25,6 +25,7 @@ from agentic_kb_builder.application.cache_gates import (
     chunk_summary_cache_key,
     code_graph_cache_key,
 )
+from agentic_kb_builder.application.invalidation import run_invalidation_pass
 from agentic_kb_builder.application.write_commit import write_commit_artifact
 from agentic_kb_builder.connectors import Connector
 from agentic_kb_builder.connectors.git_metadata import parse_changed_files
@@ -129,6 +130,8 @@ class BuildRunner:
     ) -> None:
         self._session = session
         self._kb_version = kb_version
+        # Assigned once at run start from the kb_build_seq SEQUENCE (set in run()).
+        self._build_seq: int = 0
         self._wikifier = wikifier
         self._graphifier = graphifier
         self._embedder = embedder
@@ -141,8 +144,15 @@ class BuildRunner:
         """Execute one build. The runner owns the session's transactions: the run
         row is committed up front so the audit record survives a failed build;
         per-source work is committed only when the whole build succeeds."""
+        # Monotonic build_seq, assigned once at run start (ADR-0013): the active
+        # build's build_seq is the served interval-membership cutoff. nextval is
+        # safe under concurrent builds (the SEQUENCE serialises allocation).
+        self._build_seq = (
+            await self._session.execute(select(func.nextval("kb_build_seq")))
+        ).scalar_one()
         run = KbBuildRun(
             kb_version=self._kb_version,
+            build_seq=self._build_seq,
             status="running",
             sources_seen=0,
             sources_changed=0,
@@ -157,17 +167,31 @@ class BuildRunner:
         await self._session.flush()
         build_id = run.build_id
         await self._session.commit()
-        logger.info("event=build_run_started build_id=%s kb_version=%s", build_id, self._kb_version)
+        logger.info(
+            "event=build_run_started build_id=%s kb_version=%s build_seq=%d",
+            build_id,
+            self._kb_version,
+            self._build_seq,
+        )
         counters = _Counters()
         code_key_map: dict[tuple[str, str], uuid.UUID] = {}
         pending_edges: list[_PendingEdges] = []
+        # source_items seen this build (by source_id): the deletion sweep retires
+        # every live source NOT in this set.
+        seen_source_ids: set[uuid.UUID] = set()
+        # source_items whose CONTENT changed this build (cache miss ⇒ new artifacts
+        # written at this build_seq): the invalidation pass retires their PRIOR
+        # generation of artifacts so the new version does not serve both.
+        changed_source_ids: set[uuid.UUID] = set()
         try:
             for connector in connectors:
                 for ref in await connector.list_sources():
                     fetched = await connector.fetch(ref)
                     counters.sources_seen += 1
                     if await self._is_unchanged(fetched):
-                        await self._touch_last_seen(fetched)
+                        source_id = await self._touch_last_seen(fetched)
+                        if source_id is not None:
+                            seen_source_ids.add(source_id)
                         logger.info(
                             "event=build_skip_unchanged source_uri=%s content_hash=%s",
                             ref.source_uri,
@@ -175,12 +199,27 @@ class BuildRunner:
                         )
                         continue
                     counters.sources_changed += 1
-                    await self._process_changed_source(
+                    changed_id = await self._process_changed_source(
                         counters, fetched, code_key_map, pending_edges
                     )
+                    seen_source_ids.add(changed_id)
+                    changed_source_ids.add(changed_id)
             await self._write_pending_edges(code_key_map, pending_edges)
             await run_linker(
-                self._session, kb_version=self._kb_version, similarity=self._similarity
+                self._session,
+                kb_version=self._kb_version,
+                valid_from_seq=self._build_seq,
+                similarity=self._similarity,
+            )
+            # Invalidation pass (ADR-0013) runs AFTER all writes and the linker, but
+            # BEFORE activation: deletion sweep, rename detection, ACL propagation.
+            # Version-scoped — it only flips invalidated_at_seq / acl_teams, never
+            # physically deletes a live row a prior version still serves.
+            await run_invalidation_pass(
+                self._session,
+                build_seq=self._build_seq,
+                seen_source_ids=seen_source_ids,
+                changed_source_ids=changed_source_ids,
             )
             # reconcile the index before validation can run against it, so an
             # orphaned doc can never permanently block activation (invariant 5)
@@ -242,17 +281,23 @@ class BuildRunner:
             )
         )
 
-    async def _touch_last_seen(self, fetched: NormalizedContent) -> None:
+    async def _touch_last_seen(self, fetched: NormalizedContent) -> uuid.UUID | None:
         # acl_teams rides along: an ACL-only config change (an access
-        # revocation) must land even when content_hash is unchanged
-        await self._session.execute(
-            update(SourceItem)
-            .where(
-                SourceItem.source_type == fetched.source.source_type,
-                SourceItem.source_uri == fetched.source.source_uri,
+        # revocation) must land even when content_hash is unchanged. The returned
+        # source_id marks the source SEEN this build (excludes it from the deletion
+        # sweep) and feeds ACL propagation onto its live artifacts.
+        source_id = (
+            await self._session.execute(
+                update(SourceItem)
+                .where(
+                    SourceItem.source_type == fetched.source.source_type,
+                    SourceItem.source_uri == fetched.source.source_uri,
+                )
+                .values(last_seen_at=func.now(), acl_teams=list(fetched.source.acl_teams))
+                .returning(SourceItem.source_id)
             )
-            .values(last_seen_at=func.now(), acl_teams=list(fetched.source.acl_teams))
-        )
+        ).scalar_one_or_none()
+        return source_id
 
     async def _is_unchanged(self, fetched: NormalizedContent) -> bool:
         existing = (
@@ -309,10 +354,10 @@ class BuildRunner:
         fetched: NormalizedContent,
         code_key_map: dict[tuple[str, str], uuid.UUID],
         pending_edges: list[_PendingEdges],
-    ) -> None:
+    ) -> uuid.UUID:
+        """Process one changed source; return its source_id (seen this build)."""
         if fetched.source.source_type == "git_metadata":
-            await self._process_commit_source(counters, fetched)
-            return
+            return await self._process_commit_source(counters, fetched)
         source_id = await self._upsert_source_item(fetched)
         artifact_ids = await self._wikify_gated(counters, fetched, source_id)
         if fetched.source.source_type == "github_code":
@@ -333,8 +378,11 @@ class BuildRunner:
             await self._embed_gated(counters, artifact_id)
         if artifact_ids:
             counters.search_docs_upserted += await self._indexer.upsert_documents(artifact_ids)
+        return source_id
 
-    async def _process_commit_source(self, counters: _Counters, fetched: NormalizedContent) -> None:
+    async def _process_commit_source(
+        self, counters: _Counters, fetched: NormalizedContent
+    ) -> uuid.UUID:
         """git_metadata path: ONE deterministic commit artifact, zero LLM.
 
         No wikify, no graphify, no generation-cache row, no llm_calls increment —
@@ -350,6 +398,7 @@ class BuildRunner:
             self._session,
             source_id=source_id,
             kb_version=self._kb_version,
+            valid_from_seq=self._build_seq,
             title=title,
             body_text=fetched.text,
             changed_files=changed_files,
@@ -357,6 +406,7 @@ class BuildRunner:
         counters.artifacts_created += 1
         await self._embed_gated(counters, artifact_id)
         counters.search_docs_upserted += await self._indexer.upsert_documents([artifact_id])
+        return source_id
 
     async def _wikify_gated(
         self, counters: _Counters, fetched: NormalizedContent, source_id: uuid.UUID
@@ -387,7 +437,12 @@ class BuildRunner:
         # write_wikify_artifacts flushes BEFORE the cache row is recorded (same
         # transaction) so a cache row can never exist without its output artifacts.
         artifact_ids = await write_wikify_artifacts(
-            self._session, source_id=source_id, kb_version=self._kb_version, drafts=drafts
+            self._session,
+            source_id=source_id,
+            kb_version=self._kb_version,
+            valid_from_seq=self._build_seq,
+            acl_teams=list(fetched.source.acl_teams),
+            drafts=drafts,
         )
         counters.artifacts_created += len(artifact_ids)
         await self._generation_gate.record(
@@ -439,6 +494,8 @@ class BuildRunner:
             self._session,
             source_id=source_id,
             kb_version=self._kb_version,
+            valid_from_seq=self._build_seq,
+            acl_teams=list(fetched.source.acl_teams),
             drafts=result.artifacts,
         )
         counters.artifacts_created += len(key_to_id)
@@ -468,6 +525,7 @@ class BuildRunner:
             await write_code_edges(
                 self._session,
                 kb_version=self._kb_version,
+                valid_from_seq=self._build_seq,
                 repo=pending.repo,
                 drafts=pending.drafts,
                 key_to_id=code_key_map,

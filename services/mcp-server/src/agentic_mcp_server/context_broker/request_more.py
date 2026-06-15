@@ -144,6 +144,7 @@ async def request_more(
             deps,
             query=request.question,
             kb_version=pack.kb_version,
+            build_seq=pack.build_seq,
             requester=requester,
             tool=_TOOL_NAME,
         )
@@ -184,7 +185,7 @@ async def _authorized_reuse(
         return []
     async with deps.session_factory() as session:
         artifacts = await fetch_artifacts(
-            session, [uuid.UUID(evidence_id) for evidence_id in reused], pack.kb_version
+            session, [uuid.UUID(evidence_id) for evidence_id in reused], pack.build_seq
         )
     allowed = {
         str(artifact.artifact_id)

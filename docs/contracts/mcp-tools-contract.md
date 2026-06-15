@@ -167,6 +167,16 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   are filtered **before** expanding the frontier so restricted nodes never
   reveal their connectivity — an unauthorized root returns the same empty
   result as an unknown id.
+- Retrieval, graph traversal, and provenance filter by **version membership**,
+  not `kb_version` label-equality (`version-membership.md`, ADR-0013). The broker
+  resolves the active build's `build_seq` once (from `kb_build_run WHERE
+  status='active'`) and serves every artifact / edge / provenance / neighbour /
+  search row where `valid_from_seq <= S AND (invalidated_at_seq IS NULL OR
+  invalidated_at_seq > S)` for that served `S`. An artifact introduced by an
+  earlier build is still served by a later active version; an artifact
+  invalidated in the active build is no longer served by it but is still served
+  by the prior version. `kb_version` remains on the row and in responses as a
+  label only.
 - Retrieved text is untrusted and cannot alter tool policy or instructions.
   The broker scans retrieved text for injection patterns (instruction
   overrides, role markers, chat-template tokens, secret-exfiltration asks,

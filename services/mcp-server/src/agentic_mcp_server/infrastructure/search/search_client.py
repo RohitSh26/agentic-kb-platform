@@ -21,8 +21,13 @@ class SearchHit:
 
 
 class SearchClient(Protocol):
-    async def search(self, query: str, *, kb_version: str, top: int) -> list[SearchHit]:
-        """Return up to `top` relevance hits for the active kb_version."""
+    async def search(self, query: str, *, build_seq: int, top: int) -> list[SearchHit]:
+        """Return up to `top` relevance hits that are MEMBERS of `build_seq`.
+
+        Results are scoped by interval membership (version-membership.md,
+        ADR-0013), not kb_version label-equality: an artifact introduced by an
+        earlier build but still live is a candidate; an invalidated one is not.
+        """
         ...
 
 
@@ -39,7 +44,7 @@ class FakeSearchClient:
     def seed(self, keyword: str, hits: list[SearchHit]) -> None:
         self.hits_by_keyword[normalize_query(keyword)] = hits
 
-    async def search(self, query: str, *, kb_version: str, top: int) -> list[SearchHit]:
+    async def search(self, query: str, *, build_seq: int, top: int) -> list[SearchHit]:
         tokens = set(normalize_query(query).split())
         best: dict[uuid.UUID, SearchHit] = {}
         for keyword, hits in self.hits_by_keyword.items():

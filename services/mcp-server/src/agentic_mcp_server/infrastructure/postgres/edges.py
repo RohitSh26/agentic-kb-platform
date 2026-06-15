@@ -12,11 +12,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 KNOWLEDGE_EDGE_TABLE = "knowledge_edge"
 
+# Membership predicate (version-membership.md, ADR-0013): an edge is traversable
+# iff it is a MEMBER of the active build's build_seq, not iff its label equals the
+# active kb_version. (The endpoint artifacts are independently membership-filtered
+# by the graph tool's per-hop fetch_artifacts.)
 _FETCH_EDGES_QUERY = text(
     f"""
     SELECT from_artifact_id, to_artifact_id, edge_type, confidence, source, trust_class
     FROM {KNOWLEDGE_EDGE_TABLE}
-    WHERE kb_version = :kb_version
+    WHERE valid_from_seq <= :build_seq
+      AND (invalidated_at_seq IS NULL OR invalidated_at_seq > :build_seq)
       AND (from_artifact_id = ANY(CAST(:artifact_ids AS uuid[]))
            OR to_artifact_id = ANY(CAST(:artifact_ids AS uuid[])))
       AND (CAST(:edge_types AS text[]) IS NULL OR edge_type = ANY(CAST(:edge_types AS text[])))
@@ -39,14 +44,14 @@ class EdgeRow:
 async def fetch_edges_touching(
     session: AsyncSession,
     artifact_ids: list[uuid.UUID],
-    kb_version: str,
+    build_seq: int,
     edge_types: list[str] | None,
 ) -> list[EdgeRow]:
     result = await session.execute(
         _FETCH_EDGES_QUERY,
         {
             "artifact_ids": artifact_ids,
-            "kb_version": kb_version,
+            "build_seq": build_seq,
             "edge_types": edge_types or None,
         },
     )

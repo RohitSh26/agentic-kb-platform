@@ -28,9 +28,12 @@ def _build_query(token_count: int) -> str:
         f" + CASE WHEN body_text ILIKE :tok{i} ESCAPE '\\' THEN 1.0 ELSE 0.0 END)"
         for i in range(token_count)
     )
+    # Membership predicate (version-membership.md, ADR-0013): a candidate row must
+    # be a MEMBER of the active build_seq, not merely labelled with its kb_version.
     return (
         f"SELECT artifact_id, {score} AS score FROM {KNOWLEDGE_ARTIFACT_TABLE} "
-        "WHERE kb_version = :kb_version "
+        "WHERE valid_from_seq <= :build_seq "
+        "AND (invalidated_at_seq IS NULL OR invalidated_at_seq > :build_seq) "
         f"AND {score} > 0 ORDER BY score DESC, artifact_id LIMIT :top"
     )
 
@@ -39,11 +42,11 @@ def _build_query(token_count: int) -> str:
 class PostgresKeywordSearchClient:
     session_factory: async_sessionmaker[AsyncSession]
 
-    async def search(self, query: str, *, kb_version: str, top: int) -> list[SearchHit]:
+    async def search(self, query: str, *, build_seq: int, top: int) -> list[SearchHit]:
         tokens = list(dict.fromkeys(normalize_query(query).split()))[:_MAX_QUERY_TOKENS]
         if not tokens:
             return []
-        params: dict[str, object] = {"kb_version": kb_version, "top": top}
+        params: dict[str, object] = {"build_seq": build_seq, "top": top}
         for i, token in enumerate(tokens):
             params[f"tok{i}"] = f"%{_escape_like(token)}%"
         async with self.session_factory() as session:

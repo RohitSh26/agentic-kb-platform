@@ -1,7 +1,17 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, Text, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,6 +33,21 @@ class KnowledgeArtifact(Base):
     content_hash: Mapped[str | None] = mapped_column(Text)
     artifact_hash: Mapped[str | None] = mapped_column(Text)
     kb_version: Mapped[str] = mapped_column(Text, nullable=False)
+    # Interval membership (docs/contracts/version-membership.md, ADR-0013).
+    # valid_from_seq = the build_seq that introduced the row (set once at creation);
+    # invalidated_at_seq = the build_seq it left the KB in (NULL while live). A row
+    # is a member of version S iff valid_from_seq <= S AND (invalidated_at_seq IS
+    # NULL OR invalidated_at_seq > S). Setting invalidated_at_seq never removes the
+    # row from prior versions (invariant 5).
+    valid_from_seq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    invalidated_at_seq: Mapped[int | None] = mapped_column(BigInteger)
+    # Rename link: on a deterministic rename (same content_hash / signature, new
+    # path) the new artifact points at the invalidated old one so history survives.
+    prior_identity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_artifact.artifact_id")
+    )
     # "interpreted" (summaries/concepts) vs "source_backed"; interpreted knowledge
     # must rank below source-backed evidence (architecture §5).
     knowledge_kind: Mapped[str | None] = mapped_column(Text)
@@ -56,4 +81,5 @@ class KnowledgeArtifact(Base):
         Index("ix_knowledge_artifact_content_hash", "content_hash"),
         Index("ix_knowledge_artifact_kb_version", "kb_version"),
         Index("ix_knowledge_artifact_source_id", "source_id"),
+        Index("ix_knowledge_artifact_membership", "valid_from_seq", "invalidated_at_seq"),
     )

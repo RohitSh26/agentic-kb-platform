@@ -18,6 +18,9 @@ logger = get_logger(__name__)
 KNOWLEDGE_ARTIFACT_TABLE = "knowledge_artifact"
 SOURCE_ITEM_TABLE = "source_item"
 
+# Membership predicate (version-membership.md, ADR-0013): a row is served iff it is
+# a MEMBER of the active build's build_seq, NOT iff its label equals the active
+# kb_version. valid_from_seq <= S AND (invalidated_at_seq IS NULL OR > S).
 _FETCH_ARTIFACTS_QUERY = text(
     f"""
     SELECT a.artifact_id, a.artifact_type, a.title, a.body_text, a.knowledge_kind,
@@ -25,7 +28,8 @@ _FETCH_ARTIFACTS_QUERY = text(
     FROM {KNOWLEDGE_ARTIFACT_TABLE} a
     JOIN {SOURCE_ITEM_TABLE} s ON s.source_id = a.source_id
     WHERE a.artifact_id = ANY(CAST(:artifact_ids AS uuid[]))
-      AND a.kb_version = :kb_version
+      AND a.valid_from_seq <= :build_seq
+      AND (a.invalidated_at_seq IS NULL OR a.invalidated_at_seq > :build_seq)
     """
 )
 
@@ -44,10 +48,16 @@ class ArtifactRow:
 
 
 async def fetch_artifacts(
-    session: AsyncSession, artifact_ids: list[uuid.UUID], kb_version: str
+    session: AsyncSession, artifact_ids: list[uuid.UUID], build_seq: int
 ) -> list[ArtifactRow]:
+    """Return the requested artifacts that are MEMBERS of the active `build_seq`.
+
+    Filters by interval membership (version-membership.md), so an artifact
+    introduced by an earlier build but still live is served, and an artifact
+    invalidated by the active build is not.
+    """
     result = await session.execute(
-        _FETCH_ARTIFACTS_QUERY, {"artifact_ids": artifact_ids, "kb_version": kb_version}
+        _FETCH_ARTIFACTS_QUERY, {"artifact_ids": artifact_ids, "build_seq": build_seq}
     )
     artifacts = [
         ArtifactRow(
@@ -68,9 +78,9 @@ async def fetch_artifacts(
         # anomaly (orphaned or source-deleted artifact) would otherwise vanish
         # silently from every retrieval surface (python.md: no silent failures)
         logger.warning(
-            "event=fetch_artifacts_incomplete requested=%d returned=%d kb_version=%s",
+            "event=fetch_artifacts_incomplete requested=%d returned=%d build_seq=%d",
             requested,
             len(artifacts),
-            kb_version,
+            build_seq,
         )
     return artifacts

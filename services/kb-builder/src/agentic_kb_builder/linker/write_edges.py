@@ -35,6 +35,7 @@ async def write_link_edges(
     session: AsyncSession,
     *,
     kb_version: str,
+    valid_from_seq: int = 0,
     drafts: Sequence[LinkEdgeDraft],
     protected_edge_types: frozenset[str] = frozenset(),
 ) -> tuple[int, int, int]:
@@ -68,10 +69,16 @@ async def write_link_edges(
                 confidence=draft.confidence,
                 source=EDGE_SOURCE,
                 kb_version=kb_version,
+                valid_from_seq=valid_from_seq,
                 trust_class=EDGE_TRUST_CLASS,
                 relation_schema_version=RELATION_SCHEMA_VERSION,
                 evidence=draft.evidence,
             )
+            # On conflict the edge already exists from a prior build: refresh its
+            # confidence/label/evidence but KEEP the original valid_from_seq — it
+            # has been a member since first introduced (immutability, ADR-0013).
+            # invalidated_at_seq is reset to NULL because a recomputed linker edge
+            # is, by definition, live again this build.
             .on_conflict_do_update(
                 index_elements=["from_artifact_id", "to_artifact_id", "edge_type"],
                 index_where=text("source = 'linker'"),
@@ -80,6 +87,7 @@ async def write_link_edges(
                     "kb_version": kb_version,
                     "relation_schema_version": RELATION_SCHEMA_VERSION,
                     "evidence": draft.evidence,
+                    "invalidated_at_seq": None,
                 },
             )
             .returning(text("(xmax = 0)"))

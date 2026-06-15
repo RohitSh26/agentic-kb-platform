@@ -40,10 +40,19 @@ async def clean_registry(session: AsyncSession) -> None:
     await session.commit()
 
 
-async def insert_build_run(session: AsyncSession, kb_version: str, status: str) -> None:
+async def insert_build_run(
+    session: AsyncSession, kb_version: str, status: str, *, build_seq: int = 1
+) -> None:
+    # build_seq is the interval-membership cutoff (version-membership.md): the
+    # broker resolves the ACTIVE build's build_seq and serves rows whose
+    # valid_from_seq <= it. Default 1 so the default-seeded artifacts/edges
+    # (valid_from_seq = 0) are members.
     await session.execute(
-        text("INSERT INTO kb_build_run (kb_version, status) VALUES (:kb_version, :status)"),
-        {"kb_version": kb_version, "status": status},
+        text(
+            "INSERT INTO kb_build_run (kb_version, build_seq, status)"
+            " VALUES (:kb_version, :build_seq, :status)"
+        ),
+        {"kb_version": kb_version, "build_seq": build_seq, "status": status},
     )
     await session.commit()
 
@@ -60,6 +69,8 @@ async def insert_artifact(
     source_uri: str | None = None,
     acl_teams: list[str] | None = None,
     source_is_deleted: bool = False,
+    valid_from_seq: int = 0,
+    invalidated_at_seq: int | None = None,
 ) -> uuid.UUID:
     source_id = uuid.uuid4()
     artifact_id = uuid.uuid4()
@@ -79,10 +90,11 @@ async def insert_artifact(
     await session.execute(
         text(
             "INSERT INTO knowledge_artifact (artifact_id, artifact_type, source_id, title,"
-            " body_text, kb_version, knowledge_kind, authority_score, acl_teams) VALUES"
+            " body_text, kb_version, knowledge_kind, authority_score, acl_teams,"
+            " valid_from_seq, invalidated_at_seq) VALUES"
             " (CAST(:artifact_id AS uuid), :artifact_type, CAST(:source_id AS uuid), :title,"
             " :body_text, :kb_version, :knowledge_kind, :authority_score,"
-            " CAST(:acl_teams AS text[]))"
+            " CAST(:acl_teams AS text[]), :valid_from_seq, :invalidated_at_seq)"
         ),
         {
             "artifact_id": str(artifact_id),
@@ -94,6 +106,8 @@ async def insert_artifact(
             "knowledge_kind": knowledge_kind,
             "authority_score": authority_score,
             "acl_teams": acl_teams or [],
+            "valid_from_seq": valid_from_seq,
+            "invalidated_at_seq": invalidated_at_seq,
         },
     )
     await session.commit()
@@ -110,12 +124,15 @@ async def insert_edge(
     confidence: float = 0.9,
     source: str = "graphify",
     trust_class: str = "EXTRACTED",
+    valid_from_seq: int = 0,
+    invalidated_at_seq: int | None = None,
 ) -> None:
     await session.execute(
         text(
             "INSERT INTO knowledge_edge (from_artifact_id, to_artifact_id, edge_type,"
-            " confidence, source, kb_version, trust_class) VALUES (CAST(:from_id AS uuid),"
-            " CAST(:to_id AS uuid), :edge_type, :confidence, :source, :kb_version, :trust_class)"
+            " confidence, source, kb_version, trust_class, valid_from_seq, invalidated_at_seq)"
+            " VALUES (CAST(:from_id AS uuid), CAST(:to_id AS uuid), :edge_type, :confidence,"
+            " :source, :kb_version, :trust_class, :valid_from_seq, :invalidated_at_seq)"
         ),
         {
             "from_id": str(from_artifact_id),
@@ -125,6 +142,8 @@ async def insert_edge(
             "source": source,
             "kb_version": kb_version,
             "trust_class": trust_class,
+            "valid_from_seq": valid_from_seq,
+            "invalidated_at_seq": invalidated_at_seq,
         },
     )
     await session.commit()
