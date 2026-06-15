@@ -44,8 +44,12 @@ _FETCH_CURRENT_SYMBOL_TITLES_QUERY = text(
     f"""
     SELECT DISTINCT a.title
     FROM {_CODE_SYMBOL_TITLES_TABLE} a
+    JOIN {SOURCE_ITEM_TABLE} s ON s.source_id = a.source_id
     WHERE a.artifact_type IN ('code_symbol', 'code_file', 'endpoint')
       AND a.title IS NOT NULL
+      -- exclude symbols whose SOURCE was deleted, matching fetch_artifacts, so a
+      -- removed symbol can't read as "current" and falsely clear a stale-doc flag
+      AND s.is_deleted = false
       AND a.valid_from_seq <= :build_seq
       AND (a.invalidated_at_seq IS NULL OR a.invalidated_at_seq > :build_seq)
     """
