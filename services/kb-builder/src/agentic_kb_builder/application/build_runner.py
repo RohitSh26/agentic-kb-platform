@@ -470,6 +470,7 @@ class BuildRunner:
             title=title,
             body_text=fetched.text,
             changed_files=changed_files,
+            repo=fetched.source.repo,
         )
         counters.artifacts_created += 1
         await self._embed_gated(counters, artifact_id)

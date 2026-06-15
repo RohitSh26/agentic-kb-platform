@@ -77,11 +77,15 @@ def commit_acl_intersection(
     return sorted(intersection)
 
 
-async def _file_acls(session: AsyncSession, changed_files: Sequence[str]) -> dict[str, list[str]]:
+async def _file_acls(
+    session: AsyncSession, changed_files: Sequence[str], *, repo: str | None
+) -> dict[str, list[str]]:
     """Map each changed file path to the acl_teams of its source_item, if any.
 
-    Matches a code source_item by its path (repo-relative). A path with no
-    source_item is absent from the map and contributes nothing to the
+    Matches a code source_item by its path (repo-relative) WITHIN the commit's own
+    `repo`. A same-path file in a DIFFERENT repo is a different file and must not
+    contaminate this commit's ACL intersection (a phantom deny-all). A path with no
+    matching source_item is absent from the map and contributes nothing to the
     intersection (it must not widen visibility).
     """
     if not changed_files:
@@ -89,6 +93,7 @@ async def _file_acls(session: AsyncSession, changed_files: Sequence[str]) -> dic
     rows = await session.execute(
         select(SourceItem.path, SourceItem.acl_teams).where(
             SourceItem.path.in_(list(changed_files)),
+            SourceItem.repo == repo,
             SourceItem.is_deleted.is_(False),
         )
     )
@@ -96,8 +101,9 @@ async def _file_acls(session: AsyncSession, changed_files: Sequence[str]) -> dic
     for path, acl_teams in rows.tuples():
         if path is None:
             continue
-        # If several source_items share a path (different repos), the strictest
-        # wins: a file is only org-public if EVERY same-path source is.
+        # Scoped to one repo, so several rows for one path are revisions of the
+        # SAME file; the strictest wins — a file is only org-public if every such
+        # row is.
         existing = acls.get(path)
         teams = list(acl_teams)
         if existing is None:
@@ -120,14 +126,16 @@ async def write_commit_artifact(
     title: str,
     body_text: str,
     changed_files: Sequence[str],
+    repo: str | None,
 ) -> uuid.UUID:
     """Insert one `commit` knowledge_artifact and return its id.
 
     Flushes so the id is assigned but does not commit — the build runner owns
     the transaction. acl_teams is the intersection of the changed files' source
-    ACLs (deny-by-default when nothing resolves).
+    ACLs (deny-by-default when nothing resolves), resolved WITHIN the commit's
+    own `repo` so same-path files in other repos cannot contaminate it.
     """
-    file_acls = await _file_acls(session, changed_files)
+    file_acls = await _file_acls(session, changed_files, repo=repo)
     acl_teams = commit_acl_intersection(changed_files, file_acls)
     artifact = KnowledgeArtifact(
         artifact_type=COMMIT_ARTIFACT_TYPE,
