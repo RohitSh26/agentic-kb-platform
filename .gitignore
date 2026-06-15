@@ -31,3 +31,6 @@ evals/report.json
 # Local dev search index projection (ADR-0017) — rebuildable from Postgres, never truth
 .kb-local-search-index.json
 *.kb-local-search-index.json
+
+# Real-source build run logs (local artifact, not committed)
+build-run*.md

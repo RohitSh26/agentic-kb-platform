@@ -43,7 +43,7 @@ WIKI_PAGES: list[tuple[str, str]] = [
         "evidence recall) pass.\n",
     ),
     (
-        "/Runbooks/Nightly Build",
+        "/Architecture/Nightly Build",
         "# Nightly Incremental Build\n\nThe knowledge base is rebuilt incrementally. If a source's "
         "content hash is unchanged, the build skips wikify, graphify, embedding, and indexing for it "
         "— so cost scales with change, not corpus size. Code is extracted deterministically by "
@@ -52,22 +52,23 @@ WIKI_PAGES: list[tuple[str, str]] = [
     ),
 ]
 
-# (work item type, title, description)
+# (work item type, title, description). Types valid in the Basic process (Epic/Issue/Task);
+# the project uses Basic, where "User Story"/"Bug" do not exist.
 WORK_ITEMS: list[tuple[str, str, str]] = [
     (
-        "User Story",
+        "Issue",
         "[kb-demo] Ask how retrieval works and get cited evidence",
         "As an engineer I want to ask the assistant how a feature works and receive an answer whose "
         "every claim cites a verifiable evidence id, so I can trust and follow up on it.",
     ),
     (
-        "User Story",
+        "Issue",
         "[kb-demo] Nightly build skips unchanged sources",
         "As an operator I want the nightly build to skip sources whose content has not changed so we "
         "do not spend LLM or embedding tokens re-processing unchanged code and docs.",
     ),
     (
-        "Bug",
+        "Issue",
         "[kb-demo] create_pack failed with Decimal*float against real Postgres",
         "The keyword search returned Decimal scores from SQL NUMERIC arithmetic and the ranker "
         "multiplied them by a float temporal weight, raising 'unsupported operand type(s) for *'. "

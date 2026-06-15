@@ -13,8 +13,10 @@ sources:
     repo: RohitSh26/agentic-kb-platform
     branch: main
     include:
-      - "services/**/*.py"
-      - "scripts/**/*.py"
+      # A representative subset keeps this validation run fast + under GitHub rate
+      # limits; widen to "services/**/*.py" for a full build.
+      - "services/kb-builder/src/agentic_kb_builder/graphify/*.py"
+      - "services/kb-builder/src/agentic_kb_builder/application/*.py"
     exclude:
       - "**/tests/**"
     auth:
@@ -26,7 +28,8 @@ sources:
     repo: RohitSh26/agentic-kb-platform
     branch: main
     include:
-      - "docs/**/*.md"
+      - "docs/adr/0018-code-is-graphify-only.md"
+      - "docs/dev-guide/06-end-to-end-walkthrough.md"
       - "README.md"
     auth:
       token_env: GITHUB_TOKEN
@@ -39,17 +42,16 @@ sources:
     wiki: agentic-kb-platform.wiki
     include:
       - "Architecture/**"
-      - "Runbooks/**"
     auth:
       token_env: ADO_PAT
 
-  # --- Azure DevOps Work Items (wikify, LLM) ---
+  # --- Azure DevOps Work Items (wikify, LLM) — Basic process types ---
   - name: platform-cards
     type: ado_card
     organization: docodex-testing
     project: agentic-kb-platform
     area_path: "agentic-kb-platform"
-    work_item_types: ["User Story", "Bug", "Task"]
-    states: ["New", "Active", "Resolved", "Closed", "Done", "To Do"]
+    work_item_types: ["Issue", "Task", "Epic"]
+    states: ["To Do", "Doing", "Done"]
     auth:
       token_env: ADO_PAT
