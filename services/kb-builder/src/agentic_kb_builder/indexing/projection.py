@@ -41,6 +41,9 @@ async def load_search_docs(
             SourceItem.is_deleted.is_(False),
             KnowledgeArtifact.artifact_type.in_(sorted(PROJECTABLE_ARTIFACT_TYPES)),
             KnowledgeArtifact.body_text.is_not(None),
+            # Only LIVE artifacts project: a superseded row (invalidated by a later
+            # build) must not stay in the index/expected set (interval membership).
+            KnowledgeArtifact.invalidated_at_seq.is_(None),
         )
     )
     if artifact_ids is not None:
@@ -98,6 +101,10 @@ async def load_doc_hashes(session: AsyncSession) -> dict[str, str | None]:
             SourceItem.is_deleted.is_(False),
             KnowledgeArtifact.artifact_type.in_(sorted(PROJECTABLE_ARTIFACT_TYPES)),
             KnowledgeArtifact.body_text.is_not(None),
+            # Only LIVE artifacts are expected/reconcilable: a superseded row must
+            # not be in the consistency "expected" set nor be back-filled by
+            # reconcile_missing (interval membership).
+            KnowledgeArtifact.invalidated_at_seq.is_(None),
         )
     )
     rows = (await session.execute(query)).all()

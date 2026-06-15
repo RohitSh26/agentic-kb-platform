@@ -63,7 +63,10 @@ class LocalFsBackend:
             if not path.is_file():
                 continue
             parts = path.relative_to(self._root).parts
-            if any(part in _SKIP_DIRS or part.startswith(".") for part in parts[:-1]):
+            # Apply the skip check to EVERY component including the leaf filename,
+            # so a root-level dotfile (e.g. `.env`, parts=('.env',)) is excluded —
+            # not just dotfiles nested under a skipped directory.
+            if any(part in _SKIP_DIRS or part.startswith(".") for part in parts):
                 continue
             yield path
 

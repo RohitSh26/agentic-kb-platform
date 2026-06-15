@@ -28,6 +28,7 @@ from agentic_kb_builder.indexing import (
     load_search_docs,
     make_consistency_validator,
 )
+from agentic_kb_builder.indexing.projection import load_doc_hashes
 from agentic_kb_builder.infrastructure.azure_search.search_client import FakeSearchClient
 from agentic_kb_builder.infrastructure.postgres.models import (
     EmbeddingCache,
@@ -120,6 +121,8 @@ async def _add_artifact(
     body_text: str | None,
     knowledge_kind: str | None = None,
     artifact_hash: str | None = None,
+    valid_from_seq: int = 0,
+    invalidated_at_seq: int | None = None,
 ) -> KnowledgeArtifact:
     artifact = KnowledgeArtifact(
         artifact_type=artifact_type,
@@ -131,6 +134,8 @@ async def _add_artifact(
         authority_score=0.6,
         freshness_score=1.0,
         artifact_hash=artifact_hash,
+        valid_from_seq=valid_from_seq,
+        invalidated_at_seq=invalidated_at_seq,
     )
     session.add(artifact)
     await session.flush()
@@ -411,3 +416,103 @@ async def test_consistency_fails_on_injected_drift(
         assert await validate(session, "v-build.1") is False
 
     assert any(f"event=index_drift class={drift_class}" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# KB-F2: commit artifacts are projectable / searchable
+# ---------------------------------------------------------------------------
+
+
+@requires_db
+async def test_commit_artifact_is_projected_and_indexed(session: AsyncSession) -> None:
+    """A built `commit` artifact must reach the index (it has body_text,
+    source_type, source_uri). Before the fix `commit` was absent from
+    PROJECTABLE_ARTIFACT_TYPES, so the upsert was a silent no-op and the
+    embedding was wasted."""
+    git_source = await _add_source(session, "git_metadata", "git://org/repo/commit/abc123")
+    commit = await _add_artifact(
+        session,
+        source=git_source,
+        artifact_type="commit",
+        title="abc123def456",
+        body_text="commit abc123\n\nChanged files:\nsrc/a.py",
+        knowledge_kind="source_backed",
+        artifact_hash="ahash:commit",
+    )
+    await _add_embedding(session, commit, embedding=VECTOR)
+
+    docs = await load_search_docs(session, artifact_ids=[commit.artifact_id])
+    assert [d.artifact_type for d in docs] == ["commit"]
+
+    client = FakeSearchClient()
+    upserter = SearchDocUpserter(session, client)
+    upserted = await upserter.upsert_documents([commit.artifact_id])
+
+    assert upserted == 1
+    state = await client.fetch_index_state()
+    assert str(commit.artifact_id) in state.docs
+
+
+# ---------------------------------------------------------------------------
+# KB-F3: superseded (invalidated) artifacts are excluded from the projection
+# ---------------------------------------------------------------------------
+
+
+@requires_db
+async def test_superseded_artifact_excluded_and_gate_stays_green(session: AsyncSession) -> None:
+    """Two-build scenario: build 2 supersedes a file's artifact (sets
+    invalidated_at_seq). The superseded row must drop out of BOTH the projection
+    (load_search_docs) and the expected set (load_doc_hashes), and after the
+    orphan sweep the consistency gate still passes."""
+    source = await _add_source(session, "azure_wiki", "wiki://page")
+    # build 1 artifact, later superseded by build 2 (invalidated_at_seq=2)
+    old = await _add_artifact(
+        session,
+        source=source,
+        artifact_type="concept",
+        title="Old body",
+        body_text="version one text",
+        artifact_hash="ahash:v1",
+        valid_from_seq=1,
+        invalidated_at_seq=2,
+    )
+    # build 2 live replacement
+    new = await _add_artifact(
+        session,
+        source=source,
+        artifact_type="concept",
+        title="New body",
+        body_text="version two text",
+        artifact_hash="ahash:v2",
+        valid_from_seq=2,
+        invalidated_at_seq=None,
+    )
+
+    docs = await load_search_docs(session)
+    projected_ids = {d.artifact_id for d in docs}
+    assert new.artifact_id in projected_ids
+    assert old.artifact_id not in projected_ids
+
+    hashes = await load_doc_hashes(session)
+    assert str(new.artifact_id) in hashes
+    assert str(old.artifact_id) not in hashes
+
+    # Simulate build 1 having indexed the now-superseded doc, then build 2's
+    # reconcile path: orphan sweep removes the superseded doc, consistency passes.
+    client = FakeSearchClient()
+    upserter = SearchDocUpserter(session, client)
+    # index the live doc (build 2) and inject the superseded doc as a stale index
+    # entry from build 1.
+    await upserter.upsert_documents([new.artifact_id])
+    live_doc = client.docs[str(new.artifact_id)]
+    stale = live_doc.model_copy(
+        update={"doc_id": str(old.artifact_id), "artifact_id": old.artifact_id}
+    )
+    client.docs[stale.doc_id] = stale
+
+    removed = await upserter.delete_orphaned()
+    assert removed == 1
+    assert str(old.artifact_id) not in client.docs
+
+    validate = make_consistency_validator(client)
+    assert await validate(session, "v-build.1") is True

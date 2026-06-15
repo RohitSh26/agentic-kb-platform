@@ -92,6 +92,7 @@ async def _add_source(
     path: str | None = None,
     external_id: str | None = None,
     branch: str | None = None,
+    repo: str | None = None,
     acl_teams: list[str] | None = None,
 ) -> SourceItem:
     source = SourceItem(
@@ -101,6 +102,7 @@ async def _add_source(
         path=path,
         external_id=external_id,
         branch=branch,
+        repo=repo,
         content_hash=f"hash:{source_uri}",
         acl_teams=acl_teams or [],
     )
@@ -173,6 +175,7 @@ async def test_commit_acl_is_intersection_of_changed_file_sources(session: Async
         title="abc",
         body_text=_commit_body("touch both", changed),
         changed_files=changed,
+        repo=None,
     )
 
     acl = (
@@ -206,6 +209,7 @@ async def test_commit_acl_unresolved_file_does_not_widen(session: AsyncSession) 
         title="def",
         body_text=_commit_body("touch", changed),
         changed_files=changed,
+        repo=None,
     )
     acl = (
         await session.execute(
@@ -227,6 +231,7 @@ async def test_commit_acl_deny_by_default_when_no_inputs_resolve(session: AsyncS
         title="ghi",
         body_text=_commit_body("touch", ["nowhere.py"]),
         changed_files=["nowhere.py"],
+        repo=None,
     )
     acl = (
         await session.execute(
@@ -236,6 +241,58 @@ async def test_commit_acl_deny_by_default_when_no_inputs_resolve(session: AsyncS
     # Unknown provenance ⇒ deny by default. [] would mean org-public (everyone)
     # at read; the sentinel keeps the commit visible to nobody.
     assert list(acl) == list(DENY_ALL_ACL)
+
+
+@requires_db
+async def test_commit_acl_ignores_same_path_in_other_repo(session: AsyncSession) -> None:
+    """KB-F4: a same-path file in a DIFFERENT repo must not narrow this commit's ACL.
+
+    Repo A has an org-public file at src/shared.py; repo B has a restricted file at
+    the same path. Building repo A's commit must stay org-public ([]). Without the
+    repo filter, repo B's ["payments"] restriction would leak in and (intersected
+    with org-public) wrongly narrow the commit to deny/payments — a phantom deny.
+    """
+    await _add_source(
+        session,
+        source_type="github_code",
+        source_uri="gh://repoA/src/shared.py",
+        path="src/shared.py",
+        repo="repoA",
+        acl_teams=[],
+    )
+    await _add_source(
+        session,
+        source_type="github_code",
+        source_uri="gh://repoB/src/shared.py",
+        path="src/shared.py",
+        repo="repoB",
+        acl_teams=["payments"],
+    )
+    commit_source = await _add_source(
+        session,
+        source_type="git_metadata",
+        source_uri="git:jkl",
+        external_id="j" * 40,
+        repo="repoA",
+    )
+    changed = ["src/shared.py"]
+    artifact_id = await write_commit_artifact(
+        session,
+        source_id=commit_source.source_id,
+        kb_version="v-build.1",
+        title="jkl",
+        body_text=_commit_body("touch repoA", changed),
+        changed_files=changed,
+        repo="repoA",
+    )
+    acl = (
+        await session.execute(
+            select(KnowledgeArtifact.acl_teams).where(KnowledgeArtifact.artifact_id == artifact_id)
+        )
+    ).scalar_one()
+    # repoA's only changed file is org-public; repoB's same-path restriction is a
+    # different file and must not contaminate the intersection.
+    assert list(acl) == []
 
 
 # --------------------------------------------------------------------------

@@ -67,12 +67,17 @@ EVIDENCE_RECALL_FLOOR = 0.95  # golden-query evidence_recall (proxy in phase 1)
 async def _completed_run(session: AsyncSession, kb_version: str) -> KbBuildRun | None:
     """The 'completed' kb_build_run under gate (activation has not run yet), or
     None. Gates that need both run fields (extractor_failures, allow_large_delta)
-    and the build_seq read this once instead of re-querying for each."""
+    and the build_seq read this once instead of re-querying for each.
+
+    A retry can leave several 'completed' runs for one kb_version; take the LATEST
+    by build_seq (matching _build_seq_for) so this never raises on retry and the
+    run fields it returns belong to the same build the gates measure against."""
     return (
         await session.execute(
-            select(KbBuildRun).where(
-                KbBuildRun.kb_version == kb_version, KbBuildRun.status == "completed"
-            )
+            select(KbBuildRun)
+            .where(KbBuildRun.kb_version == kb_version, KbBuildRun.status == "completed")
+            .order_by(KbBuildRun.build_seq.desc())
+            .limit(1)
         )
     ).scalar_one_or_none()
 
@@ -83,14 +88,25 @@ async def _build_seq_for(session: AsyncSession, kb_version: str) -> int:
     The gates evaluate "the served set" of THIS build by membership against its
     own build_seq, not by kb_version label-equality (version-membership.md). The
     build under gate is 'completed' (activation has not run yet).
+
+    A kb_version may be (re)built more than once — a retry leaves more than one
+    'completed' kb_build_run with the same label — so we deterministically take
+    the LATEST completed build_seq rather than asserting uniqueness (which would
+    raise MultipleResultsFound on retry and crash activation).
     """
-    return (
+    seq = (
         await session.execute(
-            select(KbBuildRun.build_seq).where(
-                KbBuildRun.kb_version == kb_version, KbBuildRun.status == "completed"
-            )
+            select(KbBuildRun.build_seq)
+            .where(KbBuildRun.kb_version == kb_version, KbBuildRun.status == "completed")
+            .order_by(KbBuildRun.build_seq.desc())
+            .limit(1)
         )
-    ).scalar_one()
+    ).scalar_one_or_none()
+    if seq is None:
+        raise ValueError(
+            f"no completed kb_build_run for kb_version={kb_version!r} under publish gate"
+        )
+    return seq
 
 
 def _members(seq: int) -> ColumnElement[bool]:

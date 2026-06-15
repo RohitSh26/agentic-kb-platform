@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from agentic_kb_builder.application.active_version import get_active_kb_version
 from agentic_kb_builder.application.publish_gates import (
+    _build_seq_for,
     edge_evidence_integrity_gate,
     no_dangling_citations_gate,
     relation_precision_gate,
@@ -414,3 +415,30 @@ async def test_member_linker_edge_without_evidence_blocks_relation_precision(
     result = await relation_precision_gate(session, "v-gate.relprec")
     assert not result.passed
     assert result.measured_value == 1.0
+
+
+@requires_db
+async def test_retried_kb_version_resolves_to_latest_completed_build_seq(
+    session: AsyncSession,
+) -> None:
+    """KB-F1: a retried build leaves >1 'completed' kb_build_run for one
+    kb_version. _build_seq_for (and the gates that call it) must not raise
+    MultipleResultsFound; they take the LATEST completed build_seq."""
+    for build_seq in (10, 11):
+        session.add(KbBuildRun(kb_version="v-gate.retry", build_seq=build_seq, status="completed"))
+    await session.flush()
+
+    seq = await _build_seq_for(session, "v-gate.retry")
+    assert seq == 11
+
+    # a gate that calls _build_seq_for must also run without raising.
+    result = await no_dangling_citations_gate(session, "v-gate.retry")
+    assert result.passed  # no citeable artifacts ⇒ nothing dangles
+
+
+@requires_db
+async def test_build_seq_for_missing_version_raises_clear_error(session: AsyncSession) -> None:
+    """No completed run for the version ⇒ an explicit, clear error (not a bare
+    NoResultFound / None propagation)."""
+    with pytest.raises(ValueError, match="no completed kb_build_run"):
+        await _build_seq_for(session, "v-gate.absent")

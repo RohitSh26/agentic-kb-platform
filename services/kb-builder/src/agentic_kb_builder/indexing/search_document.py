@@ -8,10 +8,12 @@ carried so post-build consistency validation can compare index state against
 the registry without fetching bodies.
 
 Only artifacts meant to rank by their own text are projected (concept, summary,
-chunk, source_backed_fact, code_symbol). `code_file` and `endpoint` are
+chunk, source_backed_fact, code_symbol, commit). `code_file` and `endpoint` are
 pointer-only (body_text=None). `test` carries a snippet body like code_symbol
 but is deliberately kept out of the index — a test is reached through its graph
-edges to what it exercises, not by ranking its body.
+edges to what it exercises, not by ranking its body. `commit` is a deterministic
+git-metadata artifact (zero-LLM) projected by its own body text so commits are
+directly searchable.
 """
 
 import uuid
@@ -21,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 SEARCH_SCHEMA_VERSION = "1.0.0"
 
 PROJECTABLE_ARTIFACT_TYPES = frozenset(
-    {"concept", "summary", "chunk", "source_backed_fact", "code_symbol"}
+    {"concept", "summary", "chunk", "source_backed_fact", "code_symbol", "commit"}
 )
 
 
