@@ -18,8 +18,9 @@ from pydantic import Field, field_validator
 
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
 
-#: Verifier levels available now. L3 (LLM entailment) is PR-31; appended later.
-VerifierLevel = Literal["L0", "L1", "L2"]
+#: Verifier levels available now. L3 (LLM entailment, cached) is PR-31: it runs
+#: ONLY for claims L0-L2 could not adjudicate deterministically (cost guard).
+VerifierLevel = Literal["L0", "L1", "L2", "L3"]
 
 ClaimResult = Literal["passed", "failed"]
 OverallResult = Literal["passed", "failed", "partial"]
@@ -109,6 +110,11 @@ class ClaimChecks(McpModel):
     L1_coverage: bool | None = None
     # L2: the claim's typed assertion matches a deterministic ledger unit.
     L2_typed_fact: bool | None = None
+    # L3 (PR-31): the cited evidence ENTAILS the claim (cached LLM check). Present
+    # ONLY for a claim L0-L2 could not adjudicate deterministically AND that has
+    # resolvable cited evidence; absent (None) otherwise — L3 never runs on an
+    # L2-resolved claim (cost discipline).
+    L3_entailment: bool | None = None
 
 
 #: Backwards-compatible alias: L0-only callers/tests still import ``L0Checks``.
@@ -133,4 +139,11 @@ class VerificationReceipt(McpModel):
     claim_results: list[ClaimReceipt]
     # Reserved for phase-4 client identity + signing; null in phase 1.
     client_id: str | None = None
+    # HMAC-SHA256 over (answer_hash + graph_version + claim_results); null until a
+    # signing key is configured (PR-31). A host validates it statelessly via
+    # context_broker.receipt_signing.verify_receipt_signature.
     signature: str | None = None
+    # Non-secret fingerprint of the signing key (tells a host WHICH key signed,
+    # never the key itself); null when the receipt is unsigned. Additive — a
+    # phase-1 caller that ignores it is unaffected.
+    key_id: str | None = None

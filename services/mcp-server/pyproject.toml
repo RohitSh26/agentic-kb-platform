@@ -12,6 +12,11 @@ dependencies = [
     "starlette>=0.40",
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29",
+    # L3 verifier (PR-31): an OpenAI-compatible chat client (Ollama-first) behind
+    # the EntailmentClient interface; json_repair salvages small-model JSON. The
+    # import-boundary test still forbids the azure-search SDK here — no leakage.
+    "openai>=1.40",
+    "json_repair>=0.25",
 ]
 
 [dependency-groups]

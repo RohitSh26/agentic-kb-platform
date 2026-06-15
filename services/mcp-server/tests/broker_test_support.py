@@ -13,11 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_mcp_server.context_broker.budgets import BudgetPolicy
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps, BrokerSettings
+from agentic_mcp_server.infrastructure.entailment.client import EntailmentClient
 from agentic_mcp_server.infrastructure.search.search_client import FakeSearchClient
 
 KB_VERSION = "kb-test"
 
 _REGISTRY_TABLES = (
+    "entailment_cache",
     "retrieval_event",
     "knowledge_edge",
     "knowledge_artifact",
@@ -174,10 +176,12 @@ def make_broker_deps(
     *,
     settings: BrokerSettings | None = None,
     budget_policy: BudgetPolicy | None = None,
+    entailment_client: EntailmentClient | None = None,
 ) -> BrokerDeps:
     return BrokerDeps(
         session_factory=session_factory,
         search_client=search_client,
         settings=settings or BrokerSettings(),
         budget_policy=budget_policy or BudgetPolicy(),
+        entailment_client=entailment_client,
     )

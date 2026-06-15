@@ -32,7 +32,7 @@ mandatory in phase 1; L1–L3 added in phase 4) and returns a receipt. It perfor
     }
   ],
   "graph_version": "string|null",                // null ⇒ active version
-  "verifier_levels": ["L0"]                       // requested up to ["L0","L1","L2"]; server runs per policy
+  "verifier_levels": ["L0"]                       // requested up to ["L0","L1","L2","L3"]; server runs per policy
 }
 ```
 
@@ -42,7 +42,11 @@ failure).
 
 `quote` and `assertion` are optional and additive: a phase-1 caller that omits them keeps the exact
 behaviour it had. `verifier_levels` defaults to `["L0"]`; higher levels run only when requested (and
-admitted by policy). `verifier_levels_run` reflects exactly what ran.
+admitted by policy). `verifier_levels_run` reflects which levels were **active** for the request
+(requested and admitted) — not that each produced a verdict for every claim. A level can be active
+yet adjudicate no claim (e.g. L3 is active but every claim was already resolved by L2, so the
+entailment model never runs). The authoritative per-claim signal is always the `checks.*` field:
+a `null` check means that level produced no verdict for that claim.
 
 ### Response (the receipt)
 
@@ -70,7 +74,8 @@ admitted by policy). `verifier_levels_run` reflects exactly what ran.
     }
   ],
   "client_id": "string|null",                   // reserved (phase 4 client identity); null in phase 1
-  "signature": "string|null"                    // reserved (phase 4 signing); null in phase 1
+  "signature": "string|null",                   // phase 4: HMAC-SHA256 over answer_hash+graph_version+claim_results; null when no signing key is configured
+  "key_id": "string|null"                       // phase 4: non-secret fingerprint of the signing key; null when unsigned
 }
 ```
 
@@ -137,6 +142,41 @@ is omitted from its `checks`); L2 never invents a verdict it cannot deterministi
 
 A claim's overall `result` is the AND of every level that ran and produced a verdict for it: L0 (if
 run), L1 coverage/span (if L1 run), and L2 typed-fact (only for claims carrying an assertion).
+
+## L3 checks (phase 4) — LLM entailment, cached, unresolved-only
+
+Added only when `L3` is requested. L3 is the ONLY non-deterministic level, so it is gated hard by
+cost discipline: it runs for a claim **iff L0–L2 produced no deterministic verdict that already
+settles it** — concretely, the claim passed every deterministic level that ran but carries no typed
+`assertion` L2 could adjudicate (paraphrase / cross-evidence synthesis L0–L2 cannot check). It
+**never** runs on a claim L2 already resolved (pass or fail) and never on a claim already failing a
+deterministic level. L3 also requires the claim to have ≥1 **resolvable** cited unit (real,
+in-version, ACL-visible, requester-retrieved) — the same `resolvable` set L1 uses; a claim with no
+resolvable evidence has nothing to entail against and is skipped.
+
+When it runs, the verifier reads the claim's resolvable cited evidence texts (never raw text the
+requester did not retrieve) and asks the `EntailmentClient` whether they ENTAIL the claim:
+`checks.L3_entailment = true` (pass) or `false` (reason `entailment_unsupported`). A claim L3 does
+not run for has `L3_entailment` absent (`null`).
+
+The result is **cached** keyed by `(claim_hash, evidence_ids_hash, prompt_version, model_version)`
+in the kb-builder-owned `entailment_cache` table (mcp-server reads/writes it via raw SQL). A cache
+hit returns the stored verdict and makes **zero** LLM calls (architecture invariant 4). The local
+dev/test model is Ollama (`gemma3:4b`); the backend is swappable behind `EntailmentClient`.
+
+## Signed receipts (phase 4)
+
+The verifier signs the receipt over a canonical serialization of `answer_hash` + `graph_version` +
+`claim_results` (each claim reduced to id, result, and its check booleans) using **HMAC-SHA256**.
+The key is read at runtime from an environment variable whose NAME is configuration (default
+`VERIFY_SIGNING_KEY`); the key VALUE is never a literal in code, fixtures, or logs. The MAC is
+written to `signature` and a non-secret key fingerprint to `key_id`.
+
+A host validates a receipt **statelessly** with `verify_receipt_signature(receipt, key)` — no
+database, no re-running of checks. Tampering with `answer_hash`, `graph_version`, or any
+`claim_results` entry changes the canonical payload and fails the constant-time MAC comparison.
+Signing is additive: when no key is configured the verifier still issues an (unsigned) receipt —
+L0 stays the mandatory floor; a receipt never requires L3 or a signature to exist.
 
 ## Forward-compatibility (no debt for phase 4)
 

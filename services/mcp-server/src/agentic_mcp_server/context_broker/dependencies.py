@@ -15,6 +15,7 @@ from agentic_mcp_server.auth.rbac import Requester, TeamAclAuthorization, teams_
 from agentic_mcp_server.context_broker.authorization import AuthorizationPolicy
 from agentic_mcp_server.context_broker.budgets import BudgetPolicy
 from agentic_mcp_server.context_broker.state import PackStore
+from agentic_mcp_server.infrastructure.entailment.client import EntailmentClient
 from agentic_mcp_server.infrastructure.search.search_client import SearchClient
 
 
@@ -33,6 +34,10 @@ class BrokerSettings:
     # this fails L1 — it is lifting more raw text than a citation should, the same
     # "evidence by handle, not bulk text" principle the broker enforces elsewhere.
     max_quote_chars: int = 600
+    # Env var NAME holding the receipt signing key value. The NAME is config; the
+    # VALUE is read from env at sign time and never literalised (PR-31). When the
+    # var is unset the verifier still issues an (unsigned) receipt.
+    signing_key_env: str = "VERIFY_SIGNING_KEY"
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,10 @@ class BrokerDeps:
     budget_policy: BudgetPolicy = field(default_factory=BudgetPolicy)
     authorization: AuthorizationPolicy = field(default_factory=TeamAclAuthorization)
     packs: PackStore = field(default_factory=PackStore)
+    # L3 verifier (PR-31): the entailment backend. None ⇒ L3 cannot run even if
+    # requested (the verifier drops it from verifier_levels_run); a configured
+    # client + an "L3" request runs the cached entailment check.
+    entailment_client: EntailmentClient | None = None
 
 
 def current_requester() -> Requester:

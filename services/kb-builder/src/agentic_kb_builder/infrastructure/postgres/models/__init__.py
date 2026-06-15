@@ -2,6 +2,7 @@
 
 from agentic_kb_builder.infrastructure.postgres.models.base import Base
 from agentic_kb_builder.infrastructure.postgres.models.embedding_cache import EmbeddingCache
+from agentic_kb_builder.infrastructure.postgres.models.entailment_cache import EntailmentCache
 from agentic_kb_builder.infrastructure.postgres.models.generation_cache import GenerationCache
 from agentic_kb_builder.infrastructure.postgres.models.generation_cache_artifact import (
     GenerationCacheArtifact,
@@ -21,6 +22,7 @@ from agentic_kb_builder.infrastructure.postgres.models.source_item import Source
 __all__ = [
     "Base",
     "EmbeddingCache",
+    "EntailmentCache",
     "GenerationCache",
     "GenerationCacheArtifact",
     "KbBuildRun",
