@@ -10,9 +10,11 @@ defaults:
   acl_teams: []          # [] = org-public (any authenticated subject)
 
 sources:
-  # Implementation status (--backend production): github_code / github_doc fetch for
-  # real today; azure_wiki / ado_card are STUBS (config accepted, fetch not yet
-  # implemented — see connectors/production_factory.py + ADR-0015). dev-guide 06.
+  # All four types fetch for real with --backend production (each pins to a
+  # deterministic version). You set IDENTIFIERS, not URLs: github_* build from
+  # repo+branch (api.github.com); azure_wiki/ado_card build from organization+
+  # project (dev.azure.com). Replace contoso/platform below with your own. The only
+  # connector backlog item is managed-identity auth instead of PATs. See dev-guide 06.
   - name: platform-code
     type: github_code
     repo: RohitSh26/agentic-kb-platform

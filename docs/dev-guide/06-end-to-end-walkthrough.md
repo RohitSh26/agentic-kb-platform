@@ -194,25 +194,38 @@ answer it makes trusted must carry a receipt.*
 ### Build from your real sources (GitHub + ADO)
 
 The demo builds from this repo's git history so it needs no credentials. To build from **real
-sources**, use `services/kb-builder/sources.example.yaml` — it shows all four source types (GitHub
-code + docs, Azure DevOps Wiki, ADO Work Items), each with `auth.token_env` naming the **environment
-variable** that holds a PAT (never the token value itself). Run with the production fetch backend:
+sources**, use `services/kb-builder/sources.example.yaml` — it shows all four source types, each with
+`auth.token_env` naming the **environment variable** that holds a PAT (never the token value itself).
+
+**You don't put URLs in the config — you put identifiers, and each connector builds the canonical
+SaaS URL from them.** The base hosts are hardcoded in the connectors; you supply only org/project/repo:
+
+| Source type | Fields you set | URL the connector builds |
+| --- | --- | --- |
+| `github_code` / `github_doc` | `repo: owner/name`, `branch` | `https://api.github.com/repos/{owner}/{name}/…`, pinned to the branch's commit SHA |
+| `azure_wiki` | `organization`, `project`, `wiki` | `https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki}/…` (resolves the wiki's backing-git head SHA, then lists/reads pages) |
+| `ado_card` | `organization`, `project` (+ `area_path` / `work_item_types` / `states`) | `https://dev.azure.com/{organization}/{project}/_apis/wit/wiql` (query), then `/_apis/wit/workitems?ids=…` |
+
+So the example's `contoso` / `platform` / `platform.wiki` are **placeholders** — replace them with
+*your* Azure DevOps org, project, and wiki name (your `dev.azure.com/<your-org>`), and your GitHub
+`owner/repo`. Then run with the production fetch backend:
 
 ```sh
 cd services/kb-builder
 export GITHUB_TOKEN=...   # a GitHub PAT with repo read
-export ADO_PAT=...        # an Azure DevOps PAT (when you enable ADO sources)
-# real sources go through wikify (LLM) — point at Ollama or an OpenAI-compatible endpoint first
+export ADO_PAT=...        # an Azure DevOps PAT (Wiki + Work Items read)
+# real code/docs go through wikify (LLM) — point at Ollama or an OpenAI-compatible endpoint first
 DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/agentic_kb \
   uv run python -m agentic_kb_builder.build \
     --workspace . --sources ./sources.example.yaml --backend production
 ```
 
-> **Status (be precise with your team):** **GitHub code + docs are fully implemented** (real REST
-> fetch, pinned to a commit SHA). **Azure DevOps Wiki and Work Items are stubbed** — the config and
-> the connector boundary exist, but the fetch backends are placeholders pending their PRs (see
-> `connectors/production_factory.py` and ADR-0015). So today: build real KBs from GitHub now; ADO is
-> wired for config but not yet fetching. Managed-identity auth (instead of PATs) is also backlog.
+> **Status:** all four backends are **implemented and unit-tested** — GitHub (code + docs, pinned to
+> a commit SHA), Azure DevOps Wiki (pinned to the wiki's git head), and ADO Work Items (WIQL query +
+> work-item batch fetch). Each pins to a deterministic version so an unchanged source re-build is
+> byte-identical. The only connector item still on the backlog is **managed-identity auth** as an
+> alternative to PATs (ADR-0015 / #106). Real builds need an LLM for the wikify step (unlike the
+> zero-LLM demo).
 
 ### Other directions
 

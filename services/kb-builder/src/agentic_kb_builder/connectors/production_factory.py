@@ -3,10 +3,11 @@
 Same shape as `local_fs_backend_factory` so `connectors_from_config` is unchanged:
 the token (already resolved from `auth.token_env` by `resolve_token`) is handed in as
 a local value. Dispatch:
-  github_code / github_doc -> GitHubRestBackend
-  azure_wiki               -> AdoWikiBackend (stub until the ADO Wiki PR)
-  ado_card                 -> AdoWorkItemBackend (stub until the ADO Work Items PR)
-Any other type raises SourceConfigError.
+  github_code / github_doc -> GitHubRestBackend (api.github.com, pinned to a commit SHA)
+  azure_wiki               -> AdoWikiBackend (dev.azure.com wiki REST, pinned to the wiki git head)
+  ado_card                 -> AdoWorkItemBackend (dev.azure.com WIQL query + work-item batch fetch)
+All three are real, implemented backends (see their modules + tests). Any other type raises
+SourceConfigError.
 """
 
 from typing import Any
