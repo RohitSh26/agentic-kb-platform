@@ -17,16 +17,16 @@ subagents through one shared, budgeted **Evidence Pack**. The pattern is *not* "
 access" — it is **"many controlled specialists using one shared Evidence Pack governed by an MCP
 Context Broker."**
 
-Canonical reference: `docs/architecture/00-overview.md`. Decisions: `docs/adr/0001`–`0008`.
-Build units: `docs/pr-briefs/PR-01`–`PR-13`.
+Canonical reference: `docs/architecture/00-overview.md`. Decisions: `docs/adr/0001`–`0015`.
+Build units: `docs/pr-briefs/PR-01`–`PR-33`.
 
 ## The two planes
 
 | Plane | What it does | Where it lives | Status |
 |---|---|---|---|
-| **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation | `services/kb-builder` | Implemented through PR-08 (connectors → build engine → wikify → graphify → linker → search indexer) |
-| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, graph traversal, retrieval ledger | `services/mcp-server` | Implemented (PR-09 server base: auth, telemetry, tool contracts, health; PR-10 Context Broker: packs, budgets, dedupe, evidence, graph, ledger; PR-11 agent manifests + output schemas; PR-13 security hardening: `team_acl_v1` filtering, injection flagging, audit logging) |
-| **Benchmark layer** | Dev-only eval harness: runs the §13 benchmark cases through the real broker, computes token-cost metrics, diffs against a committed baseline | `evals/` | Implemented (PR-12; contract in `docs/contracts/evals-report.md`) |
+| **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation + publish gates | `services/kb-builder` | Implemented through PR-33: connectors (local-FS + production GitHub/ADO, ADR-0015) → build engine → wikify → graphify (real AST extractor) → linker (deterministic + cross-domain + candidate→LLM judge) → version-membership invalidation → search indexer → enforcing publish gates; a single `build` CLI (`python -m agentic_kb_builder.build`) drives it end to end |
+| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, trust-aware graph traversal, the verifier ladder + signed receipts, client identity, intent-aware ranking, retrieval ledger | `services/mcp-server` | Implemented (PR-09 server base; PR-10 Context Broker; PR-11 agent manifests + output schemas; PR-13 security hardening: `team_acl_v1` filtering, injection flagging, audit logging; PR-23/24/30/31 the verifier ladder L0→L3 + signed receipts; PR-32 client/app identity + scopes; PR-33 temporal/intent ranking) |
+| **Benchmark layer** | Dev-only eval harness: runs the §13 benchmark cases through the real broker, computes token-cost + golden-query evidence-recall metrics, diffs against a committed baseline | `evals/` | Implemented (PR-12; golden queries PR-25; contracts in `docs/contracts/evals-report.md` + `golden-query-evals.md`) |
 
 Nothing is shared at runtime (ADR-0008): each service is a self-contained `uv` project, and the
 only cross-service agreements are the markdown contracts in `docs/contracts/`, pinned by contract
@@ -60,21 +60,55 @@ Freshness-by-the-minute is not worth an event-driven cloud. The build runs night
 The non-negotiable rule (invariant 4): **cache hit ⇒ no model call.** Cost control is structural,
 not a prompt suggestion.
 
-## kb_version lifecycle (invariant 5)
+## kb_version lifecycle: interval membership, not a label (invariant 5, ADR-0013)
 
-Every build run gets a `kb_version`. A version becomes **active** only after validation passes
-(`services/kb-builder/src/agentic_kb_builder/application/active_version.py` — `activate_kb_version` takes a
-`ValidationHook`; on failure the run is marked `validation_failed` and the *previous* active
-version keeps serving). MCP always serves the last successful active version. A partial unique
-index on `kb_build_run` guarantees at most one active run at a time.
+Every build run gets a `kb_version` label and a monotonic `build_seq` (a `BIGINT` from the
+`kb_build_seq` Postgres sequence, assigned at run start). A version becomes **active** only after
+validation **and the publish gates** pass
+(`services/kb-builder/src/agentic_kb_builder/application/active_version.py` — `activate_kb_version`
+takes a `ValidationHook`; on failure the run is marked `validation_failed` and the *previous*
+active version keeps serving). MCP always serves the last successful active version. A partial
+unique index on `kb_build_run` guarantees at most one active run at a time.
 
-One subtlety worth knowing: `kb_version` on an artifact/edge means *the build that produced or last
-confirmed it*, not "the only version it belongs to." Cache-hit artifacts keep their original
-`kb_version`; linker edges are refreshed in place each night with the confirming build's version.
-Since PR-08 the validation hook is real: `make_consistency_validator` compares the Search index
-against the registry (missing / orphaned / drifted documents) and a version cannot activate while
-the projection disagrees with the truth. Serving semantics consolidate further with the runtime
-(PR-09+).
+**A KB version is a validity interval, not a creation label** (`docs/contracts/version-membership.md`).
+This fixes a latent bug ADR-0013 records: incremental builds re-create only *changed* rows (label
+`N`), so the unchanged majority keep labels `< N`. Scoping retrieval strictly `WHERE kb_version = N`
+would serve only that day's delta — the served KB would silently shrink every night. The fix: each
+`knowledge_artifact` / `knowledge_edge` carries `valid_from_seq` (the build that introduced it) and
+`invalidated_at_seq` (`NULL` while live; set to build `N` when the row *leaves* the KB). A row is a
+**member of the version whose `build_seq = S`** iff:
+
+```
+valid_from_seq <= S AND (invalidated_at_seq IS NULL OR invalidated_at_seq > S)
+```
+
+Both services duplicate this one predicate (never share the code — ADR-0008). Rows are stamped once
+and immutable; setting `invalidated_at_seq` never mutates a *past* version, so prior active versions
+stay byte-reconstructable (invariant 5). The lone deliberate exception is `acl_teams`, which is
+overwritten in place on live rows so a *revoked* permission takes effect on every still-served
+version, not just future ones — fail-safe current enforcement over exact historical-ACL replay.
+
+At the end of each build, **before** activation, the invalidation pass
+(`application/invalidation.py`) reconciles identity-over-time: rename detection (a vanished identity
+whose content hash reappears at a new path links via `prior_identity_id` and reattaches its edges),
+a deletion sweep (a source no longer listed is marked `is_deleted` and its live rows invalidated), a
+supersession sweep (a content-changed source's prior-generation rows are invalidated so the new
+version serves only the new generation), and ACL propagation.
+
+**Publish gates** (`application/publish_gates.py`, `docs/contracts/publish-gates.md`) make the
+activation decision deterministic. The phase-1 gates — index consistency, extractor error rate,
+symbol-count delta, no dangling citations, edge-evidence integrity — are real and **enforcing**
+inside activation; the `no-ghost-edges` gate became enforcing once membership was interval-based
+(PR-27). The first failing, non-overridden gate records which gate + its measured value on
+`kb_build_run` and the version simply never activates (automatic rollback — the previous active row
+is untouched). `--allow-large-delta` is the *only* overridable gate (symbol-count delta), recorded
+and logged. Evidence-recall + ACL-leak are authoritatively enforced by the evals harness
+(`make eval-run`) because they need the full broker over the golden set, which `kb-builder` cannot
+import across the service boundary; activation logs a registry-derivable proxy.
+
+`make_consistency_validator` (the index-vs-registry drift check) is composed into the gate
+`ValidationHook` by `make_publish_gate_validator`, so a version cannot activate while the Search
+projection disagrees with the truth.
 
 ## The knowledge model
 
@@ -90,31 +124,67 @@ evidence at retrieval time — generated summaries are never treated as truth) o
 (extracted directly from a source at a version).
 
 **Edges** (`knowledge_edge`) connect artifacts with `edge_type`, `confidence`, `source`
-(wikify|graphify|linker|manual), and `kb_version`. Direction is subject-verb-object:
+(wikify|graphify|linker|llm_judge|manual), a `trust_class` (below), `relation_schema_version`, an
+`evidence` pointer, and the `valid_from_seq`/`invalidated_at_seq` interval. Direction is
+subject-verb-object:
 
 - `doc documents concept`, `card requests concept` — linker, confidence 0.9
 - `symbol implements concept` — linker, 0.95 deterministic / raw similarity if semantic
-- `doc mentions code` — linker, 0.9
+- `doc mentions code`, `commit mentions code_file`, `commit implements work_item` — linker, deterministic
 - `symbol exposed_as endpoint`, `test tests symbol`, `calls`, `imports` — graphify, confidence 1.0
+- `doc documents code` — `llm_judge` (phase 3B), only ever `INFERRED_*`
 
 Confidence is honest: deterministic exact-text matches get high fixed confidence; semantic
 similarity is stored as the raw score, never inflated. Anything below 0.9 is structurally flagged
 (`event=linker_low_confidence_edge`) so the eval harness can audit it.
+
+### Trust buckets, not decimal confidence (ADR-0011, `docs/contracts/trust-buckets.md`)
+
+Behaviour is driven by a small set of **trust buckets** on every edge (`trust_class`, NOT NULL,
+CHECK-constrained), derived *deterministically* from the producing mechanism — never a free-floating
+score: `EXTRACTED` < `INFERRED_HIGH` < `INFERRED_LOW` < `AMBIGUOUS` < `REJECTED` (ordering for
+`trust_floor`). Deterministic producers (the AST extractor, the deterministic linker) may assign
+**only** `EXTRACTED`; the LLM judge (phase 3B) may assign any `INFERRED_*` / `AMBIGUOUS` / `REJECTED`
+but **never** `EXTRACTED`. The buckets change broker behaviour:
+
+- `EXTRACTED` is included in default traversal and is the **only** bucket that can support a cited,
+  platform-trusted claim.
+- `INFERRED_HIGH` / `INFERRED_LOW` are surfaced only with `include_inferred=true`, always as
+  **routing hints** (`claim_supporting=false`) — they point an agent at source evidence to read, but
+  can never themselves be the cited support for a claim.
+- `AMBIGUOUS` is excluded from default traversal; `REJECTED` is never returned (retained for audit).
 
 ## The three enrichment layers
 
 - **Wikify** (semantic layer): chunks docs/wiki/cards and asks the model for concepts, summaries,
   and source-backed facts. Every call goes through the generation cache. Its output is
   *interpreted* knowledge.
-- **Graphify** (code-structure layer): parses code at a commit SHA into files, symbols, endpoints,
-  tests, and structural edges. Deterministic — no LLM. It is a navigation aid; final evidence is
-  exact snippets at a source version (`span_start`/`span_end` line spans on code artifacts).
-- **Linker** (the bridge): connects Wikify concepts to Graphify code. Deterministic pass first
-  (exact, word-boundary textual evidence — precision-biased, because over-linking is the explicit
-  failure mode), then a semantic-similarity fallback *only* for concepts the deterministic pass
-  could not link. Linker edges are **reconciled, one row per logical link**: reruns refresh
-  confidence/kb_version in place, and edges whose textual evidence disappears are deleted — the
-  graph never serves a link whose justification no longer exists.
+- **Graphify** (code-structure layer): a real, deterministic Python **AST extractor** (PR-21)
+  parses code at a commit SHA into files, symbols, endpoints, tests, and structural edges — no LLM.
+  (Earlier the adapter only *validated* a hand-written `FileGraph`; the extractor that *produces* one
+  is the strongest leg of ADR-0010 / "Design A".) It is a navigation aid; final evidence is exact
+  snippets at a source version (`span_start`/`span_end` line spans on code artifacts).
+- **Linker** (the bridge): three stages, all precision-biased because over-linking is the explicit
+  failure mode.
+  1. **Deterministic** (`linker/deterministic.py`): exact, word-boundary textual evidence connecting
+     Wikify concepts to Graphify code. `EXTRACTED`.
+  2. **Cross-domain deterministic** (`linker/cross_domain.py`, PR-26): zero-LLM, explicit-reference
+     only — commit→work-item (`AB#123`/`#123`/`GH-123`), commit→code_file (changed-file path), and
+     doc→work-item. A bare incidental number never produces a link. The `commit` artifacts come from
+     the `git_metadata` connector. `EXTRACTED`.
+  3. **Candidate→judge** (PR-28/29): a cheap, deterministic, zero-LLM **candidate generator**
+     (`linker/candidates.py`) surfaces bounded cross-domain pairs (top-K per artifact, audited in
+     `relationship_candidate`); the **LLM judge** (`linker/judge.py`) rules on *only* that bounded
+     set — never a global O(N²) sweep — and promotes verdicts to `INFERRED_*`/`AMBIGUOUS`
+     `knowledge_edge` rows (`source='llm_judge'`). Every judgment is gated by
+     `relationship_judgment_cache` so an unchanged pair is never re-judged, and a `supporting_quote`
+     must be a verbatim substring of a source span or the verdict is downgraded to `AMBIGUOUS`
+     (invariant 7). A semantic-similarity fallback also exists for concepts the deterministic pass
+     could not link (raw score as confidence).
+
+  Linker edges are **reconciled, one row per logical link**: reruns refresh confidence/version in
+  place, and edges whose textual evidence disappears are deleted — the graph never serves a link
+  whose justification no longer exists.
 
 The canonical chain these layers produce together:
 
@@ -171,6 +241,53 @@ full justification (a bare `{"query": ...}` fails schema validation), and expand
 delivered in a field literally named `untrusted_content`. Only `/health` is unauthenticated, and
 it discloses nothing but the service name and active kb_version.
 
+## The end-to-end trust contract (ADR-0011)
+
+The broker governs *retrieval*. It does **not** govern an external agent's final *answer* — Copilot,
+Claude, or OpenCode can ignore the evidence or misread it. The only enforceable boundary against
+agents we don't control is: **an answer is platform-trusted iff it carries a valid verification
+receipt.** Four pieces make that real (contracts: `trust-buckets.md`, `verification-receipt.md`,
+`acl-source-visibility.md`):
+
+- **Trust-aware traversal** — `graph.get_neighbors` takes `trust_floor` (default `EXTRACTED`) and
+  `include_inferred` (default `false`); the default result is exactly the directly-extracted graph,
+  and `INFERRED_*` edges come back only as labelled routing hints. Trust filtering composes with the
+  ACL filter at *every* hop.
+- **The verifier ladder** (`context.verify_answer`) checks an answer's cited claims against the
+  ledger in escalating cost — cheap, deterministic levels first, the model last and only when
+  unavoidable:
+  - **L0** (deterministic, mandatory, PR-24): each cited evidence id exists, is in the active version,
+    is ACL-visible, appears in the requester's retrieval ledger, is not stale, and is supported by an
+    `EXTRACTED` edge (an `INFERRED_*` hint cannot be the sole support).
+  - **L1** (PR-30): citation coverage + quote span caps.
+  - **L2** (PR-30, no LLM): typed-fact adjudication — catches a claim that *misreads* real evidence
+    (`symbol_in_file`, `file_imports_module`, `edge_between`), checked against a claim/evidence
+    ledger projected over the existing tables.
+  - **L3** (PR-31, cached LLM entailment): runs **only** for claims L0–L2 could not adjudicate, and
+    every entailment is gated by `entailment_cache` so an unchanged claim makes zero model calls
+    (invariant 4).
+- **Signed receipts** (PR-31) — the verifier returns a receipt (`answer_hash`, per-claim results,
+  the levels run, `graph_version`) signed with **HMAC-SHA256** under a key read from an env var by
+  *name* (default `VERIFY_SIGNING_KEY`); a host validates it statelessly with no DB and no re-checks.
+- **Client/app identity + scopes** (PR-32) — a request carries both the per-user `Requester` and a
+  registered `ClientIdentity` (`client_id`, `scopes`, `verification_required`), resolved from the
+  authenticated client credential, never a request field (config: `MCP_CLIENT_REGISTRY`, identifiers
+  + policy only). Client scopes gate the tool surface **additively** on top of (never replacing) the
+  user team ACLs. The verifier binds the validated `client_id` into the signed receipt, so a receipt
+  for client A does not validate for client B. `context.platform_trust` is the official-client gate:
+  a `verification_required` client is platform-trusted only with a valid, client-matched, passing
+  receipt, and returns a structured denial reason otherwise — never a silent pass. A client that did
+  not opt in is unaffected.
+
+**Temporal / intent-aware ranking** (PR-33) rides on top, all deterministic and logged
+(`event=temporal_weight*`): each evidence card carries a `source_kind` (code/doc/card/pr/adr) and a
+`temporal_state` (current/superseded) derived with no LLM from version-membership + source state.
+When `create_pack.intent` is supplied (`how_does_x_work`, `why_was_x_changed`, `who_owns_x`,
+`what_calls_x`) the broker *transparently re-weights* the candidate set — current code first for
+"how", cards/PRs/ADRs included for "why", stale docs downranked — without ever removing historical
+evidence, promoting a contradicting doc into claim support, or touching the L0 `not_stale` check
+(the two notions of "stale" are deliberately independent).
+
 ## What is deliberately NOT in V1 (ADR-0007)
 
 Azure Functions, Event Grid/Service Bus/Event Hub, Redis, API Management, Blob Storage, a graph
@@ -183,9 +300,9 @@ via a new ADR. Default answer is no.
 | # | Invariant | Enforced by |
 |---|---|---|
 | 1 | Postgres is truth; Search is a projection | ADR-0002; `agentic_kb_builder/indexing/consistency.py` drift check gates activation; embedding vectors stored in `embedding_cache` so the index rebuilds without re-embedding |
-| 2 | Graph in Postgres, behavior via MCP tools | `knowledge_edge` table; `graph.get_neighbors` bounded BFS in the broker (PR-10) |
-| 3 | Token saving enforced by the broker, not prompts | Context Broker budgets + ledger, enforced server-side under a per-pack lock (PR-10); `.claude/rules/token-budgets.md` |
-| 4 | Incremental build; cache hit ⇒ no model call | `GenerationCacheGate` / `EmbeddingCacheGate` in `agentic_kb_builder/application/cache_gates.py`; content-hash skip in `application/build_runner.py` |
-| 5 | kb_version active only after validation | `application/active_version.py` + unique partial index on `kb_build_run` |
+| 2 | Graph in Postgres, behavior via MCP tools | `knowledge_edge` table (now with `trust_class`); trust-aware `graph.get_neighbors` bounded BFS in the broker (PR-10, PR-23) |
+| 3 | Token saving enforced by the broker, not prompts | Context Broker budgets + ledger, enforced server-side under a per-pack lock (PR-10); the verifier's `entailment_cache` gates L3 model calls (PR-31); `.claude/rules/token-budgets.md` |
+| 4 | Incremental build; cache hit ⇒ no model call | `GenerationCacheGate` / `EmbeddingCacheGate` in `agentic_kb_builder/application/cache_gates.py`; `relationship_judgment_cache` (PR-29) + `entailment_cache` (PR-31); content-hash skip in `application/build_runner.py` |
+| 5 | kb_version active only after validation + publish gates | `application/active_version.py` (interval membership, ADR-0013) + `application/publish_gates.py` + `application/invalidation.py` + unique partial index on `kb_build_run` |
 | 6 | Agents never touch stores/secrets; retrieved text untrusted | Entra JWKS auth boundary + schema-encoded policy in `agentic_mcp_server/mcp/tool_schemas` (PR-09); `team_acl_v1` filtering at every retrieval surface, fail-closed identity, advisory injection flagging, and audit logging in `auth/rbac.py` / `domain/untrusted.py` / `telemetry/audit.py` (PR-13) |
 | 7 | Every claim cites evidence; no fabrication | Evidence cards by handle (PR-10); `agent_output_schemas` make unevidenced claims unconstructible and reject unknown evidence IDs (PR-11); linker stale-edge deletion in `linker/write_edges.py` |

@@ -69,7 +69,9 @@ Three containers, in order:
 1. **postgres** — Postgres 16 with a named volume; host port `55432` by default (NOT 5432, so a
    Homebrew Postgres keeps working — override with `POSTGRES_HOST_PORT`).
 2. **kb-builder** — one-shot: applies the Alembic migrations and exits (it owns the schema,
-   ADR-0008). There is no build CLI yet, so migrations are this container's whole job.
+   ADR-0008). The `build` CLI does now exist (run it locally — see "Running an end-to-end build"
+   below), but the compose container is deliberately migrations-only; wiring the nightly build into
+   compose is a recorded follow-up.
 3. **mcp-server** — starts only after the migration job completes; serves
    `http://localhost:8000/mcp/` (override with `MCP_HOST_PORT`). It never runs migrations.
 
@@ -144,11 +146,35 @@ export DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/agentic_kb   # mig
 uv run python -m agentic_kb_builder.build --workspace ../.. --sources ./sources.example.yaml
 ```
 
-`--no-activate` builds without flipping the active version; `--no-git-metadata` skips the commit
-connector. For a fully hermetic view of the pipeline, the integration suite still drives a real
-`BuildRunner` against your local Postgres with fakes — `test_build_engine.py` exercises the complete
-flow: fetch → hash-skip → wikify (cache-gated) → graphify (cache-gated) → embed (cache-gated) →
-index → edges → linker → run accounting → activation gating.
+Flags: `--no-activate` builds without flipping the active version; `--no-git-metadata` skips the
+commit connector; `--allow-large-delta` overrides *only* the symbol-count-delta publish gate (e.g. a
+first build or a big refactor — recorded on `kb_build_run` and logged; no other gate is overridable).
+
+`--backend production` swaps the local-FS fetch for the real GitHub/ADO backends (ADR-0015): GitHub
+REST pinned to a commit SHA, ADO Wiki pinned to the wiki git head, ADO Work Items via a WIQL
+snapshot. Auth is PAT-via-`token_env` — set the env var your `sources.yaml` names in each source's
+`auth.token_env` (a token value never appears in config or logs). The local default needs no
+credentials and no network, so keep using `--backend local` (the default) for the dev loop.
+
+For a fully hermetic view of the pipeline, the integration suite still drives a real `BuildRunner`
+against your local Postgres with fakes — `test_build_engine.py` exercises the complete flow: fetch →
+hash-skip → wikify (cache-gated) → graphify (cache-gated) → embed (cache-gated) → index → edges →
+linker → run accounting → activation gating. The production backends are tested hermetically too:
+`production_backend_factory(client_transport=httpx.MockTransport(...))` drives the whole
+config→connector→HTTP path with canned responses, no network.
+
+## Browsing the built KB as an Obsidian vault
+
+Once a build has populated Postgres, render it as linked Markdown notes (read-only):
+
+```sh
+cd services/kb-builder
+export DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/agentic_kb   # migrated DB
+uv run python -m agentic_kb_builder.export_obsidian --out ./vault
+```
+
+Open `./vault` in Obsidian to explore artifacts (notes) and edges (`[[wikilinks]]`). Output is
+deterministic; `--kb-version X` targets a specific version instead of the active one.
 
 To watch a full build happen, run one test verbosely with log output:
 
