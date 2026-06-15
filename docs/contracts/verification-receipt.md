@@ -121,6 +121,14 @@ Added only when `L1` is requested. Per claim:
 2. **span cap** — if the claim carries a `quote`, its length is within the configured cap
    (`BrokerSettings.max_quote_chars`). An over-cap quote fails (`L1_coverage = false`, reason
    `quote_over_cap`). A claim with no quote is not penalised on this check.
+3. **quote-substring guard (invariant 7)** — if the claim carries a within-cap `quote`, that quote
+   must be a **verbatim** (whitespace-normalized) substring of the text of at least one of the
+   claim's **resolvable cited units** (the same in-version, ACL-visible, requester-retrieved set
+   coverage uses — never a unit the requester did not retrieve, so the guard adds no oracle). Both
+   sides are whitespace-normalized (runs of whitespace collapsed to a single space) and then an
+   EXACT substring test is applied — never fuzzy. A quote grounded in none of the cited units fails
+   (`L1_coverage = false`, reason `quote_not_found`). A claim with no quote is unaffected. The guard
+   is skipped for an over-cap quote (it has already failed on length; no redundant second reason).
 
 `checks.L1_coverage` is added to every claim's `checks` when L1 runs.
 

@@ -60,6 +60,7 @@ from agentic_mcp_server.context_broker.trust import CLAIM_SUPPORTING
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_version
 from agentic_mcp_server.infrastructure.postgres.provenance import (
     ProvenanceRow,
+    fetch_cited_body_texts,
     fetch_existing_anywhere,
     fetch_provenance,
 )
@@ -92,9 +93,10 @@ REASON_NOT_RETRIEVED = "evidence_not_retrieved_by_requester"
 REASON_STALE = "evidence_stale"
 REASON_TRUST = "evidence_supported_only_by_inferred_edge"
 REASON_BAD_ID = "evidence_id_not_a_valid_artifact_id"
-# L1 (phase 4): coverage + span cap.
+# L1 (phase 4): coverage + span cap + quote-substring guard (invariant 7).
 REASON_UNCITED = "claim_uncited"
 REASON_QUOTE_OVER_CAP = "quote_over_cap"
+REASON_QUOTE_NOT_FOUND = "quote_not_found"
 # L2 (phase 4): typed-fact adjudication.
 REASON_TYPED_FACT_UNSUPPORTED = "typed_fact_unsupported"
 
@@ -274,10 +276,40 @@ def _resolve_levels(requested: list[VerifierLevel], *, l3_supported: bool) -> li
     return levels
 
 
+def _normalize_whitespace(value: str) -> str:
+    """Collapse every run of whitespace to a single space and strip the ends.
+
+    The quote-substring guard compares whitespace-normalized forms so a quote that
+    differs from the source ONLY in incidental whitespace (re-wrapped lines, tabs vs
+    spaces) still matches. It is otherwise an EXACT substring test — never fuzzy."""
+    return " ".join(value.split())
+
+
+def _quote_grounded(quote: str, cited_texts: list[str]) -> bool:
+    """True iff the whitespace-normalized ``quote`` is a verbatim substring of any
+    cited unit's whitespace-normalized text. Empty/whitespace-only quotes (which
+    normalize to "") never ground — a fabricated empty quote must not pass."""
+    needle = _normalize_whitespace(quote)
+    if not needle:
+        return False
+    return any(needle in _normalize_whitespace(body) for body in cited_texts)
+
+
 def _l1_coverage(
-    claim: ClaimInput, evidence: list[_L0Result], *, max_quote_chars: int
+    claim: ClaimInput,
+    evidence: list[_L0Result],
+    *,
+    max_quote_chars: int,
+    cited_texts: list[str],
 ) -> tuple[bool, list[str]]:
-    """L1: ≥1 cited evidence resolves to a unit AND any quote is within the cap."""
+    """L1: ≥1 cited evidence resolves to a unit, any quote is within the cap, AND a
+    quote (if set) is a verbatim span of one of the claim's resolvable cited units.
+
+    ``cited_texts`` is the body text of THIS claim's resolvable cited units only
+    (in-version, ACL-visible, requester-retrieved) — the same set coverage uses, so
+    the guard never reads a unit the requester did not retrieve (invariant 6). A
+    claim with no quote is unaffected: only the length cap + substring guard gate it.
+    """
     reasons: list[str] = []
     cited = any(unit.resolvable for unit in evidence)
     if not cited:
@@ -285,7 +317,14 @@ def _l1_coverage(
     quote_ok = claim.quote is None or len(claim.quote) <= max_quote_chars
     if not quote_ok:
         reasons.append(REASON_QUOTE_OVER_CAP)
-    return (cited and quote_ok), reasons
+    # The substring guard only applies to a within-cap quote; an over-cap quote
+    # already fails (and we don't want a second, redundant reason for the same span).
+    quote_grounded = True
+    if claim.quote is not None and quote_ok:
+        quote_grounded = _quote_grounded(claim.quote, cited_texts)
+        if not quote_grounded:
+            reasons.append(REASON_QUOTE_NOT_FOUND)
+    return (cited and quote_ok and quote_grounded), reasons
 
 
 def _evidence_uuids(claim: ClaimInput) -> list[uuid.UUID]:
@@ -362,6 +401,16 @@ async def verify_answer(
             if uid in retrieved
             and (not row.acl_teams or requester.teams.intersection(row.acl_teams))
         )
+        # L1's quote-substring guard (invariant 7): fetch the body text of the
+        # RESOLVABLE cited units only, in the same session. The id set is already
+        # restricted to in-version + ACL-visible + requester-retrieved, so this read
+        # adds no oracle over un-cited/unretrieved content. Only when L1 runs.
+        cited_body_texts: dict[uuid.UUID, str] = {}
+        if run_l1 and is_active and resolvable_ids:
+            cited_body_texts = await fetch_cited_body_texts(
+                session, list(resolvable_ids), active.build_seq
+            )
+
         # L2 adjudicates each claim's typed assertion against the ledger in the
         # same session. Only over the active version (L0 already fails a pinned
         # non-active citation; the ledger reads the served build_seq).
@@ -424,8 +473,18 @@ async def verify_answer(
 
         l1_coverage: bool | None = None
         if run_l1:
+            # This claim's resolvable cited body texts only — the same in-version,
+            # ACL-visible, requester-retrieved set coverage rests on (no oracle).
+            claim_cited_texts = [
+                cited_body_texts[uid]
+                for uid in _evidence_uuids(claim)
+                if uid in resolvable_ids and uid in cited_body_texts
+            ]
             l1_coverage, l1_reasons = _l1_coverage(
-                claim, evidence_results, max_quote_chars=deps.settings.max_quote_chars
+                claim,
+                evidence_results,
+                max_quote_chars=deps.settings.max_quote_chars,
+                cited_texts=claim_cited_texts,
             )
             reasons.extend(l1_reasons)
             passed = passed and l1_coverage

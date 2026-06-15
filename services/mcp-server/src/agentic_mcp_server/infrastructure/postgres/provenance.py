@@ -61,6 +61,22 @@ _EXISTS_ANY_VERSION_QUERY = text(
     """
 )
 
+# Body text of cited units that are MEMBERS of the active build_seq, for the L1
+# quote-substring guard (invariant 7, ADR-0011): the quote a claim relies on must
+# be a verbatim span of one of its cited units' text. Same membership predicate as
+# fetch_provenance — NO ACL/retrieval filtering here; the caller restricts the id
+# set to the claim's already-resolvable (in-version, ACL-visible, requester-
+# retrieved) cited ids so the guard never reads a unit the requester didn't get.
+_FETCH_BODY_TEXTS_QUERY = text(
+    f"""
+    SELECT a.artifact_id, a.body_text
+    FROM {KNOWLEDGE_ARTIFACT_TABLE} a
+    WHERE a.artifact_id = ANY(CAST(:artifact_ids AS uuid[]))
+      AND a.valid_from_seq <= :build_seq
+      AND (a.invalidated_at_seq IS NULL OR a.invalidated_at_seq > :build_seq)
+    """
+)
+
 
 @dataclass(frozen=True)
 class ProvenanceRow:
@@ -108,3 +124,19 @@ async def fetch_existing_anywhere(
 ) -> set[uuid.UUID]:
     result = await session.execute(_EXISTS_ANY_VERSION_QUERY, {"artifact_ids": artifact_ids})
     return {row.artifact_id for row in result}
+
+
+async def fetch_cited_body_texts(
+    session: AsyncSession, artifact_ids: list[uuid.UUID], build_seq: int
+) -> dict[uuid.UUID, str]:
+    """Return ``{artifact_id: body_text}`` for the cited units that are MEMBERS of
+    the active ``build_seq`` (version-membership.md) and carry text.
+
+    Callers pre-restrict ``artifact_ids`` to a claim's RESOLVABLE cited ids (the
+    in-version, ACL-visible, requester-retrieved set L1/L2 use), so this read adds
+    no oracle: a NULL/empty body or an out-of-version row simply yields no entry.
+    """
+    result = await session.execute(
+        _FETCH_BODY_TEXTS_QUERY, {"artifact_ids": artifact_ids, "build_seq": build_seq}
+    )
+    return {row.artifact_id: row.body_text for row in result if row.body_text}
