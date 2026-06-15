@@ -29,6 +29,10 @@ class BrokerSettings:
     # full run context budget upper bound (token-budgets rule: 12k-18k);
     # the request value is a floor request, never an escape hatch
     max_run_budget_tokens: int = 18_000
+    # L1 span cap: max chars a single claim quote may carry. A quote longer than
+    # this fails L1 — it is lifting more raw text than a citation should, the same
+    # "evidence by handle, not bulk text" principle the broker enforces elsewhere.
+    max_quote_chars: int = 600
 
 
 @dataclass(frozen=True)

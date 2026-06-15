@@ -3,7 +3,7 @@
 > Versioned tool surface served by mcp-server. Schema before code: every tool
 > has a frozen pydantic request/response model (`extra="forbid"`) in
 > `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`, registered in
-> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.4.0"` (1.1.0 = PR-13:
+> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.5.0"` (1.1.0 = PR-13:
 > `authorization` decision on every retrieval response, `injection_*` markers
 > on cards and expansions; 1.2.0 = PR-18: `read_pack.role` opened from the
 > closed six-role enum to a free-form charset-guarded string — response
@@ -12,7 +12,12 @@
 > traversal, ADR-0011) and `GraphNeighbor` gains `trust_class` +
 > `claim_supporting`; 1.4.0 = PR-24: adds `context.verify_answer`, the L0
 > provenance verifier that returns a verification receipt — additive, the trust
-> boundary of ADR-0011 / `verification-receipt.md`).
+> boundary of ADR-0011 / `verification-receipt.md`; 1.5.0 = PR-30:
+> `context.verify_answer` gains optional per-claim `quote` + typed `assertion`
+> and accepts `verifier_levels` up to `["L0","L1","L2"]` — the deterministic L1
+> (citation coverage + span caps) and L2 (typed-fact) levels add `L1_coverage` /
+> `L2_typed_fact` to claim `checks`. All additive: an L0-only caller is
+> unchanged).
 
 ## The V1 tools
 
