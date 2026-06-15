@@ -19,7 +19,8 @@ FORBIDDEN_PREFIXES = (
     "contracts",
     "db",
     "alembic",  # kb-builder owns the schema; mcp-server never runs migrations
-    "azure",  # no direct SDK use; a SearchClient interface arrives with PR-10
+    "azure",  # mcp-server never calls Azure SDKs directly — only via the
+    # SearchClient / ModelClient interfaces (ADR-0006 stack, ADR-0008 boundaries)
 )
 
 

@@ -7,7 +7,7 @@ subject); a non-empty acl_teams requires a non-empty intersection with the
 requester's teams (docs/contracts/mcp-tools-contract.md).
 """
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -35,14 +35,19 @@ def teams_from_claims(claims: Mapping[str, Any]) -> frozenset[str]:
     return frozenset(teams)
 
 
+def acl_admits(requester: Requester, acl_teams: Collection[str] | None) -> bool:
+    """team_acl_v1 visibility for one row's ACL: an empty/absent ``acl_teams`` is
+    org-public (any authenticated subject); a non-empty one requires a non-empty
+    intersection with the requester's teams. The single source of the ACL predicate
+    — `TeamAclAuthorization.filter_artifacts` and the verifier both call it, so
+    retrieval filtering and verification cannot drift apart."""
+    return not acl_teams or bool(requester.teams.intersection(acl_teams))
+
+
 class TeamAclAuthorization:
     policy_name: str = "team_acl_v1"
 
     def filter_artifacts(
         self, requester: Requester, artifacts: list[ArtifactRow]
     ) -> list[ArtifactRow]:
-        return [
-            artifact
-            for artifact in artifacts
-            if not artifact.acl_teams or requester.teams.intersection(artifact.acl_teams)
-        ]
+        return [artifact for artifact in artifacts if acl_admits(requester, artifact.acl_teams)]

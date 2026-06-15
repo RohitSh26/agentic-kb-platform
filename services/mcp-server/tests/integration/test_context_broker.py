@@ -881,6 +881,54 @@ async def test_open_evidence_over_run_budget_writes_denied_row_and_errors(
     )
 
 
+async def test_open_evidence_spend_exhausts_shared_token_budget_for_request_more(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # MCP-F2: the per-agent token meter is SHARED across tools within a run.
+    # open_evidence and request_more both charge `pack.usage_for(subject).tokens`,
+    # so token spent expanding raw text must count against a later request_more.
+    # Generous request count (so the denial can only be token exhaustion), tight
+    # token allowance.
+    policy = BudgetPolicy(allowances={SUBJECT: AgentAllowance(max_requests=10, max_tokens=2500)})
+    search = FakeSearchClient()
+    async with factory() as session:
+        artifact_id = await insert_artifact(session, title="Payment long doc", body_text="z" * 9000)
+    search.seed("payment", [SearchHit(artifact_id=artifact_id, score=1.0)])
+    deps = make_broker_deps(factory, search, budget_policy=policy)
+    # Large run budget so the RUN budget never trips — only the per-agent token
+    # allowance is under test here.
+    created = await create_pack(deps, _create_pack_request(budget_tokens=18_000), REQUESTER)
+
+    # Spend 2000 of the 2500-token agent allowance via open_evidence.
+    opened = await open_evidence(
+        deps,
+        OpenEvidenceRequest(
+            context_pack_id=created.context_pack_id,
+            evidence_id=str(artifact_id),
+            max_tokens=2000,
+        ),
+        REQUESTER,
+    )
+    assert opened.tokens_used == 2000
+
+    # Only 500 tokens remain; a 1000-token request_more must be DENIED for token
+    # exhaustion even though plenty of request slots remain (cross-tool shared meter).
+    denied = await request_more(
+        deps,
+        _request_more("where are webhook signatures verified", max_tokens=1000).model_copy(
+            update={"context_pack_id": created.context_pack_id}
+        ),
+        REQUESTER,
+    )
+    assert denied.status == "denied"
+    assert denied.denial_reason is not None
+    assert "token allowance" in denied.denial_reason
+
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, RUN_ID)
+    assert [row.status for row in rows] == ["approved", "approved", "denied"]
+
+
 async def test_injection_style_document_is_data_only_and_changes_nothing(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -957,3 +1005,30 @@ async def test_list_retrievals_returns_events_and_audits_itself(
         ("context.read_pack", "reused"),
         ("ledger.list_retrievals", "approved"),
     ]
+
+
+async def test_list_retrievals_is_subject_scoped_and_hides_other_agents(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # MCP-F1: a run_id is not a grant to read every co-agent's returned/reused/new
+    # evidence UUIDs + token spend. Two subjects act in the SAME run; each
+    # list_retrievals must return ONLY its own events (invariant 6).
+    other = Requester(subject="other-agent", teams=frozenset())
+    search = FakeSearchClient()
+    async with factory() as session:
+        await _seed_payment_artifact(session, search)
+    deps = make_broker_deps(factory, search)
+
+    # Both agents create a pack in the same run.
+    await create_pack(deps, _create_pack_request(), REQUESTER)
+    await create_pack(deps, _create_pack_request(), other)
+
+    mine = await list_retrievals(deps, ListRetrievalsRequest(run_id=RUN_ID), REQUESTER)
+    # Only my own create_pack — never the other subject's row.
+    assert all(e.agent_name == SUBJECT for e in mine.events)
+    assert [e.tool for e in mine.events] == ["context.create_pack"]
+
+    theirs = await list_retrievals(deps, ListRetrievalsRequest(run_id=RUN_ID), other)
+    assert all(e.agent_name == "other-agent" for e in theirs.events)
+    # The other agent sees its own create_pack + my listing call is NOT visible to it.
+    assert [e.tool for e in theirs.events] == ["context.create_pack"]
