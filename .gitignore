@@ -34,3 +34,6 @@ evals/report.json
 
 # Real-source build run logs (local artifact, not committed)
 build-run*.md
+
+# Exported Obsidian vault (generated from Postgres, rebuildable, never committed)
+vault/
