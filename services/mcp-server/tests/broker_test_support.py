@@ -29,10 +29,14 @@ _REGISTRY_TABLES = (
 
 
 async def require_registry_schema(session: AsyncSession) -> None:
+    # A configured-but-unmigrated test DB is a setup error, NOT a reason to silently
+    # skip security-relevant tests (they'd quietly no-op). pytest.fail is loud; the
+    # "no DB configured at all" case is already handled by the module-level skipif.
     table = await session.execute(text("SELECT to_regclass('retrieval_event')"))
     if table.scalar_one_or_none() is None:
-        pytest.skip(
-            "registry tables missing — run kb-builder migrations first (make migrate-test-db)"
+        pytest.fail(
+            "TEST_DATABASE_URL is set but the registry schema is missing — "
+            "run `make migrate-test-db` first (these tests must not silently skip)."
         )
 
 

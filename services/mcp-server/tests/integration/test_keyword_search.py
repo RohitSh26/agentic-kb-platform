@@ -63,6 +63,23 @@ async def test_title_hits_outrank_body_hits(factory: async_sessionmaker[AsyncSes
     assert hits[0].score > hits[1].score
 
 
+async def test_scores_are_floats_so_the_ranker_can_weight_them(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Regression: Postgres NUMERIC arithmetic returns Decimal, but the ranker
+    # multiplies the score by a float temporal weight — a Decimal score raises
+    # "unsupported operand type(s) for *: 'Decimal' and 'float'" at create_pack time.
+    async with factory() as session:
+        await insert_artifact(session, title="Payment validation", body_text="payment flows")
+    client = PostgresKeywordSearchClient(factory)
+
+    hits = await client.search("payment", build_seq=ACTIVE_SEQ, top=10)
+
+    assert hits
+    assert all(isinstance(hit.score, float) for hit in hits)
+    assert hits[0].score * 0.8 >= 0.0  # the multiplication the ranker performs
+
+
 async def test_results_are_scoped_to_membership(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:

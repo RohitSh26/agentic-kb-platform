@@ -25,6 +25,11 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
   fail-closed Entra auth setup (and the proposed local-dev alternative, ADR-0016), the `/health`
   probe (200 vs 503), and a worked `create_pack → open_evidence → graph.get_neighbors →
   verify_answer` walk through the tools to **use** the KB.
+- [06 — End-to-end local walkthrough](06-end-to-end-walkthrough.md): **start here to understand the
+  whole system.** One command (`make demo`) builds a KB, serves it through the broker, and drives all
+  five tools — Postgres + uv only, no Ollama/Azure — with a stage-by-stage explanation of how the
+  build plane, the registry, the Context Broker, and the agent tools fit together and which invariant
+  each step enforces.
 
-Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0016), build units
+Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0017), build units
 in `docs/pr-briefs/` (through PR-33), cross-service agreements in `docs/contracts/`.

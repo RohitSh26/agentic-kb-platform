@@ -1,9 +1,13 @@
 SERVICES := kb-builder mcp-server
 TEST_DATABASE_URL ?= postgresql+asyncpg://postgres:postgres@localhost:5432/agentic_kb_test
 
-.PHONY: sync lint types test verify migrate-test-db eval-run \
+.PHONY: sync lint types test verify migrate-test-db eval-run demo \
 	sync-evals lint-evals types-evals test-evals verify-evals \
 	$(foreach s,$(SERVICES),sync-$(s) lint-$(s) types-$(s) test-$(s) verify-$(s))
+
+# Hermetic local end-to-end demo (Postgres + uv only; no Ollama/Azure). See dev-guide 06.
+demo:
+	./scripts/e2e-local.sh
 
 sync: $(foreach s,$(SERVICES),sync-$(s)) sync-evals
 lint: $(foreach s,$(SERVICES),lint-$(s)) lint-evals

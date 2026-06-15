@@ -95,7 +95,11 @@ async def fetch_artifacts(
             title=row.title,
             body_text=row.body_text,
             knowledge_kind=row.knowledge_kind,
-            authority_score=row.authority_score,
+            # NUMERIC ⇒ Decimal from asyncpg; ArtifactRow declares float | None and
+            # the ranker/cards do float arithmetic on it, so coerce at the boundary.
+            authority_score=(
+                float(row.authority_score) if row.authority_score is not None else None
+            ),
             source_uri=row.source_uri,
             acl_teams=tuple(row.acl_teams),
             source_type=row.source_type,

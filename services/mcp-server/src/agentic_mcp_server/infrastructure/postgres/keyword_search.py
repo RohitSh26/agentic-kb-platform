@@ -51,4 +51,9 @@ class PostgresKeywordSearchClient:
             params[f"tok{i}"] = f"%{_escape_like(token)}%"
         async with self.session_factory() as session:
             result = await session.execute(text(_build_query(len(tokens))), params)
-            return [SearchHit(artifact_id=row.artifact_id, score=row.score) for row in result]
+            # Postgres NUMERIC arithmetic returns Decimal; the SearchClient contract
+            # (and FakeSearchClient) yields float, and the ranker multiplies the score
+            # by a float temporal weight — so coerce here or Decimal*float raises.
+            return [
+                SearchHit(artifact_id=row.artifact_id, score=float(row.score)) for row in result
+            ]
