@@ -69,4 +69,15 @@ class KnowledgeEdge(Base):
             unique=True,
             postgresql_where=text("source = 'linker'"),
         ),
+        # Idempotency for phase-3B judge edges (PR-29): one row per logical
+        # (from, to, edge_type) judged link, so a rebuild refreshes in place
+        # instead of accreting a copy per build.
+        Index(
+            "uq_knowledge_edge_judge",
+            "from_artifact_id",
+            "to_artifact_id",
+            "edge_type",
+            unique=True,
+            postgresql_where=text("source = 'llm_judge'"),
+        ),
     )

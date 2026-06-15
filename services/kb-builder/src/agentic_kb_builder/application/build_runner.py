@@ -49,7 +49,9 @@ from agentic_kb_builder.infrastructure.postgres.models import (
     KnowledgeArtifact,
     SourceItem,
 )
+from agentic_kb_builder.linker.judge import RelationshipJudge, run_judge
 from agentic_kb_builder.linker.run import run_linker
+from agentic_kb_builder.linker.run_candidates import run_candidate_generator
 from agentic_kb_builder.linker.semantic import SimilarityProvider
 from agentic_kb_builder.structured_logging import get_logger
 from agentic_kb_builder.wikify.write import write_wikify_artifacts
@@ -127,6 +129,7 @@ class BuildRunner:
         embedder: Embedder,
         indexer: SearchIndexer,
         similarity: SimilarityProvider | None = None,
+        judge: RelationshipJudge | None = None,
     ) -> None:
         self._session = session
         self._kb_version = kb_version
@@ -137,6 +140,9 @@ class BuildRunner:
         self._embedder = embedder
         self._indexer = indexer
         self._similarity = similarity
+        # The phase-3B relationship judge (PR-29). None ⇒ no judging this build
+        # (candidate generation still runs so the audit set stays current).
+        self._judge = judge
         self._generation_gate = GenerationCacheGate(session)
         self._embedding_gate = EmbeddingCacheGate(session)
 
@@ -211,6 +217,23 @@ class BuildRunner:
                 valid_from_seq=self._build_seq,
                 similarity=self._similarity,
             )
+            # Phase 3A/3B (ADR-0010): the cheap, zero-LLM candidate generator emits
+            # cross-domain candidate pairs (audit only), then the LLM judge (if
+            # configured) rules on them and writes INFERRED_*/AMBIGUOUS edges. Both
+            # run AFTER the deterministic linker (so deterministic facts are excluded
+            # from candidates) and BEFORE invalidation + activation.
+            await run_candidate_generator(
+                self._session,
+                kb_version=self._kb_version,
+                similarity=self._similarity,
+            )
+            if self._judge is not None:
+                await run_judge(
+                    self._session,
+                    kb_version=self._kb_version,
+                    valid_from_seq=self._build_seq,
+                    judge=self._judge,
+                )
             # Invalidation pass (ADR-0013) runs AFTER all writes and the linker, but
             # BEFORE activation: deletion sweep, rename detection, ACL propagation.
             # Version-scoped — it only flips invalidated_at_seq / acl_teams, never
