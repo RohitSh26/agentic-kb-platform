@@ -13,9 +13,12 @@ Key handling (CLAUDE.md: no secrets in code/fixtures/logs):
   label under the key) so a host can tell WHICH key signed without exposing it.
 
 Canonicalisation: the signed payload is a deterministic, compact JSON object over
-exactly ``answer_hash`` + ``graph_version`` + ``claim_results`` (each claim reduced
-to id, result, and its check booleans). Ordering is fixed so the same receipt always
-hashes the same; any change to those fields changes the MAC.
+exactly ``answer_hash`` + ``graph_version`` + ``client_id`` + ``claim_results`` (each
+claim reduced to id, result, and its check booleans). Ordering is fixed so the same
+receipt always hashes the same; any change to those fields changes the MAC. Binding
+``client_id`` into the payload SCOPES the receipt to the client it was issued to: a
+valid receipt for client A does NOT validate for client B (cross-client reuse is
+rejected, ADR-0011 §6).
 """
 
 import hashlib
@@ -37,17 +40,20 @@ _KEY_ID_LABEL = b"agentic-kb:verify-receipt:key-id:v1"
 
 
 def _canonical_payload(receipt: VerificationReceipt) -> bytes:
-    """Deterministic bytes over answer_hash + graph_version + claim_results.
+    """Deterministic bytes over answer_hash + graph_version + client_id + claim_results.
 
     Only the fields a host must be able to trust are signed: the answer hash, the
-    served graph version, and each claim's id/result/check booleans. ``issued_at``,
-    ``signature``, and ``key_id`` are deliberately excluded (signing them would be
-    circular / non-deterministic). Compact, key-sorted JSON makes the encoding
-    stable across processes.
+    served graph version, the client the receipt was issued to, and each claim's
+    id/result/check booleans. ``issued_at``, ``signature``, and ``key_id`` are
+    deliberately excluded (signing them would be circular / non-deterministic).
+    Including ``client_id`` binds the MAC to the client — a receipt for client A
+    cannot be replayed as client B's (cross-client reuse fails the comparison).
+    Compact, key-sorted JSON makes the encoding stable across processes.
     """
     payload = {
         "answer_hash": receipt.answer_hash,
         "graph_version": receipt.graph_version,
+        "client_id": receipt.client_id,
         "claim_results": [
             {
                 "claim_id": claim.claim_id,
@@ -82,34 +88,47 @@ def _load_key(env_var: str) -> bytes:
 def sign_receipt(
     receipt: VerificationReceipt, *, env_var: str = DEFAULT_SIGNING_KEY_ENV
 ) -> VerificationReceipt:
-    """Return a copy of ``receipt`` with ``signature`` + ``client_id``-independent
-    ``key_id`` populated. The key value is read from ``env_var`` at call time.
+    """Return a copy of ``receipt`` with ``signature`` + ``key_id`` populated. The
+    key value is read from ``env_var`` at call time.
 
-    The MAC is HMAC-SHA256 over the canonical payload. Logs carry the key_id and
-    the answer_hash only — never the key value (no secret in logs).
+    The MAC is HMAC-SHA256 over the canonical payload — which INCLUDES the receipt's
+    ``client_id``, so the signature scopes the receipt to that client. Stamp the
+    ``client_id`` onto the receipt (via ``model_copy``) BEFORE calling this. Logs carry
+    the key_id, answer_hash, and client_id only — never the key value (no secret in logs).
     """
     key = _load_key(env_var)
     mac = hmac.new(key, _canonical_payload(receipt), hashlib.sha256).hexdigest()
     key_id = compute_key_id(key)
     logger.info(
-        "event=receipt_signed answer_hash=%s key_id=%s claims=%d",
+        "event=receipt_signed answer_hash=%s key_id=%s client_id=%s claims=%d",
         receipt.answer_hash,
         key_id,
+        receipt.client_id,
         len(receipt.claim_results),
     )
     return receipt.model_copy(update={"signature": mac, "key_id": key_id})
 
 
-def verify_receipt_signature(receipt: VerificationReceipt, key: str | bytes) -> bool:
+def verify_receipt_signature(
+    receipt: VerificationReceipt,
+    key: str | bytes,
+    *,
+    expected_client_id: str | None = None,
+) -> bool:
     """Stateless: True iff ``receipt.signature`` is a valid MAC over its canonical
-    payload under ``key``. No database, no re-running of checks.
+    payload under ``key`` AND (when ``expected_client_id`` is given) the receipt was
+    issued to that client. No database, no re-running of checks.
 
     A host calls this with the same key (resolved from ITS configured env/Key Vault
-    name) to decide whether to treat the answer as platform-trusted. A tampered
-    ``answer_hash`` / ``graph_version`` / ``claim_results`` changes the payload and
-    fails the constant-time MAC comparison.
+    name) and the client it is checking for, to decide whether to treat the answer as
+    platform-trusted. A tampered ``answer_hash`` / ``graph_version`` / ``client_id`` /
+    ``claim_results`` changes the payload and fails the constant-time MAC comparison;
+    passing the wrong ``expected_client_id`` is rejected even before the MAC check —
+    a valid receipt for client A does NOT validate for client B.
     """
     if receipt.signature is None:
+        return False
+    if expected_client_id is not None and receipt.client_id != expected_client_id:
         return False
     key_bytes = key.encode("utf-8") if isinstance(key, str) else key
     expected = hmac.new(key_bytes, _canonical_payload(receipt), hashlib.sha256).hexdigest()

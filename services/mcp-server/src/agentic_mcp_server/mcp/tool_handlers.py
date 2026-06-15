@@ -9,6 +9,10 @@ the annotations set here.
 from collections.abc import Callable, Coroutine
 from typing import Any
 
+from fastmcp.exceptions import ToolError
+
+from agentic_mcp_server.auth.client_identity import ClientIdentity
+from agentic_mcp_server.auth.scopes import client_may_call
 from agentic_mcp_server.context_broker import (
     evidence,
     graph,
@@ -17,7 +21,12 @@ from agentic_mcp_server.context_broker import (
     request_more,
     verify,
 )
-from agentic_mcp_server.context_broker.dependencies import BrokerDeps, current_requester
+from agentic_mcp_server.context_broker.dependencies import (
+    BrokerDeps,
+    current_client_identity,
+    current_requester,
+)
+from agentic_mcp_server.context_broker.platform_trust import evaluate_platform_trust
 from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
 from agentic_mcp_server.mcp.tool_schemas.context import (
@@ -28,32 +37,63 @@ from agentic_mcp_server.mcp.tool_schemas.context import (
 )
 from agentic_mcp_server.mcp.tool_schemas.graph import GetNeighborsRequest
 from agentic_mcp_server.mcp.tool_schemas.ledger import ListRetrievalsRequest
-from agentic_mcp_server.mcp.tool_schemas.verification import VerifyAnswerRequest
+from agentic_mcp_server.mcp.tool_schemas.verification import (
+    PlatformTrustRequest,
+    VerifyAnswerRequest,
+)
 
 HandlerFn = Callable[..., Coroutine[Any, Any, McpModel]]
 
 
 def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
+    def _client(tool_name: str) -> ClientIdentity:
+        # Resolve the client/app identity (alongside the user Requester) and enforce
+        # its scope grant ADDITIVELY — a registered client lacking the tool's scope is
+        # denied here, before the tool runs (and before the user ACL filter the tool
+        # then applies). Unregistered clients are never scope-gated (opt-in only).
+        client = current_client_identity(deps.client_registry)
+        if not client_may_call(client, tool_name):
+            raise ToolError(f"client not authorized for {tool_name} (missing scope)")
+        return client
+
     async def create_pack(request: CreatePackRequest) -> McpModel:
+        _client("context.create_pack")
         return await pack.create_pack(deps, request, current_requester())
 
     async def read_pack(request: ReadPackRequest) -> McpModel:
+        _client("context.read_pack")
         return await pack.read_pack(deps, request, current_requester())
 
     async def request_more_handler(request: RequestMoreRequest) -> McpModel:
+        _client("context.request_more")
         return await request_more.request_more(deps, request, current_requester())
 
     async def open_evidence(request: OpenEvidenceRequest) -> McpModel:
+        _client("context.open_evidence")
         return await evidence.open_evidence(deps, request, current_requester())
 
     async def get_neighbors(request: GetNeighborsRequest) -> McpModel:
+        _client("graph.get_neighbors")
         return await graph.get_neighbors(deps, request, current_requester())
 
     async def list_retrievals(request: ListRetrievalsRequest) -> McpModel:
+        _client("ledger.list_retrievals")
         return await ledger.list_retrievals(deps, request, current_requester())
 
     async def verify_answer(request: VerifyAnswerRequest) -> McpModel:
-        return await verify.verify_answer(deps, request, current_requester())
+        client = _client("context.verify_answer")
+        # Stamp the validated client into the receipt (binds + scopes it).
+        return await verify.verify_answer(deps, request, current_requester(), client)
+
+    async def platform_trust(request: PlatformTrustRequest) -> McpModel:
+        # Official-client gate: trusted ONLY for a verification_required client with a
+        # valid, client-matched, passing receipt; structured denial otherwise; a
+        # non-opted-in client gets not_required (unchanged). Composes with the ACL +
+        # trust filters the retrieval tools already enforced.
+        client = _client("context.platform_trust")
+        return evaluate_platform_trust(
+            client, request.receipt, signing_key_env=deps.settings.signing_key_env
+        )
 
     handlers: dict[str, HandlerFn] = {
         "context.create_pack": create_pack,
@@ -63,6 +103,7 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         "graph.get_neighbors": get_neighbors,
         "ledger.list_retrievals": list_retrievals,
         "context.verify_answer": verify_answer,
+        "context.platform_trust": platform_trust,
     }
     for tool_name, handler in handlers.items():
         schema = TOOL_SCHEMAS[tool_name]

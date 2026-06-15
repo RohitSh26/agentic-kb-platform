@@ -26,7 +26,7 @@ from agentic_mcp_server.mcp.tool_schemas.verification import (
 KEY = "unit-test-key-value-not-a-secret"
 
 
-def _receipt() -> VerificationReceipt:
+def _receipt(*, client_id: str | None = None) -> VerificationReceipt:
     return VerificationReceipt(
         answer_hash="a" * 64,
         graph_version="kb-test",
@@ -47,6 +47,7 @@ def _receipt() -> VerificationReceipt:
                 ),
             )
         ],
+        client_id=client_id,
     )
 
 
@@ -93,6 +94,25 @@ def test_missing_key_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(DEFAULT_SIGNING_KEY_ENV, raising=False)
     with pytest.raises(RuntimeError):
         sign_receipt(_receipt())
+
+
+def test_client_id_is_bound_into_the_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A receipt bound to client A must NOT validate when checked for client B
+    # (cross-client reuse blocked) — client_id is part of the signed payload.
+    monkeypatch.setenv(DEFAULT_SIGNING_KEY_ENV, KEY)
+    signed = sign_receipt(_receipt(client_id="client-a"))
+    assert verify_receipt_signature(signed, KEY, expected_client_id="client-a") is True
+    assert verify_receipt_signature(signed, KEY, expected_client_id="client-b") is False
+    # With no expected client the MAC still validates (host may check binding itself).
+    assert verify_receipt_signature(signed, KEY) is True
+
+
+def test_tampering_client_id_breaks_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Swapping client_id after signing changes the canonical payload ⇒ MAC mismatch.
+    monkeypatch.setenv(DEFAULT_SIGNING_KEY_ENV, KEY)
+    signed = sign_receipt(_receipt(client_id="client-a"))
+    forged = signed.model_copy(update={"client_id": "client-b"})
+    assert verify_receipt_signature(forged, KEY) is False
 
 
 def test_key_value_never_logged(

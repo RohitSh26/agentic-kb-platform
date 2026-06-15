@@ -128,6 +128,37 @@ class ClaimReceipt(McpModel):
     failed_reasons: list[str] = Field(default_factory=list)
 
 
+#: Outcome of the official-client platform-trust gate (ADR-0011 §6, phase 4). A
+#: ``verification_required`` client is platform-trusted ONLY with a valid,
+#: client-matched receipt; otherwise the broker returns a STRUCTURED denial (no
+#: silent pass). A client that did not opt into ``verification_required`` is
+#: ``not_required`` — its behaviour is unchanged.
+PlatformTrustStatus = Literal["trusted", "denied", "not_required"]
+
+#: Stable denial reason codes for the platform-trust gate (ids/outcomes only,
+#: never answer/evidence text or any secret).
+TRUST_REASON_NO_RECEIPT = "verification_required_no_receipt"
+TRUST_REASON_UNSIGNED = "receipt_unsigned"
+TRUST_REASON_BAD_SIGNATURE = "receipt_signature_invalid"
+TRUST_REASON_CLIENT_MISMATCH = "receipt_client_mismatch"
+TRUST_REASON_NOT_PASSED = "receipt_overall_not_passed"
+
+
+class PlatformTrustDecision(McpModel):
+    """The broker's official-client trust verdict for a client + (optional) receipt.
+
+    ``status`` is ``trusted`` only when a ``verification_required`` client presents a
+    valid, client-matched, passing receipt; ``denied`` (with ``reason``) otherwise;
+    ``not_required`` for a client that did not opt in. ``client_id`` echoes the
+    validated client the decision was made for.
+    """
+
+    status: PlatformTrustStatus
+    client_id: str
+    verification_required: bool
+    reason: str | None = None
+
+
 class VerificationReceipt(McpModel):
     receipt_schema_version: Literal[1] = RECEIPT_SCHEMA_VERSION
     # sha256 over the normalized claims (stable for the same normalized input).
@@ -137,7 +168,10 @@ class VerificationReceipt(McpModel):
     verifier_levels_run: list[VerifierLevel]
     overall: OverallResult
     claim_results: list[ClaimReceipt]
-    # Reserved for phase-4 client identity + signing; null in phase 1.
+    # The validated client identity this receipt was issued to (phase 4). Stamped
+    # from the authenticated client credential, bound into the signed payload, and
+    # used to scope the receipt: a receipt for client A does NOT validate for B.
+    # Null when no client identity was resolved (e.g. an L0-only internal call).
     client_id: str | None = None
     # HMAC-SHA256 over (answer_hash + graph_version + claim_results); null until a
     # signing key is configured (PR-31). A host validates it statelessly via
@@ -147,3 +181,15 @@ class VerificationReceipt(McpModel):
     # never the key itself); null when the receipt is unsigned. Additive — a
     # phase-1 caller that ignores it is unaffected.
     key_id: str | None = None
+
+
+class PlatformTrustRequest(McpModel):
+    """Ask the broker whether the calling client's answer is platform-trusted.
+
+    The client identity is taken from the authenticated session (never a request
+    field). ``receipt`` is the receipt the client obtained from ``context.verify_answer``
+    (omit it to test the gate with no receipt). The broker evaluates it against the
+    calling client's ``verification_required`` policy and the receipt's client binding.
+    """
+
+    receipt: VerificationReceipt | None = None

@@ -46,6 +46,7 @@ from datetime import UTC, datetime
 
 from fastmcp.exceptions import ToolError
 
+from agentic_mcp_server.auth.client_identity import ClientIdentity
 from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.claim_ledger import adjudicate_typed_fact
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
@@ -299,7 +300,10 @@ def _evidence_uuids(claim: ClaimInput) -> list[uuid.UUID]:
 
 
 async def verify_answer(
-    deps: BrokerDeps, request: VerifyAnswerRequest, requester: Requester
+    deps: BrokerDeps,
+    request: VerifyAnswerRequest,
+    requester: Requester,
+    client: ClientIdentity | None = None,
 ) -> VerificationReceipt:
     started = time.monotonic()
     answer_hash = _normalized_answer_hash(request)
@@ -453,7 +457,7 @@ async def verify_answer(
     # This is the cost guard: L3 never runs on an L2-resolved claim.
     l3_verdicts: dict[str, _L3State] = {}
     if run_l3 and deps.entailment_client is not None and is_active:
-        client = deps.entailment_client
+        entailment = deps.entailment_client
         async with deps.session_factory() as session:
             for entry in deterministic:
                 if not _l3_eligible(entry):
@@ -465,7 +469,7 @@ async def verify_answer(
                     continue
                 outcome = await run_l3_entailment(
                     session,
-                    client=client,
+                    client=entailment,
                     claim_text=entry.claim.text,
                     resolvable_cited_ids=cited_resolvable,
                     build_seq=active.build_seq,
@@ -535,13 +539,20 @@ async def verify_answer(
             ),
         )
 
+    # The validated client identity scopes the receipt: it is stamped into the receipt
+    # AND bound into the signed payload, so a receipt for client A does not validate
+    # for client B. Identity comes from the authenticated client credential, never a
+    # request field. Absent (internal/L0-only call) ⇒ null, unchanged behaviour.
+    client_id = client.client_id if client is not None else None
+
     l3_ran = sum(1 for s in l3_verdicts.values())
     l3_cache_hits = sum(1 for s in l3_verdicts.values() if s.cache_hit)
     logger.info(
-        "broker.verify_answer answer_id=%s subject=%s graph_version=%s claims=%d "
+        "broker.verify_answer answer_id=%s subject=%s client_id=%s graph_version=%s claims=%d "
         "levels=%s overall=%s passed=%d l3_ran=%d l3_cache_hits=%d",
         request.answer_id,
         requester.subject,
+        client_id,
         graph_version,
         len(claim_results),
         ",".join(levels),
@@ -558,7 +569,7 @@ async def verify_answer(
         verifier_levels_run=levels,
         overall=overall,
         claim_results=claim_results,
-        client_id=None,
+        client_id=client_id,
         signature=None,
         key_id=None,
     )

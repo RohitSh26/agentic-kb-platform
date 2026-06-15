@@ -73,8 +73,8 @@ a `null` check means that level produced no verdict for that claim.
       "failed_reasons": []
     }
   ],
-  "client_id": "string|null",                   // reserved (phase 4 client identity); null in phase 1
-  "signature": "string|null",                   // phase 4: HMAC-SHA256 over answer_hash+graph_version+claim_results; null when no signing key is configured
+  "client_id": "string|null",                   // phase 4: the VALIDATED client this receipt was issued to; bound into the signature (scopes the receipt). Null when no client identity was resolved
+  "signature": "string|null",                   // phase 4: HMAC-SHA256 over answer_hash+graph_version+client_id+claim_results; null when no signing key is configured
   "key_id": "string|null"                       // phase 4: non-secret fingerprint of the signing key; null when unsigned
 }
 ```
@@ -167,21 +167,40 @@ dev/test model is Ollama (`gemma3:4b`); the backend is swappable behind `Entailm
 ## Signed receipts (phase 4)
 
 The verifier signs the receipt over a canonical serialization of `answer_hash` + `graph_version` +
-`claim_results` (each claim reduced to id, result, and its check booleans) using **HMAC-SHA256**.
-The key is read at runtime from an environment variable whose NAME is configuration (default
-`VERIFY_SIGNING_KEY`); the key VALUE is never a literal in code, fixtures, or logs. The MAC is
-written to `signature` and a non-secret key fingerprint to `key_id`.
+`client_id` + `claim_results` (each claim reduced to id, result, and its check booleans) using
+**HMAC-SHA256**. The key is read at runtime from an environment variable whose NAME is configuration
+(default `VERIFY_SIGNING_KEY`); the key VALUE is never a literal in code, fixtures, or logs. The MAC
+is written to `signature` and a non-secret key fingerprint to `key_id`.
 
-A host validates a receipt **statelessly** with `verify_receipt_signature(receipt, key)` — no
-database, no re-running of checks. Tampering with `answer_hash`, `graph_version`, or any
-`claim_results` entry changes the canonical payload and fails the constant-time MAC comparison.
-Signing is additive: when no key is configured the verifier still issues an (unsigned) receipt —
-L0 stays the mandatory floor; a receipt never requires L3 or a signature to exist.
+A host validates a receipt **statelessly** with `verify_receipt_signature(receipt, key,
+expected_client_id=...)` — no database, no re-running of checks. Tampering with `answer_hash`,
+`graph_version`, `client_id`, or any `claim_results` entry changes the canonical payload and fails
+the constant-time MAC comparison. Signing is additive: when no key is configured the verifier still
+issues an (unsigned) receipt — L0 stays the mandatory floor; a receipt never requires L3 or a
+signature to exist.
+
+## Client identity + official-client enforcement (phase 4, ADR-0011 §6)
+
+A request carries BOTH a per-user subject and a registered **client/app identity** (`client_id` +
+`scopes` + `verification_required`), resolved from the authenticated client credential (never a
+request field; see `mcp-tools-contract.md`, `MCP_CLIENT_REGISTRY`). The verifier stamps the
+**validated** `client_id` into the receipt and **binds it into the signature** — so a receipt is
+scoped to the client it was issued to: **a valid receipt for client A does NOT validate for client
+B** (cross-client reuse is rejected, even before the MAC check, via `expected_client_id`).
+
+The broker exposes `context.platform_trust`: for a `verification_required` client, an answer is
+marked **platform-trusted only** when accompanied by a valid, client-matched, **passing** receipt;
+otherwise it returns a clear STRUCTURED denial (`reason ∈ {verification_required_no_receipt,
+receipt_unsigned, receipt_client_mismatch, receipt_signature_invalid, receipt_overall_not_passed}`)
+— never a silent pass. A client that did **not** opt into `verification_required` gets
+`not_required` (its behaviour is unchanged). This gate **composes with** the ACL + trust filters
+already enforced on retrieval — client scopes are ADDITIONAL to user-level ACLs, never a replacement.
 
 ## Forward-compatibility (no debt for phase 4)
 
 - `client_id` and `signature` are present from v1 (nullable) so phase-4 client identity + signing
-  add **values**, not fields — no schema break.
+  add **values**, not fields — no schema break. PR-32 populates `client_id` (the validated client)
+  and includes it in the signed payload.
 - `verifier_levels_run` is a list so L1–L3 append without restructuring.
 - `checks` is an open object keyed by check name; L1/L2/L3 add keys (e.g. `L1_coverage`,
   `L2_typed_fact`, `L3_entailment`) without changing existing ones.
