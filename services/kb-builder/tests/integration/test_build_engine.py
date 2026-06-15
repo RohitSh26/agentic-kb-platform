@@ -26,7 +26,7 @@ from agentic_kb_builder.application import (
     code_graph_cache_key,
     get_active_kb_version,
 )
-from agentic_kb_builder.connectors import GitHubCodeConnector
+from agentic_kb_builder.connectors import GitHubCodeConnector, GitHubDocConnector
 from agentic_kb_builder.domain import (
     Chunk,
     ConceptDraft,
@@ -238,11 +238,28 @@ REF = SourceRef(
     path="a.py",
 )
 
+# A prose (github_doc) source for the WIKIFY-pipeline tests. ADR-0018 routes
+# github_code to graphify-only (no LLM), so wikify behaviour is now exercised
+# through a doc source — the LLM is reserved for prose.
+DOC_URI = "https://github.com/o/r/blob/sha1/docs/guide.md"
+DOC_REF = SourceRef(
+    source_type="github_doc",
+    source_uri=DOC_URI,
+    source_version="sha1",
+    repo="o/r",
+    path="docs/guide.md",
+)
+
 Spies = tuple[BuildRunner, SpyWikifier, SpyGraphifier, SpyEmbedder, SpyIndexer]
 
 
 def _connector(raw: str) -> GitHubCodeConnector:
     return GitHubCodeConnector(FakeBackend([REF], {URI: raw}))
+
+
+def _doc_connector(raw: str) -> GitHubDocConnector:
+    """A github_doc connector for wikify-pipeline tests (graphify never runs on it)."""
+    return GitHubDocConnector(FakeBackend([DOC_REF], {DOC_URI: raw}))
 
 
 def _runner(session: AsyncSession, kb_version: str = "v-test.1") -> Spies:
@@ -269,21 +286,22 @@ async def _count(session: AsyncSession, model: type[KnowledgeArtifact] | type) -
 async def test_first_build_processes_then_unchanged_build_skips_everything(
     session: AsyncSession,
 ) -> None:
+    # A github_doc source (ADR-0018): wikify runs, graphify never does.
     runner, wikifier, graphifier, embedder, indexer = _runner(session)
-    run1 = await runner.run([_connector("x = 1\n")])
+    run1 = await runner.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
     assert run1.sources_seen == 1
     assert run1.sources_changed == 1
     assert run1.llm_calls == 1
-    # summary body + code_symbol snippet are embedded; code_file is pointer-only
-    assert run1.embedding_calls == 2
-    assert (wikifier.calls, graphifier.calls, embedder.calls, indexer.calls) == (1, 1, 2, 1)
+    # only the summary body is embedded (no code source ⇒ no graphify artifacts)
+    assert run1.embedding_calls == 1
+    assert (wikifier.calls, graphifier.calls, embedder.calls, indexer.calls) == (1, 0, 1, 1)
 
     seen_before = (await session.execute(select(SourceItem.last_seen_at))).scalar_one()
     assert seen_before is not None
 
     runner2, wikifier2, graphifier2, embedder2, indexer2 = _runner(session, "v-test.2")
-    run2 = await runner2.run([_connector("x = 1\n")])
+    run2 = await runner2.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
     assert run2.sources_seen == 1
     assert run2.sources_changed == 0
@@ -338,25 +356,27 @@ async def test_cache_hit_prevents_model_calls_even_when_source_looks_changed(
     session: AsyncSession,
 ) -> None:
     """Simulates a retry after a partial failure: source_item looks stale but the
-    generation/embedding caches already hold this content. No model is called."""
+    generation/embedding caches already hold this content. No model is called.
+
+    A github_doc source (ADR-0018) exercises the wikify generation-cache gate."""
     runner, *_ = _runner(session)
-    await runner.run([_connector("x = 1\n")])
+    await runner.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
 
     await session.execute(update(SourceItem).values(content_hash="stale"))
     await session.commit()
 
     runner2, wikifier2, graphifier2, embedder2, indexer2 = _runner(session, "v-test.2")
-    run2 = await runner2.run([_connector("x = 1\n")])
+    run2 = await runner2.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
     assert run2.sources_changed == 1
     assert run2.llm_calls == 0
     assert run2.embedding_calls == 0
     assert (wikifier2.calls, graphifier2.calls, embedder2.calls) == (0, 0, 0)
     assert indexer2.calls == 1  # reindexing reused artifacts is allowed
-    # summary + code_file + code_symbol, and the calls edge — no duplicates on retry
-    assert await _count(session, KnowledgeArtifact) == 3
-    assert await _count(session, KnowledgeEdge) == 1
+    # just the wikify summary — no duplicates on retry; doc sources have no edges
+    assert await _count(session, KnowledgeArtifact) == 1
+    assert await _count(session, KnowledgeEdge) == 0
 
 
 @requires_db
@@ -372,7 +392,8 @@ async def test_failed_wikify_leaves_no_cache_row_or_artifacts_but_audit_row_surv
         indexer=SpyIndexer(),
     )
     with pytest.raises(RuntimeError, match="model exploded"):
-        await runner.run([_connector("x = 1\n")])
+        # wikify runs only for prose now (ADR-0018) — a github_doc source.
+        await runner.run([_doc_connector("Some prose to summarize.\n")])
     # partial work was rolled back by the runner...
     assert await _count(session, GenerationCache) == 0
     assert await _count(session, KnowledgeArtifact) == 0
@@ -422,13 +443,13 @@ async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
-    await runner.run([_connector("x = 1\n")])
+    await runner.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
-    # 2 wikify concepts + 2 graphify code artifacts (code_file + code_symbol)
-    assert await _count(session, KnowledgeArtifact) == 4
-    # one wikify cache row + one graphify cache row (github_code source)
-    assert await _count(session, GenerationCache) == 2
-    assert await _count(session, GenerationCacheArtifact) == 4
+    # 2 wikify concepts (a github_doc source ⇒ no graphify artifacts)
+    assert await _count(session, KnowledgeArtifact) == 2
+    # one wikify cache row (no graphify cache row for a doc source)
+    assert await _count(session, GenerationCache) == 1
+    assert await _count(session, GenerationCacheArtifact) == 2
     # the wikify mapping preserves generation order (ORDER BY position)
     mapped_titles = (
         (
@@ -462,14 +483,14 @@ async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
         embedder=embedder2,
         indexer=indexer2,
     )
-    run2 = await runner2.run([_connector("x = 1\n")])
+    run2 = await runner2.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
     assert run2.llm_calls == 0
     assert wikifier2.calls == 0
     assert embedder2.calls == 0  # embedding cache also hits for every artifact
     assert indexer2.calls == 1
-    assert await _count(session, KnowledgeArtifact) == 4
-    assert await _count(session, GenerationCacheArtifact) == 4
+    assert await _count(session, KnowledgeArtifact) == 2
+    assert await _count(session, GenerationCacheArtifact) == 2
 
 
 @requires_db
@@ -542,19 +563,17 @@ async def test_wikify_pipeline_cache_miss_writes_then_cache_hit_skips_model(
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
-    run1 = await runner.run([_connector(raw)])
+    run1 = await runner.run([_doc_connector(raw)])
     await session.commit()
     assert model_client.calls == 1
     assert run1.llm_calls == 1
 
     artifacts = (await session.execute(select(KnowledgeArtifact))).scalars().all()
     by_type = {artifact.artifact_type: artifact for artifact in artifacts}
-    # wikify: 1 chunk + summary + concept + the quote-backed fact (the invented
-    # fact is dropped); graphify: code_file + code_symbol
+    # a github_doc source (ADR-0018) ⇒ wikify only: 1 chunk + summary + concept +
+    # the quote-backed fact (the invented fact is dropped); no graphify artifacts.
     assert sorted(by_type) == [
         "chunk",
-        "code_file",
-        "code_symbol",
         "concept",
         "source_backed_fact",
         "summary",
@@ -579,11 +598,11 @@ async def test_wikify_pipeline_cache_miss_writes_then_cache_hit_skips_model(
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
-    run2 = await runner2.run([_connector(raw)])
+    run2 = await runner2.run([_doc_connector(raw)])
     await session.commit()
     assert model_client2.calls == 0
     assert run2.llm_calls == 0
-    assert await _count(session, KnowledgeArtifact) == 6
+    assert await _count(session, KnowledgeArtifact) == 4
 
 
 class FixtureGraphifier:
