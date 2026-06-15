@@ -199,10 +199,13 @@ def map_extraction(
             continue
         target_file = node_is_file.get(target_id)
         if target_file is None:
-            # Resolve the target's source file through the SAME override used for nodes,
-            # so a per-file extraction maps the import to the REAL source path, not the
-            # temp file the tool parsed. Without this the target keeps the temp path and
-            # the edge is dropped at write time as an unresolved key (graphify_edge_dropped).
+            # Apply source_file_override to the target the SAME way src_file() applies it
+            # to every node. The override is only ever set for a single-file extraction,
+            # where every node (file and symbol) shares the one temp path Graphify parsed,
+            # so overriding the target to that single real path is correct. Without this the
+            # target keeps the temp path and the edge is dropped at write time as an
+            # unresolved key (graphify_edge_dropped). (Cross-file graphs are never passed an
+            # override — the per-file GraphifyGraphifier extracts one file at a time.)
             raw_target = _node_source_file(nodes, target_id)
             if raw_target is None:
                 continue

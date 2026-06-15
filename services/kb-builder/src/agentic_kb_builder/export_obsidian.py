@@ -230,12 +230,15 @@ async def _resolve_target(session: AsyncSession, kb_version: str | None) -> tupl
     """Resolve the export target to (kb_version label, build_seq cutoff S).
 
     Default (kb_version=None) is the active run; an explicit label selects that
-    historical run. Returns None when no such run exists.
+    historical run. Returns None when no such run exists. A label is not unique
+    (only build_seq is) — a retried build can reuse it — so for an explicit label
+    we take the highest build_seq, the only meaningful cutoff. The active case has
+    exactly one row (partial unique index), so the order is a no-op there.
     """
     stmt = select(KbBuildRun.kb_version, KbBuildRun.build_seq)
     stmt = stmt.where(
         KbBuildRun.status == "active" if kb_version is None else KbBuildRun.kb_version == kb_version
-    )
+    ).order_by(KbBuildRun.build_seq.desc())
     row = (await session.execute(stmt)).first()
     if row is None:
         return None

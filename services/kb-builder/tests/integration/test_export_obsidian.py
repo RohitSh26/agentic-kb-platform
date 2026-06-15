@@ -272,6 +272,17 @@ async def test_resolve_target_active_and_unknown(session: AsyncSession) -> None:
 
 
 @requires_db
+async def test_resolve_target_same_label_takes_highest_build_seq(session: AsyncSession) -> None:
+    # A label is not unique (only build_seq is): a retried build can reuse it. The
+    # explicit-label lookup must deterministically return the highest build_seq, the
+    # only meaningful membership cutoff — not an arbitrary row.
+    session.add(KbBuildRun(kb_version=KB_VERSION, build_seq=3, status="superseded"))
+    session.add(KbBuildRun(kb_version=KB_VERSION, build_seq=8, status="active"))
+    await session.commit()
+    assert await _resolve_target(session, KB_VERSION) == (KB_VERSION, 8)
+
+
+@requires_db
 async def test_interval_membership_excludes_superseded_rows(
     session: AsyncSession, tmp_path: Path
 ) -> None:
