@@ -18,6 +18,8 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from harness.baseline import compare, load_baseline, write_baseline
+from harness.candidate_fixture import EXPECTED_RELATIONS, GENERATED_CANDIDATES
+from harness.candidates import aggregate_candidates
 from harness.cases import BENCHMARK_TASK_TYPES, EvalCase, load_cases
 from harness.executor import execute_case
 from harness.fixtures import clean_registry, require_registry_schema
@@ -31,6 +33,10 @@ EVALS_DIR = Path(__file__).resolve().parent
 BASELINE_PATH = EVALS_DIR / "baseline.json"
 REPORT_PATH = EVALS_DIR / "report.json"
 GOLDEN_DIR = EVALS_DIR / "retrieval_cases" / "golden"
+
+
+def _fmt(value: float | None) -> str:
+    return f"{value:.2f}" if value is not None else "n/a"
 
 
 def _git_sha() -> str | None:
@@ -145,6 +151,17 @@ def main() -> int:
         intents = sorted({case.intent for case in golden})
         print(
             f"golden queries: {len(golden)} loaded (evidence-recall floor 0.95) intents={intents}"
+        )
+        # Phase-3A candidate quality (docs/contracts/relationship-candidates.md): recall vs
+        # the cross-domain golden expectations, sampled precision, volume per artifact, and
+        # cost-if-judged — the inputs to the phase-3B affordability decision. NO LLM, no edges.
+        cand = aggregate_candidates(GENERATED_CANDIDATES, EXPECTED_RELATIONS)
+        print(
+            "candidate generator (phase 3A): "
+            f"recall={_fmt(cand.recall)} precision={_fmt(cand.precision)} "
+            f"volume_per_artifact={_fmt(cand.volume_per_artifact)} "
+            f"candidates={cand.candidate_count} "
+            f"cost_if_judged_tokens={cand.cost_if_judged_tokens}"
         )
 
     return exit_code(
