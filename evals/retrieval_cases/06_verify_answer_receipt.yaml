@@ -1,0 +1,47 @@
+id: verify-answer-receipt
+task_type: retrieval_recall
+task: "session retention verification provenance"
+approved_context_plan: "verify the retention claim against its source evidence"
+budget_tokens: 8000
+# context.verify_answer is the trust boundary (ADR-0011, verification-receipt.md):
+# an answer is platform-trusted iff it carries a valid receipt. This case asserts
+# BOTH ends of the L0 gate (F1):
+#   1. a claim citing evidence the impl-agent actually retrieved ⇒ overall "passed";
+#   2. a claim citing in-version, ACL-visible evidence the impl-agent NEVER retrieved
+#      ⇒ overall "failed" on L0_in_requester_ledger (no verifier oracle, invariant 6).
+# The verifier writes its own retrieval_event; denial/failed verdicts are contractual.
+fixtures:
+  artifacts:
+    - key: retention_evidence
+      title: "Session retention verification source"
+      body_text: "Session retention is 90 days, enforced by the retention job."
+      authority_score: 0.9
+    - key: unretrieved_evidence
+      title: "Retention provenance side note"
+      body_text: "An auxiliary provenance note never surfaced to the agent."
+      authority_score: 0.8
+  search_seeds:
+    - keyword: retention
+      hits: [retention_evidence]
+script:
+  # passing receipt: the agent retrieved retention_evidence (the `retrieved` list
+  # seeds its ledger row), then verifies a claim citing exactly that id.
+  - tool: context.verify_answer
+    agent: impl-agent
+    answer_id: "ans-retention-passed"
+    claim: "Session retention is 90 days."
+    evidence: [retention_evidence]
+    retrieved: [retention_evidence]
+    expect_overall: passed
+  # failing receipt: the claim cites unretrieved_evidence, which exists in the
+  # active version and is ACL-visible but was NEVER retrieved by this requester ⇒
+  # L0_in_requester_ledger fails ⇒ overall failed (the F1 negative).
+  - tool: context.verify_answer
+    agent: impl-agent
+    answer_id: "ans-retention-failed"
+    claim: "Session retention is governed by an auxiliary note."
+    evidence: [unretrieved_evidence]
+    retrieved: []
+    expect_overall: failed
+expected:
+  docs: [retention_evidence]

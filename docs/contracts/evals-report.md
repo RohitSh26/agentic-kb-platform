@@ -41,6 +41,31 @@ behavior**, not case failures — cases may script and assert denial paths. Only
 Unmatched expected items (docs, files, symbols, tests, open questions) feed
 `missing_context_rate` whether or not the case succeeded.
 
+## Golden publish gate
+
+The golden-query set (docs/contracts/golden-query-evals.md, publish-gates.md) is the
+anti-underlinking publish gate: each golden case carries the EXACT evidence the broker must
+surface (`expected_evidence_ids`) and, optionally, ids that must NEVER appear
+(`must_not_leak_ids`). `run.py` **executes** every golden case through the broker (seeding one
+artifact per expected / must-not-leak id, driving `context.create_pack` over the query, mapping
+the returned cards back to the symbolic ids) and folds the results through `harness.golden.aggregate`.
+
+The `golden` block of `report.json` carries the aggregate publish-gate inputs:
+
+| Field | Meaning |
+|---|---|
+| `cases` | number of golden cases executed (`0` ⇒ the recall fields are `null`, never faked) |
+| `mean_evidence_recall` | mean of `\|returned ∩ expected\| / \|expected\|` over the golden set |
+| `min_evidence_recall` | the worst single case's evidence-recall |
+| `total_acl_leaks` | count of `must_not_leak_ids` that appeared — MUST be `0` (hard gate) |
+| `cases_below_floor` | case_ids whose evidence-recall fell below their `min_evidence_recall` (default `0.95`) |
+| `intent_ordering_failures` | case_ids whose returned ordering did not satisfy their intent (PR-33; empty unless a case asserts ordering) |
+
+The gate **fails the run with exit `1`** (benchmark-case severity) when `cases_below_floor` is
+non-empty OR `total_acl_leaks > 0`. It is skipped under `--update-baseline` and when no golden
+cases are loaded. A team-restricted `must_not_leak` artifact is filtered by the broker's own
+`team_acl_v1` ACL — a leak is the broker's, not a harness artefact.
+
 ## Report (`evals/report.json`)
 
 ```json
@@ -58,6 +83,14 @@ Unmatched expected items (docs, files, symbols, tests, open questions) feed
     }
   ],
   "metrics": { "<name>": { "value": 0.0, "status": "measured" } },
+  "golden": {
+    "cases": 0,
+    "mean_evidence_recall": 0.0,
+    "min_evidence_recall": 0.0,
+    "total_acl_leaks": 0,
+    "cases_below_floor": ["<golden case_id>"],
+    "intent_ordering_failures": ["<golden case_id>"]
+  },
   "per_agent_calls": { "<agent_name>": 0 },
   "baseline": {
     "present": true,
@@ -111,8 +144,10 @@ Comparing only metrics measured in **both** runs:
 
 `run.py` returns:
 
-- `0` — success: every case passed and the baseline verdict is not `regressed`.
-- `1` — at least one case failed (ledger status `error` or doc recall < 1.0).
+- `0` — success: every case passed, the golden publish gate passed, and the baseline verdict is
+  not `regressed`.
+- `1` — at least one benchmark case failed (ledger status `error` or doc recall < 1.0) OR the
+  golden publish gate failed (a golden case below its evidence-recall floor, or any ACL leak).
 - `2` — `TEST_DATABASE_URL` is unset (no registry to run against).
 - `3` — the baseline verdict is `regressed` and the regression gate is on.
 

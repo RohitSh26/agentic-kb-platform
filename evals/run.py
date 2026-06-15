@@ -23,7 +23,14 @@ from harness.candidates import aggregate_candidates
 from harness.cases import BENCHMARK_TASK_TYPES, EvalCase, load_cases
 from harness.executor import execute_case
 from harness.fixtures import clean_registry, require_registry_schema
-from harness.golden import GoldenCase, load_golden_cases
+from harness.golden import (
+    DEFAULT_MIN_EVIDENCE_RECALL,
+    GoldenCase,
+    GoldenReport,
+    aggregate,
+    load_golden_cases,
+)
+from harness.golden_exec import execute_golden_case
 from harness.judge import cross_domain_recall_lift
 from harness.judge_fixture import (
     DETERMINISTIC_PAIRS,
@@ -85,7 +92,9 @@ def _load_golden_cases() -> list[GoldenCase]:
     return load_golden_cases(GOLDEN_DIR)
 
 
-async def _run_cases(cases: list[EvalCase], database_url: str) -> list[RunRecord]:
+async def _run_cases(
+    cases: list[EvalCase], golden: list[GoldenCase], database_url: str
+) -> tuple[list[RunRecord], GoldenReport]:
     engine = create_async_engine(database_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -96,13 +105,32 @@ async def _run_cases(cases: list[EvalCase], database_url: str) -> list[RunRecord
             for case in cases:
                 result = await execute_case(case, factory)
                 records.append(result.record)
+            # Golden-execution pass (publish gate): drive each golden case through the
+            # broker and score evidence-recall + ACL leaks via harness.golden.aggregate
+            # (the pinned metric functions). Previously these cases were only loaded —
+            # now they actually run, so the floor is enforced (Evals-F8).
+            golden_report = aggregate([await execute_golden_case(case, factory) for case in golden])
         finally:
             # the registry is shared with the services' test suites — leave it empty
             async with factory() as session:
                 await clean_registry(session)
-        return records
+        return records, golden_report
     finally:
         await engine.dispose()
+
+
+def _golden_gate_failures(report: GoldenReport) -> list[str]:
+    """Publish-gate failures (publish-gates.md): any case under its evidence-recall
+    floor (default >= 0.95) or any ACL leak. Empty ⇒ the gate passes."""
+    failures: list[str] = []
+    if report.cases_below_floor:
+        failures.append(
+            f"evidence-recall below floor (>= {DEFAULT_MIN_EVIDENCE_RECALL}): "
+            f"{', '.join(report.cases_below_floor)}"
+        )
+    if report.total_acl_leaks > 0:
+        failures.append(f"ACL leaks in golden set: {report.total_acl_leaks}")
+    return failures
 
 
 def main() -> int:
@@ -140,13 +168,15 @@ def main() -> int:
     # is loaded and surfaced here. Phase 1 reports the set so a missing/duplicate case is
     # caught; the evidence-recall metric is computed by harness.golden over broker results.
     golden = _load_golden_cases()
-    records = asyncio.run(_run_cases(cases, database_url))
+    records, golden_report = asyncio.run(_run_cases(cases, golden, database_url))
 
     metrics = compute_metrics(records)
     git_sha = _git_sha()
     comparison = compare(load_baseline(BASELINE_PATH), metrics)
-    report = build_report(records, metrics, comparison, git_sha)
+    report = build_report(records, metrics, comparison, git_sha, golden_report)
     write_report(REPORT_PATH, report)
+
+    golden_failures = _golden_gate_failures(golden_report)
 
     if args.update_baseline:
         write_baseline(BASELINE_PATH, metrics, git_sha)
@@ -158,7 +188,11 @@ def main() -> int:
         print(render_table(records, metrics, comparison))
         intents = sorted({case.intent for case in golden})
         print(
-            f"golden queries: {len(golden)} loaded (evidence-recall floor 0.95) intents={intents}"
+            f"golden queries: {golden_report.cases} executed (evidence-recall floor "
+            f"{DEFAULT_MIN_EVIDENCE_RECALL}) "
+            f"mean={_fmt(golden_report.mean_evidence_recall)} "
+            f"min={_fmt(golden_report.min_evidence_recall)} "
+            f"acl_leaks={golden_report.total_acl_leaks} intents={intents}"
         )
         # Phase-3A candidate quality (docs/contracts/relationship-candidates.md): recall vs
         # the cross-domain golden expectations, sampled precision, volume per artifact, and
@@ -190,12 +224,22 @@ def main() -> int:
             f"recall_lift={_fmt(judge.recall_lift)}"
         )
 
-    return exit_code(
+    # The golden publish gate fails the run (exit 1) on a sub-floor evidence-recall
+    # case or any ACL leak — the same severity as a failed benchmark case. Skipped
+    # only when no golden cases were loaded (nothing to gate). It is evaluated
+    # alongside the benchmark-case + regression gates; the most severe wins.
+    code = exit_code(
         records,
         comparison,
         fail_on_regress=args.fail_on_regress,
         update_baseline=args.update_baseline,
     )
+    if golden_failures and not args.update_baseline:
+        for failure in golden_failures:
+            print(f"golden publish gate FAILED: {failure}", file=sys.stderr)
+        # exit 1 (case failure severity) unless a benchmark case already failed.
+        return code or 1
+    return code
 
 
 if __name__ == "__main__":

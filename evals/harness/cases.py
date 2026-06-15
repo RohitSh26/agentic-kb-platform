@@ -62,6 +62,10 @@ class FixtureArtifact(CaseModel):
     knowledge_kind: Literal["source_backed", "interpreted"] = "source_backed"
     authority_score: float = Field(default=0.8, ge=0.0, le=1.0)
     artifact_type: str = "doc_chunk"
+    # team_acl_v1: empty ⇒ org-public; a non-empty list restricts the artifact to
+    # requesters sharing one of these teams (rbac.py). A team-less requester is
+    # filtered out of a restricted artifact — the F7 must_not_leak negative.
+    acl_teams: list[str] = Field(default_factory=list)
 
 
 class SearchSeed(CaseModel):
@@ -91,7 +95,54 @@ class OpenEvidenceStep(CaseModel):
     max_tokens: int = Field(default=800, ge=1)
 
 
-ScriptStep = RequestMoreStep | OpenEvidenceStep
+# verifier levels available to a scripted verify_answer step (the schema defaults
+# to ["L0"]; cases stay on the mandatory L0 floor unless they request more).
+VerifierLevel = Literal["L0", "L1", "L2", "L3"]
+
+
+class VerifyAnswerStep(CaseModel):
+    """Script a context.verify_answer call: build a single-claim answer that cites
+    the listed fixture keys, run the broker verifier, and assert its overall verdict.
+
+    The expected verdict makes a verification path a first-class, asserted trust
+    case — a passing receipt (L0 satisfied) or a contractual `failed`/`partial`
+    (e.g. evidence the requester never retrieved, the F1 L0_in_requester_ledger
+    negative). The step records its result into the case for the executor to assert.
+    """
+
+    tool: Literal["context.verify_answer"]
+    agent: AgentName
+    answer_id: str = Field(min_length=1, max_length=256)
+    claim: str = Field(min_length=1)
+    evidence: list[str] = Field(min_length=1)  # fixture keys the claim cites
+    # fixture keys to mark as retrieved by this agent BEFORE verifying, so L0's
+    # in_requester_ledger check can pass; omit a key here to script the F1 negative.
+    retrieved: list[str] = Field(default_factory=list)
+    verifier_levels: list[VerifierLevel] = Field(default_factory=lambda: ["L0"])
+    expect_overall: Literal["passed", "failed", "partial"]
+
+
+class PlatformTrustStep(CaseModel):
+    """Script the context.platform_trust gate (ADR-0011 §6). A verification_required
+    client is platform-trusted ONLY with a valid, client-matched, passing receipt;
+    without one the gate returns a STRUCTURED `denied` (never a silent pass). This
+    step drives evaluate_platform_trust directly and asserts the status — the F2
+    trusted vs denied(no-receipt) pair."""
+
+    tool: Literal["context.platform_trust"]
+    agent: AgentName
+    verification_required: bool
+    # when true, first run verify_answer over `evidence` (signed receipt) and feed
+    # it to the gate; when false, present NO receipt (the denied negative).
+    present_receipt: bool = True
+    answer_id: str = Field(default="platform-trust-answer", min_length=1, max_length=256)
+    claim: str = Field(default="the gate is asserted", min_length=1)
+    evidence: list[str] = Field(default_factory=list)  # fixture keys for the receipt
+    retrieved: list[str] = Field(default_factory=list)
+    expect_status: Literal["trusted", "denied", "not_required"]
+
+
+ScriptStep = RequestMoreStep | OpenEvidenceStep | VerifyAnswerStep | PlatformTrustStep
 
 
 class ScriptedClaim(CaseModel):
@@ -119,6 +170,14 @@ class EvalCase(CaseModel):
     task: str = Field(min_length=1)
     approved_context_plan: str = Field(min_length=1)
     budget_tokens: int = Field(default=8000, ge=1)
+    # the orchestrator/requester's team memberships (team_acl_v1). Empty ⇒ a
+    # team-less requester, which can only see org-public artifacts — the F7
+    # must_not_leak setup. Threaded into every broker call the executor makes.
+    requester_teams: list[str] = Field(default_factory=list)
+    # fixture keys that MUST NOT appear in broker output for this case (e.g. a
+    # team-restricted artifact a team-less requester asks for). The executor
+    # asserts these were filtered out; a leak fails the case.
+    must_not_leak: list[str] = Field(default_factory=list)
     fixtures: Fixtures
     script: list[ScriptStep] = Field(default_factory=list[ScriptStep])
     agent_output: ScriptedOutput | None = None
@@ -139,6 +198,8 @@ class EvalCase(CaseModel):
         queries = [f"{self.task} {self.approved_context_plan}"]
         queries += [step.question for step in self.script if isinstance(step, RequestMoreStep)]
         tokens = {token for query in queries for token in normalize_query(query).split()}
+        # verify_answer / platform_trust steps don't search — they cite already-seeded
+        # fixtures — so they add no reachable query tokens (handled below).
         dead = [
             seed.keyword
             for seed in self.fixtures.search_seeds
@@ -154,11 +215,15 @@ class EvalCase(CaseModel):
     def _referenced_fixture_keys(self) -> set[str]:
         referenced = {hit for seed in self.fixtures.search_seeds for hit in seed.hits}
         referenced |= set(self.expected.docs)
+        referenced |= set(self.must_not_leak)
         for step in self.script:
             if isinstance(step, OpenEvidenceStep):
                 referenced.add(step.evidence)
-            else:
+            elif isinstance(step, RequestMoreStep):
                 referenced |= set(step.already_checked)
+            else:
+                # verify_answer / platform_trust steps cite + pre-retrieve fixtures
+                referenced |= set(step.evidence) | set(step.retrieved)
         if self.agent_output is not None:
             for claim in self.agent_output.claims:
                 referenced |= {
