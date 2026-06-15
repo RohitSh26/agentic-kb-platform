@@ -10,6 +10,9 @@ defaults:
   acl_teams: []          # [] = org-public (any authenticated subject)
 
 sources:
+  # Implementation status (--backend production): github_code / github_doc fetch for
+  # real today; azure_wiki / ado_card are STUBS (config accepted, fetch not yet
+  # implemented — see connectors/production_factory.py + ADR-0015). dev-guide 06.
   - name: platform-code
     type: github_code
     repo: RohitSh26/agentic-kb-platform

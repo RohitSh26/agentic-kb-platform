@@ -62,7 +62,8 @@ async def main() -> int:
         )
         pack_id = pack["context_pack_id"]
         cards = pack["evidence_cards"]
-        _ok("create_pack", f"kb_version={pack['kb_version']} cards={len(cards)} pack={pack_id}")
+        print(f'  the agent asked: "{TASK}"\n')
+        _ok("create_pack", f"kb_version={pack['kb_version']} retrieved {len(cards)} evidence card(s)")
         if not cards:
             print(
                 "\nno evidence cards returned — the active KB is empty or the task matched "
@@ -70,6 +71,8 @@ async def main() -> int:
                 file=sys.stderr,
             )
             return 1
+        for c in cards:
+            print(f"        · [{c['card_type']}] {c['title']}  ({c['tokens_if_expanded']} tok if opened)")
 
         # 2) open_evidence — raw text reachable ONLY by handle, metered against the
         #    pack budget, and flagged (never rewritten) by the injection scan.
@@ -80,7 +83,9 @@ async def main() -> int:
                 {"request": {"context_pack_id": pack_id, "evidence_id": first, "max_tokens": 1500}},
             )
         )
-        _ok("open_evidence", f"level={opened['level']} injection_flagged={opened['injection_flagged']}")
+        snippet = " ".join(opened.get("untrusted_content", "").split())[:160]
+        _ok("open_evidence", f"opened card 1 as {opened['level']} text (injection_flagged={opened['injection_flagged']})")
+        print(f'        untrusted_content: "{snippet}…"')
 
         # 3) graph.get_neighbors — graph behaviour ONLY through this tool over the
         #    Postgres knowledge_edge table (EXTRACTED edges by default).
@@ -97,7 +102,7 @@ async def main() -> int:
             )
         )
         edge_types = [n["edge_type"] for n in neighbors["neighbors"]]
-        _ok("get_neighbors", f"{len(edge_types)} neighbor(s) {edge_types}")
+        _ok("get_neighbors", f"walked the graph from card 1 → {len(edge_types)} EXTRACTED neighbor(s) {edge_types}")
 
         # 4) verify_answer — the trust boundary: every claim cites evidence ids; L0
         #    runs the mandatory deterministic provenance checks and returns a receipt.
@@ -119,16 +124,29 @@ async def main() -> int:
                 },
             )
         )
-        _ok("verify_answer", f"overall={receipt['overall']}")
+        checks = receipt["claim_results"][0]["checks"]
+        passed = [name.replace("L0_", "") for name, ok in checks.items() if ok is True]
+        _ok("verify_answer", f"claim citing card 1 → overall={receipt['overall']}")
+        print(f"        L0 provenance checks passed: {', '.join(passed)}")
 
         # 5) list_retrievals — every retrieval path is ledgered; inspect what the
         #    broker did on your behalf for this run.
         ledger = _d(
             await client.call_tool("ledger.list_retrievals", {"request": {"run_id": "demo-run-1"}})
         )
-        _ok("list_retrievals", f"{len(ledger['events'])} ledgered event(s) for demo-run-1")
+        events = ledger["events"]
+        _ok("list_retrievals", f"{len(events)} ledgered event(s) for run 'demo-run-1':")
+        for e in events:
+            print(f"        · {e.get('tool')} → {e.get('status')}  ({e.get('tokens_returned', 0)} tok)")
 
-    print("\nsmoke passed — the full broker path works locally end to end.")
+    print(
+        "\nsmoke passed — what just happened, in one sentence:\n"
+        "  an agent (identity 'local-dev') asked a question; the broker retrieved evidence ONCE\n"
+        "  and returned cards by handle within budget, expanded one card's raw text on demand,\n"
+        "  walked the Postgres graph, and issued a verification RECEIPT for a claim that cited its\n"
+        "  evidence — and every step was written to the retrieval ledger (the audit trail above).\n"
+        "  See dev-guide 06 §'What just happened?' to inspect the ledger + receipts in Postgres."
+    )
     return 0
 
 

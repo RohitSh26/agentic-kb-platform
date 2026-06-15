@@ -152,7 +152,72 @@ deciding the queries and writing the cited answer.
 
 ---
 
+## What just happened? (explain it to your team)
+
+The smoke run prints a play-by-play, not just "passed". In one sentence: **an agent asked a
+question, the broker answered with governed evidence, and every step was audited.** Concretely, for
+the demo run `demo-run-1`:
+
+1. the agent (identity `local-dev`) asked a question;
+2. the broker **retrieved once** and returned 5 evidence cards *by handle* (titles + token cost, not
+   raw text) within budget;
+3. it **expanded one card** to its raw `untrusted_content` on demand (metered, injection-scanned);
+4. it **walked the graph** from that card;
+5. it issued a **verification receipt** for a claim that cited that evidence — all six L0 provenance
+   checks passed (`exists`, `in_active_version`, `acl_visible`, `in_requester_ledger`, `not_stale`,
+   `supporting_trust_ok`);
+6. and **every call was written to the retrieval ledger**.
+
+The ledger is the audit trail — show your team the *receipts*, not the logs. Inspect it in Postgres:
+
+```sh
+# what the broker did on your behalf, in order
+psql -d agentic_kb_demo -c \
+ "SELECT tool_name, status, tokens_returned, cardinality(returned_artifact_ids) AS returned, created_at
+  FROM retrieval_event WHERE run_id='demo-run-1' ORDER BY created_at;"
+
+# which artifacts a call returned (evidence ids = audit handles, never raw text)
+psql -d agentic_kb_demo -c \
+ "SELECT tool_name, returned_artifact_ids FROM retrieval_event WHERE run_id='demo-run-1';"
+```
+
+You can also tail the structured server log (its path is printed at the end of the run) — every
+retrieval, budget decision, ACL filter, and temporal-weight is an `event=...` line. The talking
+point for a team: *the broker is the single mediated, audited path to knowledge — the agent never
+touches the database, can't exceed its budget, can't read evidence it didn't retrieve, and every
+answer it makes trusted must carry a receipt.*
+
+---
+
 ## Going further locally
+
+### Build from your real sources (GitHub + ADO)
+
+The demo builds from this repo's git history so it needs no credentials. To build from **real
+sources**, use `services/kb-builder/sources.example.yaml` — it shows all four source types (GitHub
+code + docs, Azure DevOps Wiki, ADO Work Items), each with `auth.token_env` naming the **environment
+variable** that holds a PAT (never the token value itself). Run with the production fetch backend:
+
+```sh
+cd services/kb-builder
+export GITHUB_TOKEN=...   # a GitHub PAT with repo read
+export ADO_PAT=...        # an Azure DevOps PAT (when you enable ADO sources)
+# real sources go through wikify (LLM) — point at Ollama or an OpenAI-compatible endpoint first
+DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/agentic_kb \
+  uv run python -m agentic_kb_builder.build \
+    --workspace . --sources ./sources.example.yaml --backend production
+```
+
+> **Status (be precise with your team):** **GitHub code + docs are fully implemented** (real REST
+> fetch, pinned to a commit SHA). **Azure DevOps Wiki and Work Items are stubbed** — the config and
+> the connector boundary exist, but the fetch backends are placeholders pending their PRs (see
+> `connectors/production_factory.py` and ADR-0015). So today: build real KBs from GitHub now; ADO is
+> wired for config but not yet fetching. Managed-identity auth (instead of PATs) is also backlog.
+
+### Other directions
+
+- **A richer KB with real summaries/concepts** (exercises the LLM wikify path) — install Ollama and
+  follow **dev-guide 04**; point the server at that database instead of the demo one.
 
 - **A richer KB with real summaries/concepts** (exercises the LLM wikify path) — install Ollama and
   follow **dev-guide 04**; point the server at that database instead of the demo one.
