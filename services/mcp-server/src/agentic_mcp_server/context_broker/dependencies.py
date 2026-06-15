@@ -72,7 +72,11 @@ def current_requester() -> Requester:
     token = get_access_token()
     if token is None:
         raise ToolError("no authenticated session")
-    subject = token.subject or token.client_id or "unknown"
+    # Fail closed: never collapse a subject-less token to a shared sentinel — that
+    # would let distinct principals share one identity (and one ACL). invariant 6.
+    subject = token.subject or token.client_id
+    if not subject:
+        raise ToolError("authenticated session carries no subject")
     return Requester(subject=subject, teams=teams_from_claims(token.claims or {}))
 
 
@@ -88,5 +92,9 @@ def current_client_identity(registry: ClientRegistry) -> ClientIdentity:
     token = get_access_token()
     if token is None:
         raise ToolError("no authenticated session")
-    client_id = token.client_id or token.subject or "unknown"
+    # Fail closed: a token with neither client_id nor subject must not resolve to a
+    # shared sentinel identity that cross-binds receipts between distinct clients.
+    client_id = token.client_id or token.subject
+    if not client_id:
+        raise ToolError("authenticated session carries no client identity")
     return registry.resolve(client_id)

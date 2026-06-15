@@ -30,6 +30,18 @@ OverallResult = Literal["passed", "failed", "partial"]
 RECEIPT_SCHEMA_VERSION = 1
 
 
+def _reject_control_chars(value: str, field_name: str) -> str:
+    """Reject C0/DEL control chars in agent-supplied ids.
+
+    ``answer_id`` and ``claim_id`` are untrusted agent input that the broker echoes
+    into structured logs; a newline/CR would let an agent forge log lines. Reject at
+    the schema boundary so no downstream log site has to sanitize.
+    """
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        raise ValueError(f"{field_name} must not contain control characters")
+    return value
+
+
 class SymbolInFileAssertion(McpModel):
     """ "symbol X is defined in file F" — adjudicated against an AST fact unit."""
 
@@ -73,6 +85,11 @@ class ClaimInput(McpModel):
     # Optional typed assertion the L2 verifier adjudicates against the ledger.
     assertion: ClaimAssertion | None = Field(default=None, discriminator="kind")
 
+    @field_validator("claim_id")
+    @classmethod
+    def _claim_id_no_control(cls, value: str) -> str:
+        return _reject_control_chars(value, "claim_id")
+
 
 class VerifyAnswerRequest(McpModel):
     answer_id: str = Field(min_length=1, max_length=256)
@@ -82,6 +99,11 @@ class VerifyAnswerRequest(McpModel):
     graph_version: str | None = None
     # Defaults to L0; request up to ["L0","L1","L2"]. Server runs per policy.
     verifier_levels: list[VerifierLevel] = Field(default_factory=lambda: ["L0"])
+
+    @field_validator("answer_id")
+    @classmethod
+    def _answer_id_no_control(cls, value: str) -> str:
+        return _reject_control_chars(value, "answer_id")
 
     @field_validator("verifier_levels")
     @classmethod

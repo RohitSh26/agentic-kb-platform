@@ -436,6 +436,21 @@ def test_claim_with_empty_evidence_is_rejected() -> None:
         )
 
 
+def test_answer_id_with_control_chars_is_rejected() -> None:
+    # answer_id is untrusted agent input echoed into structured logs; a newline
+    # would let an agent forge log lines, so reject it at the boundary (#112).
+    with pytest.raises(ValidationError):
+        VerifyAnswerRequest(
+            answer_id="ans\ninjected overall=passed",
+            claims=[ClaimInput(claim_id="c1", text="t", evidence_ids=[str(uuid.uuid4())])],
+        )
+
+
+def test_claim_id_with_control_chars_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ClaimInput(claim_id="c1\r\nforged", text="t", evidence_ids=[str(uuid.uuid4())])
+
+
 async def test_answer_hash_is_stable_for_the_same_normalized_claims(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
