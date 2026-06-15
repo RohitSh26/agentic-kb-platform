@@ -157,6 +157,9 @@ class FakeIndexer:
     async def delete_orphaned(self) -> int:
         return 0
 
+    async def reconcile_missing(self) -> int:
+        return 0
+
 
 def _runner(session: AsyncSession, kb_version: str) -> BuildRunner:
     return BuildRunner(

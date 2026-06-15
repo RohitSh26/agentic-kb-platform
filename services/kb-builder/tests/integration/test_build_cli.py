@@ -211,6 +211,54 @@ async def test_build_is_incremental_on_rerun(session: AsyncSession, tmp_path: Pa
 
 
 @requires_db
+async def test_rebuild_with_an_empty_index_backfills_from_registry(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    # The registry already has members but THIS index is empty — the day-one case:
+    # the database persists across builds while the index does not (it was in-memory
+    # and gone after the first build's process exited, or a fresh/reset file). The
+    # incremental build upserts nothing for unchanged sources, so reconcile_missing
+    # must back-fill the index from Postgres for the consistency gate to pass and the
+    # version to activate. Without reconciliation this build fails with every member
+    # reported `index_drift class=missing` — the exact bug observed in local testing.
+    workspace, sources = _workspace(tmp_path)
+    await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-cli.1",
+        version="local",
+        collaborators=_collaborators(session),
+        activate=True,
+    )
+    assert await get_active_kb_version(session) == "v-cli.1"
+
+    # A brand-new, EMPTY in-memory index stands in for a different machine that
+    # shares the registry but has never populated its own projection.
+    empty_index = FakeSearchClient()
+    assert (await empty_index.fetch_index_state()).docs == {}
+    run2 = await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-cli.2",
+        version="local",
+        collaborators=Collaborators(
+            wikifier=FakeWikifier(),
+            graphifier=GraphifyGraphifier(),
+            embedder=LocalHashEmbedder(),
+            indexer=SearchDocUpserter(session, empty_index),
+            search_client=empty_index,
+        ),
+        activate=True,
+    )
+    assert run2.status in {"completed", "active"}
+    # Reconciliation back-filled the empty index from the registry ⇒ activation.
+    assert await get_active_kb_version(session) == "v-cli.2"
+    assert len((await empty_index.fetch_index_state()).docs) > 0
+
+
+@requires_db
 async def test_incremental_rebuild_with_a_fresh_client_passes_consistency(
     session: AsyncSession, tmp_path: Path
 ) -> None:

@@ -130,6 +130,9 @@ class _Indexer:
     async def delete_orphaned(self) -> int:
         return 0
 
+    async def reconcile_missing(self) -> int:
+        return 0
+
 
 def _ref(path: str) -> SourceRef:
     return SourceRef(

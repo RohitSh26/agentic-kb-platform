@@ -55,6 +55,44 @@ class SearchDocUpserter:
     async def delete_orphaned(self) -> int:
         return await delete_orphaned_docs(self._session, self._client)
 
+    async def reconcile_missing(self) -> int:
+        """Back-fill every current member the index lacks or holds at a stale hash.
+
+        ``delete_orphaned`` removes index docs whose artifact left the registry; this
+        is the opposite direction — registry members the index is MISSING or holds at
+        a stale ``artifact_hash``. The database persists across builds while the index
+        may not (it was in-memory and vanished when a prior build's process exited, or
+        it is a fresh/reset file), so the index can lag an already-populated registry.
+        The incremental path upserts only changed sources and so cannot close that gap;
+        without this, the consistency gate permanently blocks activation.
+
+        Documents are reprojected from Postgres — no LLM and no re-embedding
+        (invariant 4 governs generation, not the projection) — so the index is a
+        genuinely self-healing, rebuildable projection of the registry (invariant 1),
+        and the post-build consistency gate becomes an invariant every build
+        satisfies rather than an assumption about how the index was populated.
+        """
+        expected = await load_doc_hashes(self._session)
+        actual = (await self._client.fetch_index_state()).docs
+        stale_doc_ids = [
+            doc_id
+            for doc_id, artifact_hash in expected.items()
+            if doc_id not in actual or actual[doc_id] != artifact_hash
+        ]
+        if not stale_doc_ids:
+            return 0
+        docs = await load_search_docs(
+            self._session, artifact_ids=[uuid.UUID(doc_id) for doc_id in stale_doc_ids]
+        )
+        upserted = await self._client.upsert_docs(docs)
+        await self._record_doc_ids(docs)
+        logger.info(
+            "event=indexer_reconciled_missing missing_or_stale=%d upserted=%d",
+            len(stale_doc_ids),
+            upserted,
+        )
+        return upserted
+
     async def _record_doc_ids(self, docs: Sequence[SearchDoc]) -> None:
         """Stamp azure_search_doc_id on the embedding row behind each doc."""
         for doc in docs:

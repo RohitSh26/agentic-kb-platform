@@ -95,6 +95,10 @@ class SearchIndexer(Protocol):
         """Remove index docs whose artifact left the registry; returns count."""
         ...
 
+    async def reconcile_missing(self) -> int:
+        """Back-fill index docs the registry has but the index lacks/has stale."""
+        ...
+
 
 @dataclass(frozen=True)
 class _PendingEdges:
@@ -244,14 +248,29 @@ class BuildRunner:
                 seen_source_ids=seen_source_ids,
                 changed_source_ids=changed_source_ids,
             )
-            # reconcile the index before validation can run against it, so an
-            # orphaned doc can never permanently block activation (invariant 5)
+            # Reconcile the index in BOTH directions before validation, so neither an
+            # orphaned doc nor a missing member can permanently block activation
+            # (invariant 5). delete_orphaned removes index-extras; reconcile_missing
+            # back-fills members the registry has but the index lacks. The DB persists
+            # across builds while the index may not (it was in-memory and gone after a
+            # prior build's process exited, or a fresh/reset file); an incremental
+            # build upserts only changed sources, so without this the index can never
+            # catch up to the registry. Back-fill reprojects from Postgres — no LLM,
+            # no re-embed.
             orphans_removed = await self._indexer.delete_orphaned()
             if orphans_removed:
                 logger.info(
                     "event=build_index_orphans_removed build_id=%s count=%d",
                     build_id,
                     orphans_removed,
+                )
+            backfilled = await self._indexer.reconcile_missing()
+            if backfilled:
+                counters.search_docs_upserted += backfilled
+                logger.info(
+                    "event=build_index_backfilled build_id=%s count=%d",
+                    build_id,
+                    backfilled,
                 )
             await self._finish_run(build_id, counters, status="completed")
             await self._session.commit()

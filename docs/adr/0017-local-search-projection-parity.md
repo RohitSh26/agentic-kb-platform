@@ -38,8 +38,22 @@ the unchanged `SearchClient` interface:
   identical across environments — only the `SearchClient` implementation differs (Azure SDK vs local
   file vs in-memory fake). That is the parity guarantee: no divergence in build behaviour anywhere.
 - The file is a **rebuildable projection of Postgres**, never truth. Deleting it — or recreating the
-  database — forces a clean reprojection on the next build, and the existing per-build orphan sweep
-  (`delete_orphaned`) keeps it honest after a from-scratch rebuild.
+  database — forces a clean reprojection on the next build.
+- **Both-direction reconciliation each build** keeps the projection honest regardless of how it
+  diverged. The pre-existing `delete_orphaned` removes index docs whose artifact left the registry;
+  a new `reconcile_missing` step (build_runner, before validation) back-fills members the registry
+  has but the index lacks or holds at a stale hash — by reprojecting from Postgres (no LLM, no
+  re-embed). This makes the index consistency gate an **invariant every build satisfies** rather
+  than an assumption that the index co-evolved with the database.
+
+  This matters even on a single machine: the **database persists across builds, but the index may
+  not contain everything the registry already has** — it was in-memory and vanished when the first
+  build's process exited, or it is a freshly-created (empty) file, or it was deleted/reset. Because
+  an incremental build upserts only *changed* sources, it cannot back-fill members the registry
+  already had, so without `reconcile_missing` the index can never catch up and the gate blocks
+  activation forever. (The same mechanism also covers a deleted index file or, in a hypothetical
+  shared-Postgres setup, a second machine — but the day-one case is simply: the DB outlived the
+  index.)
 
 `FakeSearchClient` stays the deliberate in-memory double for unit/integration tests, which run two
 builds in one process and so never needed persistence.

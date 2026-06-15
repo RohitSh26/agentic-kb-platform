@@ -242,6 +242,9 @@ class SpyIndexer:
         self.delete_orphaned_calls += 1
         return 0
 
+    async def reconcile_missing(self) -> int:
+        return 0
+
 
 URI = "https://github.com/o/r/blob/sha1/a.py"
 REF = SourceRef(
