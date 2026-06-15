@@ -41,6 +41,7 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -73,6 +74,7 @@ from agentic_mcp_server.mcp.tool_schemas.verification import (
     ClaimChecks,
     ClaimInput,
     ClaimReceipt,
+    OverallResult,
     VerificationReceipt,
     VerifierLevel,
     VerifyAnswerRequest,
@@ -338,6 +340,182 @@ def _evidence_uuids(claim: ClaimInput) -> list[uuid.UUID]:
     return out
 
 
+def _acl_admits(requester: Requester, acl_teams: Collection[str] | None) -> bool:
+    """team_acl_v1 visibility for one row: empty/absent ACL ⇒ org-public, else any
+    shared team. The single source of the verifier's ACL predicate (used for both the
+    resolvable set and the acl_visible set) so the two cannot drift apart."""
+    return not acl_teams or bool(requester.teams.intersection(acl_teams))
+
+
+def _deterministic_pass(
+    claims: list[ClaimInput],
+    ctx: _EvidenceContext,
+    *,
+    resolvable_ids: frozenset[uuid.UUID],
+    cited_body_texts: dict[uuid.UUID, str],
+    l2_verdicts: dict[str, bool],
+    run_l1: bool,
+    run_l2: bool,
+    max_quote_chars: int,
+) -> list[_DeterministicClaim]:
+    """Pass 1: compute L0 (+ L1/L2 when requested) for every claim, holding the
+    intermediate state so L3 can be gated before any LLM call. No I/O — pure over the
+    already-resolved evidence context."""
+    deterministic: list[_DeterministicClaim] = []
+    for claim in claims:
+        merged: _L0Result | None = None
+        evidence_results: list[_L0Result] = []
+        reasons: list[str] = []
+        for raw_id in claim.evidence_ids:
+            unit, evidence_reasons = _check_evidence(raw_id, ctx)
+            evidence_results.append(unit)
+            merged = unit if merged is None else _merge_l0(merged, unit)
+            reasons.extend(evidence_reasons)
+        # merged is never None: the schema rejects a claim with empty evidence.
+        assert merged is not None
+
+        l0_passed = (
+            merged.exists
+            and merged.in_active_version
+            and merged.acl_visible
+            and merged.in_requester_ledger
+            and merged.not_stale
+            and merged.supporting_trust_ok
+        )
+        # A claim's result is the AND of every level that ran with a verdict.
+        passed = l0_passed
+
+        l1_coverage: bool | None = None
+        if run_l1:
+            # This claim's resolvable cited body texts only — the same in-version,
+            # ACL-visible, requester-retrieved set coverage rests on (no oracle).
+            claim_cited_texts = [
+                cited_body_texts[uid]
+                for uid in _evidence_uuids(claim)
+                if uid in resolvable_ids and uid in cited_body_texts
+            ]
+            l1_coverage, l1_reasons = _l1_coverage(
+                claim,
+                evidence_results,
+                max_quote_chars=max_quote_chars,
+                cited_texts=claim_cited_texts,
+            )
+            reasons.extend(l1_reasons)
+            passed = passed and l1_coverage
+
+        # L2 only yields a verdict for claims carrying a typed assertion; for the
+        # rest the key stays absent (the verifier never invents an L2 verdict).
+        l2_typed_fact: bool | None = None
+        if run_l2 and claim.claim_id in l2_verdicts:
+            l2_typed_fact = l2_verdicts[claim.claim_id]
+            if not l2_typed_fact:
+                reasons.append(REASON_TYPED_FACT_UNSUPPORTED)
+            passed = passed and l2_typed_fact
+
+        deterministic.append(
+            _DeterministicClaim(
+                claim=claim,
+                merged=merged,
+                reasons=reasons,
+                deterministic_passed=passed,
+                l1_coverage=l1_coverage,
+                l2_typed_fact=l2_typed_fact,
+            )
+        )
+    return deterministic
+
+
+async def _l3_pass(
+    deterministic: list[_DeterministicClaim],
+    deps: BrokerDeps,
+    *,
+    resolvable_ids: frozenset[uuid.UUID],
+    build_seq: int,
+    run_l3: bool,
+    is_active: bool,
+) -> dict[str, _L3State]:
+    """Pass 2 (optional): cached LLM entailment ONLY for claims L0-L2 could not
+    adjudicate (eligible + ≥1 resolvable cited unit). The cost guard: L3 never runs on
+    an L2-resolved claim, and a cache hit makes zero LLM calls."""
+    l3_verdicts: dict[str, _L3State] = {}
+    if not (run_l3 and deps.entailment_client is not None and is_active):
+        return l3_verdicts
+    entailment = deps.entailment_client
+    async with deps.session_factory() as session:
+        for entry in deterministic:
+            if not _l3_eligible(entry):
+                continue
+            cited_resolvable = frozenset(
+                uid for uid in _evidence_uuids(entry.claim) if uid in resolvable_ids
+            )
+            if not cited_resolvable:
+                continue
+            outcome = await run_l3_entailment(
+                session,
+                client=entailment,
+                claim_text=entry.claim.text,
+                resolvable_cited_ids=cited_resolvable,
+                build_seq=build_seq,
+            )
+            if outcome.entailed is not None:
+                l3_verdicts[entry.claim.claim_id] = _L3State(
+                    entailed=outcome.entailed, cache_hit=outcome.cache_hit
+                )
+    return l3_verdicts
+
+
+def _assemble_receipts(
+    deterministic: list[_DeterministicClaim],
+    l3_verdicts: dict[str, _L3State],
+) -> list[ClaimReceipt]:
+    """Pass 3: fold any L3 verdict into each claim's result + checks and build the
+    per-claim receipts (reasons de-duplicated, first-seen order preserved)."""
+    claim_results: list[ClaimReceipt] = []
+    for entry in deterministic:
+        merged = entry.merged
+        reasons = list(entry.reasons)
+        passed = entry.deterministic_passed
+
+        l3_entailment: bool | None = None
+        l3_state = l3_verdicts.get(entry.claim.claim_id)
+        if l3_state is not None:
+            l3_entailment = l3_state.entailed
+            if not l3_entailment:
+                reasons.append(REASON_ENTAILMENT_UNSUPPORTED)
+            passed = passed and l3_entailment
+
+        checks = ClaimChecks(
+            L0_exists=merged.exists,
+            L0_in_active_version=merged.in_active_version,
+            L0_acl_visible=merged.acl_visible,
+            L0_in_requester_ledger=merged.in_requester_ledger,
+            L0_not_stale=merged.not_stale,
+            L0_supporting_trust_ok=merged.supporting_trust_ok,
+            L1_coverage=entry.l1_coverage,
+            L2_typed_fact=entry.l2_typed_fact,
+            L3_entailment=l3_entailment,
+        )
+        claim_results.append(
+            ClaimReceipt(
+                claim_id=entry.claim.claim_id,
+                result="passed" if passed else "failed",
+                checks=checks,
+                failed_reasons=list(dict.fromkeys(reasons)),
+            )
+        )
+    return claim_results
+
+
+def _overall_result(claim_results: list[ClaimReceipt]) -> OverallResult:
+    """passed iff all claims passed, failed iff all failed, else partial."""
+    passed_count = sum(1 for r in claim_results if r.result == "passed")
+    if passed_count == len(claim_results):
+        return "passed"
+    if passed_count == 0:
+        return "failed"
+    return "partial"
+
+
 async def verify_answer(
     deps: BrokerDeps,
     request: VerifyAnswerRequest,
@@ -400,8 +578,7 @@ async def verify_answer(
         resolvable_ids = frozenset(
             uid
             for uid, row in in_version.items()
-            if uid in retrieved
-            and (not row.acl_teams or requester.teams.intersection(row.acl_teams))
+            if uid in retrieved and _acl_admits(requester, row.acl_teams)
         )
         # L1's quote-substring guard (invariant 7): fetch the body text of the
         # RESOLVABLE cited units only, in the same session. The id set is already
@@ -436,7 +613,7 @@ async def verify_answer(
     acl_visible = {
         artifact_id
         for artifact_id, row in in_version.items()
-        if not row.acl_teams or requester.teams.intersection(row.acl_teams)
+        if _acl_admits(requester, row.acl_teams)
     }
 
     ctx = _EvidenceContext(
@@ -446,143 +623,29 @@ async def verify_answer(
         retrieved_by_requester=retrieved,
     )
 
-    # Pass 1 (deterministic): compute L0/L1/L2 for every claim. We hold the
-    # intermediate state so L3 can be gated on "L0-L2 produced no verdict that
-    # already settles this claim" before any LLM call is made.
-    deterministic: list[_DeterministicClaim] = []
-    for claim in request.claims:
-        merged: _L0Result | None = None
-        evidence_results: list[_L0Result] = []
-        reasons: list[str] = []
-        for raw_id in claim.evidence_ids:
-            unit, evidence_reasons = _check_evidence(raw_id, ctx)
-            evidence_results.append(unit)
-            merged = unit if merged is None else _merge_l0(merged, unit)
-            reasons.extend(evidence_reasons)
-        # merged is never None: the schema rejects a claim with empty evidence.
-        assert merged is not None
-
-        l0_passed = (
-            merged.exists
-            and merged.in_active_version
-            and merged.acl_visible
-            and merged.in_requester_ledger
-            and merged.not_stale
-            and merged.supporting_trust_ok
-        )
-        # A claim's result is the AND of every level that ran with a verdict.
-        passed = l0_passed
-
-        l1_coverage: bool | None = None
-        if run_l1:
-            # This claim's resolvable cited body texts only — the same in-version,
-            # ACL-visible, requester-retrieved set coverage rests on (no oracle).
-            claim_cited_texts = [
-                cited_body_texts[uid]
-                for uid in _evidence_uuids(claim)
-                if uid in resolvable_ids and uid in cited_body_texts
-            ]
-            l1_coverage, l1_reasons = _l1_coverage(
-                claim,
-                evidence_results,
-                max_quote_chars=deps.settings.max_quote_chars,
-                cited_texts=claim_cited_texts,
-            )
-            reasons.extend(l1_reasons)
-            passed = passed and l1_coverage
-
-        # L2 only yields a verdict for claims carrying a typed assertion; for the
-        # rest the key stays absent (the verifier never invents an L2 verdict).
-        l2_typed_fact: bool | None = None
-        if run_l2 and claim.claim_id in l2_verdicts:
-            l2_typed_fact = l2_verdicts[claim.claim_id]
-            if not l2_typed_fact:
-                reasons.append(REASON_TYPED_FACT_UNSUPPORTED)
-            passed = passed and l2_typed_fact
-
-        deterministic.append(
-            _DeterministicClaim(
-                claim=claim,
-                merged=merged,
-                reasons=reasons,
-                deterministic_passed=passed,
-                l1_coverage=l1_coverage,
-                l2_typed_fact=l2_typed_fact,
-            )
-        )
-
-    # Pass 2 (L3, optional): run cached LLM entailment ONLY for claims L0-L2 could
-    # not adjudicate. A claim is L3-eligible iff it (a) passed every deterministic
-    # level that ran, (b) carries NO L2 typed-fact verdict (paraphrase/synthesis the
-    # ledger cannot check), and (c) has ≥1 resolvable cited unit to entail against.
-    # This is the cost guard: L3 never runs on an L2-resolved claim.
-    l3_verdicts: dict[str, _L3State] = {}
-    if run_l3 and deps.entailment_client is not None and is_active:
-        entailment = deps.entailment_client
-        async with deps.session_factory() as session:
-            for entry in deterministic:
-                if not _l3_eligible(entry):
-                    continue
-                cited_resolvable = frozenset(
-                    uid for uid in _evidence_uuids(entry.claim) if uid in resolvable_ids
-                )
-                if not cited_resolvable:
-                    continue
-                outcome = await run_l3_entailment(
-                    session,
-                    client=entailment,
-                    claim_text=entry.claim.text,
-                    resolvable_cited_ids=cited_resolvable,
-                    build_seq=active.build_seq,
-                )
-                if outcome.entailed is not None:
-                    l3_verdicts[entry.claim.claim_id] = _L3State(
-                        entailed=outcome.entailed, cache_hit=outcome.cache_hit
-                    )
-
-    # Pass 3: assemble receipts, folding any L3 verdict into result + checks.
-    claim_results: list[ClaimReceipt] = []
-    for entry in deterministic:
-        merged = entry.merged
-        reasons = list(entry.reasons)
-        passed = entry.deterministic_passed
-
-        l3_entailment: bool | None = None
-        l3_state = l3_verdicts.get(entry.claim.claim_id)
-        if l3_state is not None:
-            l3_entailment = l3_state.entailed
-            if not l3_entailment:
-                reasons.append(REASON_ENTAILMENT_UNSUPPORTED)
-            passed = passed and l3_entailment
-
-        checks = ClaimChecks(
-            L0_exists=merged.exists,
-            L0_in_active_version=merged.in_active_version,
-            L0_acl_visible=merged.acl_visible,
-            L0_in_requester_ledger=merged.in_requester_ledger,
-            L0_not_stale=merged.not_stale,
-            L0_supporting_trust_ok=merged.supporting_trust_ok,
-            L1_coverage=entry.l1_coverage,
-            L2_typed_fact=entry.l2_typed_fact,
-            L3_entailment=l3_entailment,
-        )
-        claim_results.append(
-            ClaimReceipt(
-                claim_id=entry.claim.claim_id,
-                result="passed" if passed else "failed",
-                checks=checks,
-                # De-duplicate reasons while preserving first-seen order.
-                failed_reasons=list(dict.fromkeys(reasons)),
-            )
-        )
-
-    passed_count = sum(1 for r in claim_results if r.result == "passed")
-    if passed_count == len(claim_results):
-        overall = "passed"
-    elif passed_count == 0:
-        overall = "failed"
-    else:
-        overall = "partial"
+    # Three passes, each its own responsibility: (1) deterministic L0-L2 over the
+    # resolved context, (2) optional cached L3 entailment gated on what L0-L2 left
+    # unresolved (the cost guard), (3) fold L3 in and assemble per-claim receipts.
+    deterministic = _deterministic_pass(
+        request.claims,
+        ctx,
+        resolvable_ids=resolvable_ids,
+        cited_body_texts=cited_body_texts,
+        l2_verdicts=l2_verdicts,
+        run_l1=run_l1,
+        run_l2=run_l2,
+        max_quote_chars=deps.settings.max_quote_chars,
+    )
+    l3_verdicts = await _l3_pass(
+        deterministic,
+        deps,
+        resolvable_ids=resolvable_ids,
+        build_seq=active.build_seq,
+        run_l3=run_l3,
+        is_active=is_active,
+    )
+    claim_results = _assemble_receipts(deterministic, l3_verdicts)
+    overall = _overall_result(claim_results)
 
     async with deps.session_factory() as session:
         await insert_event(
@@ -606,6 +669,7 @@ async def verify_answer(
     # request field. Absent (internal/L0-only call) ⇒ null, unchanged behaviour.
     client_id = client.client_id if client is not None else None
 
+    passed_count = sum(1 for r in claim_results if r.result == "passed")
     l3_ran = sum(1 for s in l3_verdicts.values())
     l3_cache_hits = sum(1 for s in l3_verdicts.values() if s.cache_hit)
     logger.info(
