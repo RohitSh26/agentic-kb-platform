@@ -1,4 +1,4 @@
-"""context.verify_answer: deterministic L0/L1/L2 verifier (ADR-0011).
+"""context.verify_answer: layered L0/L1/L2/L3 verifier + signed receipt (ADR-0011).
 
 The broker governs retrieval, not the agent's answer; the only enforceable
 trust boundary is "an answer is platform-trusted iff it carries a valid
@@ -8,27 +8,37 @@ L0 checks run per cited evidence id:
   exists · in active version · ACL-visible to requester · in requester's
   retrieval ledger · not stale · supporting trust is EXTRACTED.
 
-Phase 4 adds two more deterministic levels, run only when requested (additive —
-an L0-only caller is unchanged):
+Phase 4 adds three more levels, run only when requested (additive — an L0-only
+caller is unchanged):
 
   L1 (coverage)   — the claim cites ≥1 resolvable ledger unit and any quote it
                     carries is within the configured span cap.
   L2 (typed fact) — the claim's optional typed assertion (symbol-in-file,
                     file-imports-module, edge-between) matches a ledger unit;
                     a real-but-misread citation fails here where L0 passes.
+  L3 (entailment) — cached LLM entailment, run ONLY for claims L0-L2 could not
+                    adjudicate (passed every deterministic level, no L2 verdict)
+                    that have resolvable cited evidence. NEVER on an L2-resolved
+                    claim (cost guard). A cache hit makes ZERO LLM calls.
 
 A claim's ``result`` is the AND of every level that ran and produced a verdict
 for it. ``overall`` is ``passed`` iff all claims passed, ``failed`` iff all
 failed, else ``partial``.
 
-The verifier performs NO generation/LLM and treats answer/evidence text as
-untrusted: it never logs answer or evidence text — only ids, hashes, and check
-outcomes. Every call writes a retrieval_event (verification is a broker action).
+When a signing key is configured (env var NAME in settings; value read at
+runtime, never literalised), the receipt is signed with HMAC-SHA256 so a host
+can validate it statelessly (receipt_signing.verify_receipt_signature).
+
+The verifier performs NO generation, and L3 is the only LLM touch (entailment,
+not generation). It treats answer/evidence text as untrusted and never logs
+answer or evidence text — only ids, hashes, and check outcomes. Every call writes
+a retrieval_event (verification is a broker action).
 """
 
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -39,7 +49,12 @@ from fastmcp.exceptions import ToolError
 from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.claim_ledger import adjudicate_typed_fact
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
+from agentic_mcp_server.context_broker.entailment import (
+    REASON_ENTAILMENT_UNSUPPORTED,
+    run_l3_entailment,
+)
 from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.receipt_signing import sign_receipt
 from agentic_mcp_server.context_broker.trust import CLAIM_SUPPORTING
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_version
 from agentic_mcp_server.infrastructure.postgres.provenance import (
@@ -136,6 +151,37 @@ class _L0Result:
         )
 
 
+@dataclass(frozen=True)
+class _DeterministicClaim:
+    """One claim's resolved L0/L1/L2 state, held between the deterministic pass and
+    the L3 gate so L3 runs ONLY on claims L0-L2 could not adjudicate."""
+
+    claim: ClaimInput
+    merged: _L0Result
+    reasons: list[str]
+    deterministic_passed: bool
+    l1_coverage: bool | None
+    l2_typed_fact: bool | None
+
+
+@dataclass(frozen=True)
+class _L3State:
+    """One claim's L3 verdict + whether it came from the entailment cache."""
+
+    entailed: bool
+    cache_hit: bool
+
+
+def _l3_eligible(entry: _DeterministicClaim) -> bool:
+    """L3 runs for a claim iff L0-L2 left it deterministically unresolved.
+
+    Concretely: it passed every deterministic level that ran (so L3 is not piling on
+    an already-failed claim) AND carries no L2 typed-fact verdict (the ledger could
+    not settle it — a paraphrase/synthesis claim). A claim L2 already resolved (pass
+    OR fail) is NEVER sent to the LLM — the cost guard of ADR-0011."""
+    return entry.deterministic_passed and entry.l2_typed_fact is None
+
+
 def _check_evidence(raw_id: str, ctx: _EvidenceContext) -> tuple[_L0Result, list[str]]:
     """Run the six L0 checks for one cited evidence id; return checks + reasons."""
     reasons: list[str] = []
@@ -211,15 +257,19 @@ def _merge_l0(into: _L0Result, other: _L0Result) -> _L0Result:
     )
 
 
-def _resolve_levels(requested: list[VerifierLevel]) -> list[VerifierLevel]:
-    """Levels actually run: L0 is mandatory; L1/L2 run iff requested + supported.
+def _resolve_levels(requested: list[VerifierLevel], *, l3_supported: bool) -> list[VerifierLevel]:
+    """Levels actually run: L0 is mandatory; L1/L2/L3 run iff requested + supported.
 
-    Order is fixed (L0, L1, L2) so verifier_levels_run is stable regardless of
-    request ordering. A requested level the server does not support is dropped.
+    Order is fixed (L0, L1, L2, L3) so verifier_levels_run is stable regardless of
+    request ordering. A requested level the server does not support is dropped — in
+    particular L3 is dropped when no entailment client is configured (cost guard:
+    the platform, not the prompt, decides whether the LLM level is available).
     """
     requested_set = set(requested)
     levels: list[VerifierLevel] = ["L0"]  # always run; the trust floor.
     levels.extend(lv for lv in ("L1", "L2") if lv in requested_set)
+    if "L3" in requested_set and l3_supported:
+        levels.append("L3")
     return levels
 
 
@@ -253,9 +303,12 @@ async def verify_answer(
 ) -> VerificationReceipt:
     started = time.monotonic()
     answer_hash = _normalized_answer_hash(request)
-    levels = _resolve_levels(request.verifier_levels)
+    levels = _resolve_levels(
+        request.verifier_levels, l3_supported=deps.entailment_client is not None
+    )
     run_l1 = "L1" in levels
     run_l2 = "L2" in levels
+    run_l3 = "L3" in levels
 
     async with deps.session_factory() as session:
         active = await fetch_active_version(session)
@@ -338,7 +391,10 @@ async def verify_answer(
         retrieved_by_requester=retrieved,
     )
 
-    claim_results: list[ClaimReceipt] = []
+    # Pass 1 (deterministic): compute L0/L1/L2 for every claim. We hold the
+    # intermediate state so L3 can be gated on "L0-L2 produced no verdict that
+    # already settles this claim" before any LLM call is made.
+    deterministic: list[_DeterministicClaim] = []
     for claim in request.claims:
         merged: _L0Result | None = None
         evidence_results: list[_L0Result] = []
@@ -379,6 +435,61 @@ async def verify_answer(
                 reasons.append(REASON_TYPED_FACT_UNSUPPORTED)
             passed = passed and l2_typed_fact
 
+        deterministic.append(
+            _DeterministicClaim(
+                claim=claim,
+                merged=merged,
+                reasons=reasons,
+                deterministic_passed=passed,
+                l1_coverage=l1_coverage,
+                l2_typed_fact=l2_typed_fact,
+            )
+        )
+
+    # Pass 2 (L3, optional): run cached LLM entailment ONLY for claims L0-L2 could
+    # not adjudicate. A claim is L3-eligible iff it (a) passed every deterministic
+    # level that ran, (b) carries NO L2 typed-fact verdict (paraphrase/synthesis the
+    # ledger cannot check), and (c) has ≥1 resolvable cited unit to entail against.
+    # This is the cost guard: L3 never runs on an L2-resolved claim.
+    l3_verdicts: dict[str, _L3State] = {}
+    if run_l3 and deps.entailment_client is not None and is_active:
+        client = deps.entailment_client
+        async with deps.session_factory() as session:
+            for entry in deterministic:
+                if not _l3_eligible(entry):
+                    continue
+                cited_resolvable = frozenset(
+                    uid for uid in _evidence_uuids(entry.claim) if uid in resolvable_ids
+                )
+                if not cited_resolvable:
+                    continue
+                outcome = await run_l3_entailment(
+                    session,
+                    client=client,
+                    claim_text=entry.claim.text,
+                    resolvable_cited_ids=cited_resolvable,
+                    build_seq=active.build_seq,
+                )
+                if outcome.entailed is not None:
+                    l3_verdicts[entry.claim.claim_id] = _L3State(
+                        entailed=outcome.entailed, cache_hit=outcome.cache_hit
+                    )
+
+    # Pass 3: assemble receipts, folding any L3 verdict into result + checks.
+    claim_results: list[ClaimReceipt] = []
+    for entry in deterministic:
+        merged = entry.merged
+        reasons = list(entry.reasons)
+        passed = entry.deterministic_passed
+
+        l3_entailment: bool | None = None
+        l3_state = l3_verdicts.get(entry.claim.claim_id)
+        if l3_state is not None:
+            l3_entailment = l3_state.entailed
+            if not l3_entailment:
+                reasons.append(REASON_ENTAILMENT_UNSUPPORTED)
+            passed = passed and l3_entailment
+
         checks = ClaimChecks(
             L0_exists=merged.exists,
             L0_in_active_version=merged.in_active_version,
@@ -386,12 +497,13 @@ async def verify_answer(
             L0_in_requester_ledger=merged.in_requester_ledger,
             L0_not_stale=merged.not_stale,
             L0_supporting_trust_ok=merged.supporting_trust_ok,
-            L1_coverage=l1_coverage,
-            L2_typed_fact=l2_typed_fact,
+            L1_coverage=entry.l1_coverage,
+            L2_typed_fact=entry.l2_typed_fact,
+            L3_entailment=l3_entailment,
         )
         claim_results.append(
             ClaimReceipt(
-                claim_id=claim.claim_id,
+                claim_id=entry.claim.claim_id,
                 result="passed" if passed else "failed",
                 checks=checks,
                 # De-duplicate reasons while preserving first-seen order.
@@ -423,9 +535,11 @@ async def verify_answer(
             ),
         )
 
+    l3_ran = sum(1 for s in l3_verdicts.values())
+    l3_cache_hits = sum(1 for s in l3_verdicts.values() if s.cache_hit)
     logger.info(
         "broker.verify_answer answer_id=%s subject=%s graph_version=%s claims=%d "
-        "levels=%s overall=%s passed=%d",
+        "levels=%s overall=%s passed=%d l3_ran=%d l3_cache_hits=%d",
         request.answer_id,
         requester.subject,
         graph_version,
@@ -433,9 +547,11 @@ async def verify_answer(
         ",".join(levels),
         overall,
         passed_count,
+        l3_ran,
+        l3_cache_hits,
     )
 
-    return VerificationReceipt(
+    receipt = VerificationReceipt(
         answer_hash=answer_hash,
         graph_version=graph_version,
         issued_at=datetime.now(UTC),
@@ -444,4 +560,11 @@ async def verify_answer(
         claim_results=claim_results,
         client_id=None,
         signature=None,
+        key_id=None,
     )
+    # Sign only when a key is configured (the env var NAME is config; the value is
+    # read at sign time, never literalised). When unset, an UNSIGNED receipt is
+    # still issued — L0 stays the mandatory floor; signing is additive (PR-31).
+    if os.environ.get(deps.settings.signing_key_env):
+        receipt = sign_receipt(receipt, env_var=deps.settings.signing_key_env)
+    return receipt
