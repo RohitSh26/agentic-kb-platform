@@ -1,7 +1,5 @@
 """http_client: retry/backoff on 429 + 5xx, Retry-After, no token in logs/fields."""
 
-import base64
-
 import httpx
 import pytest
 
@@ -114,8 +112,6 @@ async def test_token_never_logged(
 
 
 async def test_get_text_strict_utf8_decode() -> None:
-    body = base64.b64encode(b"hi").decode()  # arbitrary text; just confirm decode path
-
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content="héllo".encode())
 
@@ -123,4 +119,25 @@ async def test_get_text_strict_utf8_decode() -> None:
     async with client:
         text = await client.get_text("https://api.example.com/t")
     assert text == "héllo"
-    assert body  # silence unused
+
+
+async def test_clamps_huge_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    slept: list[float] = []
+
+    async def record_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("agentic_kb_builder.connectors.http_client.asyncio.sleep", record_sleep)
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"Retry-After": "999999"}, json={})
+        return httpx.Response(200, json={})
+
+    client = AsyncHttpClient(transport=httpx.MockTransport(handler), backoff_cap=30.0)
+    async with client:
+        await client.get_json("https://api.example.com/x")
+    # A malicious/huge Retry-After is clamped to the backoff cap, never slept whole.
+    assert slept == [30.0]

@@ -63,11 +63,15 @@ class AsyncHttpClient:
         self._max_retries = max_retries
         self._backoff_base = backoff_base
         self._backoff_cap = backoff_cap
+        # follow_redirects stays False (httpx default, pinned explicitly): this is an
+        # auth-bearing client, and a redirect could forward the Authorization header
+        # to an unintended host. A 3xx surfaces as a non-2xx and is handled by _request.
         self._client = httpx.AsyncClient(
             base_url=base_url,
             headers=headers,
             timeout=timeout,
             transport=transport,
+            follow_redirects=False,
         )
 
     async def __aenter__(self) -> "AsyncHttpClient":
@@ -126,7 +130,13 @@ class AsyncHttpClient:
 
             if response.status_code in _RETRYABLE_STATUS and attempt < self._max_retries:
                 retry_after = self._retry_after_seconds(response)
-                delay = retry_after if retry_after is not None else self._backoff_seconds(attempt)
+                # Clamp a server-supplied Retry-After to the backoff cap so a huge
+                # (mis)configured value can never stall the nightly build.
+                delay = (
+                    min(retry_after, self._backoff_cap)
+                    if retry_after is not None
+                    else self._backoff_seconds(attempt)
+                )
                 logger.warning(
                     "event=http_fetch_retry url=%s attempt=%d status=%d delay=%.2f",
                     url,

@@ -14,7 +14,7 @@ The auth token is injected as `Authorization: Bearer <pat>` by the HTTP client a
 never appears in a SourceRef field or a log line.
 """
 
-import base64
+import re
 from typing import Any, Literal
 
 from agentic_kb_builder.connectors.http_client import AsyncHttpClient, HttpFetchError
@@ -25,15 +25,32 @@ from agentic_kb_builder.structured_logging import get_logger
 logger = get_logger(__name__)
 
 _API_BASE = "https://api.github.com"
+_JSON_ACCEPT = "application/vnd.github+json"
+# Raw media type returns the file bytes directly — unlike the JSON+base64 form it is
+# not capped at 1 MB, so files >1 MB are fetched whole (not silently truncated).
+_RAW_ACCEPT = "application/vnd.github.raw"
 GithubSourceSpec = GithubCodeSourceSpec | GithubDocSourceSpec
 
+# A git branch may contain internal "/" (feature/x) but never whitespace, "..",
+# or a leading/trailing slash. Guards a config-supplied branch interpolated into
+# the request path (host is already pinned to api.github.com).
+_BRANCH_RE = re.compile(r"^[^\s/](?:[^\s]*[^\s/])?$")
 
-def _github_client(token: str | None, transport: Any | None = None) -> AsyncHttpClient:
+
+def _validate_branch(branch: str) -> str:
+    if ".." in branch or _BRANCH_RE.match(branch) is None:
+        raise HttpFetchError(f"invalid github branch name {branch!r}")
+    return branch
+
+
+def _github_client(
+    token: str | None, *, accept: str = _JSON_ACCEPT, transport: Any | None = None
+) -> AsyncHttpClient:
     return AsyncHttpClient(
         base_url=_API_BASE,
         auth_header=f"Bearer {token}" if token else None,
         extra_headers={
-            "Accept": "application/vnd.github+json",
+            "Accept": accept,
             "X-GitHub-Api-Version": "2022-11-28",
         },
         transport=transport,
@@ -61,10 +78,10 @@ class GitHubRestBackend:
         owner, _, name = spec.repo.partition("/")
         self._owner = owner
         self._repo = name
-        self._branch = spec.branch
+        self._branch = _validate_branch(spec.branch)
 
-    def _new_client(self) -> AsyncHttpClient:
-        return _github_client(self._token, self._transport)
+    def _new_client(self, *, accept: str = _JSON_ACCEPT) -> AsyncHttpClient:
+        return _github_client(self._token, accept=accept, transport=self._transport)
 
     async def _resolve_sha(self, client: AsyncHttpClient) -> str:
         data = await client.get_json(f"/repos/{self._owner}/{self._repo}/branches/{self._branch}")
@@ -114,6 +131,8 @@ class GitHubRestBackend:
                     path=path,
                 )
             )
+        # Stable ordering regardless of the API's tree order (connectors rule).
+        refs.sort(key=lambda ref: ref.path or "")
         logger.info(
             "event=github_listed repo=%s/%s sha=%s blobs=%d",
             self._owner,
@@ -124,20 +143,15 @@ class GitHubRestBackend:
         return refs
 
     async def fetch_text(self, source: SourceRef) -> str:
+        # Raw media type returns the file bytes directly at the pinned SHA. This
+        # avoids the contents API's JSON+base64 1 MB cap, which would otherwise
+        # return empty content for a >1 MB file and hash it as an empty file.
         path = source.path or ""
-        async with self._new_client() as client:
-            data = await client.get_json(
+        async with self._new_client(accept=_RAW_ACCEPT) as client:
+            return await client.get_text(
                 f"/repos/{self._owner}/{self._repo}/contents/{path}",
                 params={"ref": source.source_version},
             )
-        encoding = data.get("encoding")
-        if encoding != "base64":
-            raise HttpFetchError(
-                f"github contents for {path!r} used unexpected encoding {encoding!r}"
-            )
-        # The contents API wraps base64 with newlines; decode tolerates them.
-        raw = base64.b64decode(data["content"])
-        return raw.decode("utf-8")
 
 
 __all__ = ["GitHubRestBackend"]
