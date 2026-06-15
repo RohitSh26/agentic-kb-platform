@@ -10,13 +10,29 @@ a token value is unrepresentable in this schema.
 import re
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 CONFIG_SCHEMA_VERSION: Final = 1
 
 _NAME_PATTERN = r"^[a-z0-9][a-z0-9._-]{0,63}$"
 _TOKEN_ENV_PATTERN = r"^[A-Z][A-Z0-9_]*$"
 _REPO_PATTERN = r"^[^/\s]+/[^/\s]+$"
+# ADO org/project/wiki land in dev.azure.com URL path segments; the char classes
+# forbid the path metacharacters (/, \, @, ?, #) that could reshape the request, so a
+# single config segment can't traverse paths (the host is already pinned). No "/"
+# means no traversal even with a "..". (pydantic-core's regex has no look-around.)
+# Orgs are alphanumeric+hyphen; project/wiki allow spaces and dots ("platform.wiki");
+# area_path (a WIQL value, quote-escaped at use) uses backslash hierarchy.
+_ADO_ORG_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$"
+_ADO_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,127}$"
+_ADO_AREA_PATH_PATTERN = r"^[A-Za-z0-9 \\._-]{1,255}$"
 
 
 class GlobError(ValueError):
@@ -148,18 +164,20 @@ class GithubDocSourceSpec(PathSelectSpec):
 
 class AzureWikiSourceSpec(PathSelectSpec):
     type: Literal["azure_wiki"]
-    organization: str
-    project: str
-    wiki: str
+    organization: str = Field(pattern=_ADO_ORG_PATTERN)
+    project: str = Field(pattern=_ADO_NAME_PATTERN)
+    wiki: str = Field(pattern=_ADO_NAME_PATTERN)
 
 
 class AdoCardSourceSpec(BaseSourceSpec):
     """Cards have no paths; selection is query-shaped, not glob-shaped."""
 
     type: Literal["ado_card"]
-    organization: str
-    project: str
-    area_path: str | None = None
+    organization: str = Field(pattern=_ADO_ORG_PATTERN)
+    project: str = Field(pattern=_ADO_NAME_PATTERN)
+    # pattern lives on the str member so None stays valid (pydantic rejects a
+    # `pattern=` constraint applied to a `str | None` union directly).
+    area_path: Annotated[str, StringConstraints(pattern=_ADO_AREA_PATH_PATTERN)] | None = None
     work_item_types: list[str] = []
     states: list[str] = []
     tags: list[str] = []

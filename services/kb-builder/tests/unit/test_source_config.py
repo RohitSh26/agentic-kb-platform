@@ -54,6 +54,28 @@ class TestValidationMatrix:
         with pytest.raises(ValidationError):
             SourceConfig.model_validate(_config([_github(repo="not-owner-slash-name")]))
 
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"organization": "bad/org"},  # slash → path reshape
+            {"organization": "evil.com"},  # dot not allowed in org
+            {"project": "proj/../other"},  # slash/traversal
+            {"project": "has?query"},  # url metachar
+            {"area_path": "a/b"},  # forward slash not an ADO area separator
+            {"area_path": "Area'; DROP"},  # quote/metachars (defense beyond WIQL escaping)
+        ],
+    )
+    def test_bad_ado_fields_rejected(self, overrides: dict[str, object]) -> None:
+        spec: dict[str, object] = {
+            "name": "cards",
+            "type": "ado_card",
+            "organization": "org",
+            "project": "proj",
+        }
+        spec.update(overrides)
+        with pytest.raises(ValidationError):
+            SourceConfig.model_validate(_config([spec]))
+
     def test_lowercase_token_env_rejected(self) -> None:
         with pytest.raises(ValidationError):
             SourceConfig.model_validate(_config([_github(auth={"token_env": "github_token"})]))
