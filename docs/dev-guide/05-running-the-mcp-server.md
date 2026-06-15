@@ -164,13 +164,36 @@ Then present `Authorization: Bearer <token>` on the MCP HTTP requests. The audie
 **must** equal `MCP_ENTRA_AUDIENCE` and the issuer must be your `MCP_ENTRA_TENANT_ID`, or the JWKS
 verifier rejects it (401).
 
-### 4b. Local dev without a real tenant — proposed, not yet available
+### 4b. Local dev auth — opt-in, loopback only (ADR-0016)
 
-A laptop-only "use my freshly-built KB" loop still needs a real token today, which is friction.
-**ADR-0016 (Proposed)** describes an explicitly opt-in, clearly-labelled local dev verifier
-(`MCP_LOCAL_DEV_AUTH=1`, OFF by default, refuses to run against a real tenant or a public bind,
-loudly ledgered). It is **not implemented** — it touches the auth boundary and needs owner
-ratification (see `docs/adr/0016-local-dev-auth.md`). Until then, use §4a.
+For a laptop-only "use my freshly-built KB" loop, enable the **opt-in** local-dev verifier instead of
+acquiring a real token. It is **OFF by default** and refuses to start unless it is genuinely local —
+so it can never weaken a deployment (ADR-0016; this is NOT an auth-off switch).
+
+```sh
+MCP_LOCAL_DEV_AUTH=1 \
+MCP_HTTP_HOST=127.0.0.1 \            # required: it refuses any non-loopback bind
+MCP_ENTRA_TENANT_ID=local-dev \     # required: it refuses a REAL tenant
+MCP_ENTRA_AUDIENCE=api://local \
+MCP_LOCAL_DEV_TEAMS=my-team \        # the teams your dev identity is granted (csv)
+DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb" \
+uv run python -m agentic_mcp_server
+```
+
+Now any `Authorization: Bearer <anything>` authorizes as subject `local-dev` (override with
+`MCP_LOCAL_DEV_SUBJECT`) carrying the configured teams; the request still flows through the normal
+ACL / scope / trust checks. The server logs `event=local_dev_auth_enabled ...` loudly on every start
+so dev-auth can never be silently on.
+
+| Var | Default | Meaning |
+|---|---|---|
+| `MCP_LOCAL_DEV_AUTH` | unset → **OFF** | truthy (`1/true/yes/on`) enables the dev verifier |
+| `MCP_LOCAL_DEV_SUBJECT` | `local-dev` | the dev identity's `Requester.subject` |
+| `MCP_LOCAL_DEV_TEAMS` | `local-dev-team` | csv of teams granted to the dev identity (your ACLs) |
+| `MCP_LOCAL_DEV_CLIENT_ID` | = subject | optional dev `client_id` for `context.platform_trust` |
+
+**Guardrails (any violation refuses to boot):** a real `MCP_ENTRA_TENANT_ID`, or a non-loopback
+`MCP_HTTP_HOST`. Never set `MCP_LOCAL_DEV_AUTH` in a deployed/container image.
 
 > If you only want to confirm the *deployment* is healthy (not call a tool), `/health` needs **no**
 > token — see §6.

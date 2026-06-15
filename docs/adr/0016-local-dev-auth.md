@@ -2,10 +2,14 @@
 
 ## Status
 
-**Proposed** (2026-06-15). Needs owner ratification before any code lands. This ADR records a
-problem and two options; **no auth bypass has been implemented**. Extends ADR-0001 (remote MCP as
-the developer setup) and is bound by invariant 6 (CLAUDE.md: agents never touch data/secrets
-directly; auth is fail-closed; *there is no auth-off switch*).
+**Accepted** (2026-06-15) — ratified by the platform owner; **Option B implemented**. An opt-in,
+OFF-by-default local-dev verifier (`MCP_LOCAL_DEV_AUTH`) lets a developer exercise the tools against a
+built KB, with hard guardrails enforced at boot: it refuses a real `MCP_ENTRA_TENANT_ID`, refuses a
+non-loopback `MCP_HTTP_HOST`, logs `event=local_dev_auth_enabled` loudly whenever active, and the dev
+identity still flows through the normal ACL/scope/trust path. Production (flag unset) is byte-for-byte
+unchanged — this is NOT an auth-off switch (invariant 6). Env vars: `MCP_LOCAL_DEV_AUTH`,
+`MCP_LOCAL_DEV_SUBJECT` (default `local-dev`), `MCP_LOCAL_DEV_TEAMS` (csv, default `local-dev-team`),
+`MCP_LOCAL_DEV_CLIENT_ID` (default = subject). Extends ADR-0001 and is bound by invariant 6.
 
 ## Context
 
