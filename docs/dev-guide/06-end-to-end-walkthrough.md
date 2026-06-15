@@ -3,11 +3,35 @@
 This guide runs the **entire platform on your laptop** with one command and then explains, stage by
 stage, what just happened and why. It needs only **Postgres + uv** — no Ollama, no Azure, no Entra.
 
+## 0. Get the code (prerequisites)
+
+Install **Postgres** (running locally) and **uv** (`brew install uv` or
+`curl -LsSf https://astral.sh/uv/install.sh | sh`), then clone the repo and use the **`main`**
+branch — that's the only branch you need; everything here ships on `main`:
+
+```sh
+# first time:
+git clone https://github.com/RohitSh26/agentic-kb-platform.git
+cd agentic-kb-platform
+
+# already cloned — get the latest main:
+git checkout main
+git pull origin main
+
+# install per-service Python deps (uv manages Python 3.12 itself):
+make sync
+```
+
+> `make demo` connects to Postgres as your `$USER` on `localhost:5432`. If your Postgres uses a
+> different user/host/port, set `PGUSER` / `PGHOST` / `PGPORT` (e.g. `PGUSER=postgres make demo`).
+
+## Run it
+
 ```sh
 make demo          # or: ./scripts/e2e-local.sh
 ```
 
-If you want to *use* it after, run the server alone against the demo KB:
+To *use* the KB afterwards, run the server alone against the demo database:
 
 ```sh
 SKIP_BUILD=1 ./scripts/e2e-local.sh
