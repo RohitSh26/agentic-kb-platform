@@ -10,6 +10,7 @@ import logging
 import uuid
 
 from agentic_mcp_server.auth.rbac import Requester
+from agentic_mcp_server.context_broker.dedupe import similarity
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.temporal import (
     Intent,
@@ -21,6 +22,7 @@ from agentic_mcp_server.context_broker.temporal import (
     is_stale_doc_for_intent,
 )
 from agentic_mcp_server.context_broker.untrusted import scan_for_injection
+from agentic_mcp_server.domain.query_text import normalize_query
 from agentic_mcp_server.domain.token_budget import estimate_tokens
 from agentic_mcp_server.infrastructure.postgres.artifacts import (
     ArtifactRow,
@@ -99,6 +101,46 @@ def _card_summary(body: str, max_chars: int = 280) -> str:
     return first_line[:max_chars]
 
 
+def _dedupe_text(artifact: ArtifactRow) -> str:
+    """Normalized title + summary used as the within-retrieval dedupe signal.
+
+    Card title/summary are what an agent actually sees, so collapsing on them
+    (not the full body) matches the contract's "semantic dedupe before the card
+    cap" — two artifacts that surface as the same card cost a card slot for no
+    new evidence.
+    """
+    title = artifact.title or str(artifact.artifact_id)
+    return normalize_query(f"{title} {_card_summary(artifact.body_text or '')}")
+
+
+def _collapse_near_duplicates(
+    ranked: list[ArtifactRow], threshold: float
+) -> tuple[list[ArtifactRow], list[tuple[uuid.UUID, uuid.UUID]]]:
+    """Drop near-duplicate candidates, keeping the higher-ranked of each pair.
+
+    `ranked` is already in deterministic rank order (best first); we keep a
+    candidate only if it is not a near-duplicate of an already-kept one, so the
+    survivor is always the better-ranked card and the result stays deterministic.
+    Returns the survivors plus (dropped_id, kept_id) pairs for logging.
+    """
+    kept: list[ArtifactRow] = []
+    kept_text: list[str] = []
+    dropped: list[tuple[uuid.UUID, uuid.UUID]] = []
+    for candidate in ranked:
+        text = _dedupe_text(candidate)
+        duplicate_of: ArtifactRow | None = None
+        for keeper, keeper_text in zip(kept, kept_text, strict=True):
+            if similarity(text, keeper_text) >= threshold:
+                duplicate_of = keeper
+                break
+        if duplicate_of is None:
+            kept.append(candidate)
+            kept_text.append(text)
+        else:
+            dropped.append((candidate.artifact_id, duplicate_of.artifact_id))
+    return kept, dropped
+
+
 def card_tokens(card: EvidenceCard) -> int:
     return estimate_tokens(card.title) + estimate_tokens(card.summary)
 
@@ -165,7 +207,22 @@ async def retrieve_cards(
             stale_for_intent=stale,
         )
 
-    ranked = sorted(allowed, key=lambda a: _rank_key(a, scores, temporal), reverse=True)[:top]
+    # Rank the FULL candidate set, then collapse near-duplicates BEFORE the card
+    # cap so two artifacts that surface as the same card do not each consume a
+    # slot (token-budgets rule: semantic dedupe, then 3-5 cards max). Dedupe runs
+    # on the already-sorted list so the higher-ranked of any duplicate pair wins
+    # and the outcome is deterministic.
+    ranked_all = sorted(allowed, key=lambda a: _rank_key(a, scores, temporal), reverse=True)
+    deduped, dropped = _collapse_near_duplicates(ranked_all, deps.settings.semantic_dupe_threshold)
+    if dropped:
+        logger.info(
+            "event=retrieval_deduped tool=%s threshold=%.2f dropped=%d pairs=%s",
+            tool,
+            deps.settings.semantic_dupe_threshold,
+            len(dropped),
+            ",".join(f"{dropped_id}->{kept_id}" for dropped_id, kept_id in dropped),
+        )
+    ranked = deduped[:top]
     cards = [build_card(artifact, temporal.get(artifact.artifact_id)) for artifact in ranked]
     logger.info(
         "event=temporal_weight_summary tool=%s intent=%s candidates=%d ranked=%d "

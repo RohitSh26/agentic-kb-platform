@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from agentic_mcp_server.auth import build_entra_verifier
+from agentic_mcp_server.auth import select_verifier
 from agentic_mcp_server.auth.client_identity import ClientRegistry, parse_client_registry
 from agentic_mcp_server.config import SERVER_NAME, load_config
 from agentic_mcp_server.context_broker.budgets import BudgetPolicy, parse_agent_allowances
@@ -64,7 +64,12 @@ def build_server(
 
 
 def create_app() -> FastMCP:
-    """Production entrypoint: Entra ID auth + registry-backed health."""
+    """Production entrypoint: Entra ID auth + registry-backed health.
+
+    Auth defaults to fail-closed Entra. ``select_verifier`` swaps in the opt-in
+    local-dev verifier ONLY when ``MCP_LOCAL_DEV_AUTH`` is set and its guardrails
+    hold (ADR-0016); production with the flag unset is unchanged.
+    """
     configure_logging()
     config = load_config()
     allowances = parse_agent_allowances(config.agent_allowances_json)
@@ -73,7 +78,7 @@ def create_app() -> FastMCP:
     logger.info("event=client_registry_loaded clients=%d", len(client_registry.policies))
     engine = create_engine(config.database_url)
     return build_server(
-        auth=build_entra_verifier(config),
+        auth=select_verifier(config),
         session_factory=create_session_factory(engine),
         budget_policy=BudgetPolicy(allowances=allowances),
         client_registry=client_registry,

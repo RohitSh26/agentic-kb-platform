@@ -25,6 +25,9 @@ _FETCH_EDGES_QUERY = text(
       AND (from_artifact_id = ANY(CAST(:artifact_ids AS uuid[]))
            OR to_artifact_id = ANY(CAST(:artifact_ids AS uuid[])))
       AND (CAST(:edge_types AS text[]) IS NULL OR edge_type = ANY(CAST(:edge_types AS text[])))
+    -- Total, stable order so BFS frontier expansion and cap truncation are
+    -- deterministic: same inputs ⇒ same neighbor set (no hidden DB row order).
+    ORDER BY from_artifact_id, to_artifact_id, edge_type, trust_class
     """
 )
 

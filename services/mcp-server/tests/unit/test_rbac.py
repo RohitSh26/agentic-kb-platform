@@ -68,6 +68,35 @@ def test_requester_identity_fails_closed_without_a_session_token() -> None:
         current_requester()
 
 
+def test_requester_identity_fails_closed_when_token_has_no_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A token with neither subject nor client_id must not collapse to a shared
+    # sentinel identity (it would cross-bind ACLs between principals). invariant 6.
+    from fastmcp.server.auth import AccessToken
+
+    from agentic_mcp_server.context_broker import dependencies
+
+    token = AccessToken(token="t", client_id="", scopes=[], subject=None, claims={})
+    monkeypatch.setattr(dependencies, "get_access_token", lambda: token)
+    with pytest.raises(ToolError, match="no subject"):
+        dependencies.current_requester()
+
+
+def test_client_identity_fails_closed_when_token_has_no_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastmcp.server.auth import AccessToken
+
+    from agentic_mcp_server.auth.client_identity import ClientRegistry
+    from agentic_mcp_server.context_broker import dependencies
+
+    token = AccessToken(token="t", client_id="", scopes=[], subject=None, claims={})
+    monkeypatch.setattr(dependencies, "get_access_token", lambda: token)
+    with pytest.raises(ToolError, match="no client identity"):
+        dependencies.current_client_identity(ClientRegistry())
+
+
 def test_malformed_claims_grant_no_teams() -> None:
     assert teams_from_claims({}) == frozenset()
     assert teams_from_claims({"groups": "not-a-list"}) == frozenset()

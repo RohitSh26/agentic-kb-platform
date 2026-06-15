@@ -29,9 +29,11 @@ services:
       timeout: 3s
       retries: 30
 
-  # One-shot: applies Alembic migrations and exits. There is no build CLI yet
-  # (the nightly pipeline is the recorded follow-up), so migrations are this
-  # container's whole job in compose.
+  # One-shot: applies Alembic migrations and exits (it owns the schema, ADR-0008).
+  # The end-to-end `build` CLI exists (PR-22), but this container is deliberately
+  # migrations-only — a populated KB comes from the optional `kb-build` profile
+  # below (or a local `python -m agentic_kb_builder.build`). Wiring the nightly
+  # pipeline into compose remains the recorded follow-up.
   kb-builder:
     build: ./services/kb-builder
     environment:
@@ -40,6 +42,42 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # OPTIONAL, profile-gated one-shot: `docker compose --profile build up` runs a
+  # full no-cloud build into Postgres and activates the new kb_version, so the
+  # stack comes up serving a real KB (/health then answers 200). Without the
+  # profile this service never starts (default `up` stays migrations-only).
+  #
+  # It reuses the kb-builder image, mounts the repo read-only at /workspace for
+  # the local-FS fetch backend + git-metadata connector, and reaches an Ollama
+  # running on the HOST (host.docker.internal) for wikify — point LLM_* elsewhere
+  # to use a hosted provider (docs/dev-guide/04 §4). Build activation is the CLI
+  # default; pass nothing to activate, --no-activate to skip.
+  kb-build:
+    profiles: ["build"]
+    build: ./services/kb-builder
+    command:
+      - python
+      - -m
+      - agentic_kb_builder.build
+      - --workspace
+      - /workspace
+      - --sources
+      - /workspace/services/kb-builder/sources.example.yaml
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agentic_kb
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_MODEL: ${LLM_MODEL:-llama3.1}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+    volumes:
+      - ./:/workspace:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: "no"
+    depends_on:
+      kb-builder:
+        condition: service_completed_successfully
 
   # Never runs migrations — starts only after kb-builder has applied them.
   # /health answers 503 (no_active_kb_version) on a fresh volume: readiness

@@ -127,6 +127,38 @@ async def test_fan_out_is_capped_by_settings(
     assert len(response.neighbors) == 1
 
 
+async def test_capped_fan_out_is_deterministic_across_calls(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # More out-neighbors than the cap: WHICH survive the truncation must not depend
+    # on the DB's row order. The edge query's ORDER BY makes BFS truncation stable —
+    # the same lowest-by-(to_artifact_id) prefix every call (#113).
+    async with factory() as session:
+        root = await insert_artifact(
+            session, title="root", body_text="r", artifact_type="code_chunk"
+        )
+        neighbors = [
+            await insert_artifact(session, title=f"n{i}", body_text="x", artifact_type="code_chunk")
+            for i in range(6)
+        ]
+        for n in neighbors:
+            await insert_edge(session, from_artifact_id=root, to_artifact_id=n, edge_type="calls")
+    deps = make_broker_deps(
+        factory, FakeSearchClient(), settings=BrokerSettings(max_graph_neighbors=2)
+    )
+
+    first = await get_neighbors(deps, GetNeighborsRequest(artifact_id=root, depth=1), REQUESTER)
+    second = await get_neighbors(deps, GetNeighborsRequest(artifact_id=root, depth=1), REQUESTER)
+
+    kept = [n.artifact_id for n in first.neighbors]
+    assert kept == [n.artifact_id for n in second.neighbors]  # stable across calls
+    assert len(kept) == 2
+    # Specifically the ORDER BY prefix: the two lowest neighbor ids (Postgres orders
+    # uuid by the same big-endian bytes Python's .bytes sorts on).
+    expected = sorted(neighbors, key=lambda u: u.bytes)[:2]
+    assert set(kept) == set(expected)
+
+
 async def test_every_lookup_writes_a_ledger_row_with_the_run_sentinel(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:

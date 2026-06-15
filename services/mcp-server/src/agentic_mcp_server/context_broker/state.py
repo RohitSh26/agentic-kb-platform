@@ -54,20 +54,44 @@ class EvidencePackState:
 @dataclass
 class PackStore:
     packs: dict[str, EvidencePackState] = field(default_factory=dict)
+    # Per-RUN, per-subject usage shared across every pack of a run. Each new pack
+    # for a run reuses these counters, so an agent cannot reset its per-agent
+    # allowance by re-creating the pack within the run (the create_pack ceiling
+    # bypass): the follow-up meter request_more reads is run-scoped, not
+    # pack-scoped. Outlives any single pack so the ceiling holds across re-packs.
+    run_usage: dict[str, dict[str, AgentUsage]] = field(default_factory=dict)
     # bounds process memory in a long-lived instance; evicted packs remain
     # auditable through the ledger
     max_packs: int = 256
 
+    def usage_for_run(self, run_id: str) -> dict[str, AgentUsage]:
+        return self.run_usage.setdefault(run_id, {})
+
     def create(self, pack: EvidencePackState) -> None:
+        # Evict the least-recently-USED pack (front of the insertion-ordered dict;
+        # get() moves touched packs to the back) so an actively-read long-running
+        # pack is not dropped before a newer, untouched one.
         while len(self.packs) >= self.max_packs:
-            self.packs.pop(next(iter(self.packs)))
+            evicted = self.packs.pop(next(iter(self.packs)))
+            self._evict_run_usage_if_unreferenced(evicted.run_id)
         self.packs[pack.context_pack_id] = pack
+
+    def _evict_run_usage_if_unreferenced(self, run_id: str) -> None:
+        # Bound run_usage alongside packs: drop a run's shared usage meter once its
+        # LAST live pack is evicted. Eviction only fires under max_packs pressure, so
+        # a run with any live pack keeps its meter — the create_pack ceiling bypass
+        # (re-packing within a live run) stays closed; only long-gone runs are pruned.
+        if run_id in self.run_usage and not any(p.run_id == run_id for p in self.packs.values()):
+            del self.run_usage[run_id]
 
     def get(self, context_pack_id: str) -> EvidencePackState:
         try:
-            return self.packs[context_pack_id]
+            pack = self.packs.pop(context_pack_id)
         except KeyError as exc:
             raise UnknownPackError(context_pack_id) from exc
+        # LRU touch: re-insert at the back so this pack is now most-recently-used.
+        self.packs[context_pack_id] = pack
+        return pack
 
 
 def new_pack_id() -> str:

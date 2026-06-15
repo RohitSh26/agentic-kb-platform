@@ -37,6 +37,7 @@ from agentic_mcp_server.context_broker.evidence import open_evidence
 from agentic_mcp_server.context_broker.ledger import list_retrievals
 from agentic_mcp_server.context_broker.pack import create_pack, read_pack
 from agentic_mcp_server.context_broker.request_more import request_more
+from agentic_mcp_server.context_broker.retrieval import card_tokens
 from agentic_mcp_server.domain.token_budget import estimate_tokens
 from agentic_mcp_server.infrastructure.search.search_client import FakeSearchClient, SearchHit
 from agentic_mcp_server.mcp.tool_schemas.context import (
@@ -599,6 +600,138 @@ async def test_create_pack_caps_cards_at_the_retrieval_maximum(
     assert len(response.evidence_cards) == 5
 
 
+async def test_retrieve_cards_collapses_near_duplicate_artifacts(
+    factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # two artifacts whose card text (title + summary) is identical must collapse
+    # to one BEFORE the card cap, with the dropped id logged
+    search = FakeSearchClient()
+    async with factory() as session:
+        keeper = await insert_artifact(
+            session,
+            title="Payment validation rules",
+            body_text="Validation lives in checkout/validators.py and rejects negative amounts.",
+        )
+        duplicate = await insert_artifact(
+            session,
+            title="Payment validation rules",
+            body_text="Validation lives in checkout/validators.py and rejects negative amounts.",
+        )
+    search.seed(
+        "payment",
+        [
+            SearchHit(artifact_id=keeper, score=2.0),
+            SearchHit(artifact_id=duplicate, score=1.0),
+        ],
+    )
+    deps = make_broker_deps(factory, search)
+
+    with caplog.at_level("INFO"):
+        response = await create_pack(deps, _create_pack_request(), REQUESTER)
+
+    # only the higher-ranked survivor is served
+    assert [card.evidence_id for card in response.evidence_cards] == [str(keeper)]
+    dedupe_logs = [r.message for r in caplog.records if "event=retrieval_deduped" in r.message]
+    assert dedupe_logs, "expected a retrieval_deduped log line"
+    assert str(duplicate) in dedupe_logs[0]
+
+
+async def test_retrieve_cards_enforces_card_cap_after_dedupe(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # eight DISTINCT artifacts (no dedupe collapse) must still cap at the
+    # configured maximum after rerank
+    search = FakeSearchClient()
+    hits = []
+    async with factory() as session:
+        for i in range(8):
+            artifact_id = await insert_artifact(
+                session,
+                title=f"Payment topic {i} alpha",
+                body_text=f"Distinct payment subsystem {i} with unique behavior {i}.",
+            )
+            hits.append(SearchHit(artifact_id=artifact_id, score=float(8 - i)))
+    search.seed("payment", hits)
+    deps = make_broker_deps(factory, search)
+
+    response = await create_pack(deps, _create_pack_request(), REQUESTER)
+
+    assert len(response.evidence_cards) == deps.settings.max_cards_per_retrieval
+
+
+async def test_create_pack_trims_cards_so_it_is_never_born_over_budget(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # several distinct cards but a budget that only fits some ⇒ trimmed to fit.
+    # Each card text is sized so card_tokens == 8 (title "Topic A xx" + summary
+    # "Body A yy" ≈ 8 tokens); a budget of 20 fits exactly two cards (16), not
+    # three (24).
+    search = FakeSearchClient()
+    hits = []
+    letters = ["alpha", "bravo", "charlie", "delta", "echo"]
+    async with factory() as session:
+        for i, word in enumerate(letters):
+            artifact_id = await insert_artifact(
+                session,
+                title=f"Topic {word} subsystem",
+                body_text=f"Behavior {word} distinct detail line.",
+            )
+            hits.append(SearchHit(artifact_id=artifact_id, score=float(5 - i)))
+    search.seed("payment", hits)
+    deps = make_broker_deps(factory, search)
+
+    full = card_tokens  # imported helper, used below to derive the per-card cost
+    response = await create_pack(deps, _create_pack_request(budget_tokens=20), REQUESTER)
+
+    assert 0 < len(response.evidence_cards) < 5
+    assert response.budget_used_tokens <= 20
+    # the survivors are the highest-ranked prefix (best score first)
+    assert [c.evidence_id for c in response.evidence_cards] == [
+        str(hit.artifact_id) for hit in hits[: len(response.evidence_cards)]
+    ]
+    # used tokens equals the sum of the surviving cards' costs (no phantom spend)
+    assert response.budget_used_tokens == sum(full(c) for c in response.evidence_cards)
+
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, RUN_ID)
+    assert rows[0].tokens_returned == response.budget_used_tokens
+
+
+async def test_repeated_create_pack_cannot_reset_the_per_agent_ceiling(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The per-agent follow-up allowance is RUN-scoped: an agent that exhausts its
+    # request_more allowance must NOT be able to re-create the pack to win a fresh
+    # allowance. After spending its one default request, a second create_pack for
+    # the same run yields a new pack that still sees the spent allowance.
+    deps, pack_id, _ = await _pack_with_refund_follow_up(factory, budget_policy=BudgetPolicy())
+
+    first = await request_more(
+        deps,
+        _request_more("how does refund processing work in checkout", max_tokens=500).model_copy(
+            update={"context_pack_id": pack_id}
+        ),
+        REQUESTER,
+    )
+    assert first.status == "approved"
+
+    # re-create the pack within the same run (allowed: e.g. a new active version)
+    recreated = await create_pack(deps, _create_pack_request(), REQUESTER)
+
+    # the spent allowance carries over to the new pack — no fresh request granted
+    bypass = await request_more(
+        deps,
+        _request_more("where are webhook signatures verified", max_tokens=500).model_copy(
+            update={"context_pack_id": recreated.context_pack_id}
+        ),
+        REQUESTER,
+    )
+    assert bypass.status == "denied"
+    assert bypass.denial_reason is not None
+    assert "request allowance exhausted" in bypass.denial_reason
+
+
 async def test_open_evidence_returns_untrusted_content_and_charges_the_run(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -722,7 +855,11 @@ async def test_open_evidence_over_run_budget_writes_denied_row_and_errors(
         artifact_id = await insert_artifact(session, title="Payment long doc", body_text="x" * 4000)
     search.seed("payment", [SearchHit(artifact_id=artifact_id, score=1.0)])
     deps = make_broker_deps(factory, search)
-    created = await create_pack(deps, _create_pack_request(budget_tokens=30), REQUESTER)
+    # budget is large enough that the card SURVIVES create (≈74 card tokens) but
+    # leaves too little headroom for the L2 body expansion: open_evidence must
+    # be the thing that trips the run budget, not the pack-birth trim
+    created = await create_pack(deps, _create_pack_request(budget_tokens=100), REQUESTER)
+    assert created.evidence_cards, "card must survive create for this run-budget test"
 
     with pytest.raises(ToolError, match="run budget exceeded"):
         await open_evidence(

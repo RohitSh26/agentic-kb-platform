@@ -22,8 +22,14 @@ from agentic_mcp_server.infrastructure.search.search_client import SearchClient
 
 @dataclass(frozen=True)
 class BrokerSettings:
-    # semantic duplicate threshold: start 0.88-0.92, tune from ledger logs
+    # semantic duplicate threshold for CROSS-query reuse (request_more): start
+    # 0.88-0.92, tune from ledger logs
     semantic_reuse_threshold: float = 0.90
+    # semantic duplicate threshold for WITHIN-retrieval dedupe: two candidate
+    # cards whose normalized title+summary similarity is >= this collapse to one
+    # before the card cap is applied (token-budgets rule: semantic dedupe
+    # 0.88-0.92 BEFORE the 3-5 card cap). Same band as the reuse threshold.
+    semantic_dupe_threshold: float = 0.90
     # 3-5 cards max per retrieval after rerank (token-budgets rule)
     max_cards_per_retrieval: int = 5
     # safety cap on graph traversal fan-out at depth 3
@@ -66,7 +72,11 @@ def current_requester() -> Requester:
     token = get_access_token()
     if token is None:
         raise ToolError("no authenticated session")
-    subject = token.subject or token.client_id or "unknown"
+    # Fail closed: never collapse a subject-less token to a shared sentinel — that
+    # would let distinct principals share one identity (and one ACL). invariant 6.
+    subject = token.subject or token.client_id
+    if not subject:
+        raise ToolError("authenticated session carries no subject")
     return Requester(subject=subject, teams=teams_from_claims(token.claims or {}))
 
 
@@ -82,5 +92,9 @@ def current_client_identity(registry: ClientRegistry) -> ClientIdentity:
     token = get_access_token()
     if token is None:
         raise ToolError("no authenticated session")
-    client_id = token.client_id or token.subject or "unknown"
+    # Fail closed: a token with neither client_id nor subject must not resolve to a
+    # shared sentinel identity that cross-binds receipts between distinct clients.
+    client_id = token.client_id or token.subject
+    if not client_id:
+        raise ToolError("authenticated session carries no client identity")
     return registry.resolve(client_id)

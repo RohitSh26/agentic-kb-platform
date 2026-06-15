@@ -232,7 +232,8 @@ async def test_l1_within_cap_and_cited_passes(
                     claim_id="c1",
                     text="t",
                     evidence_ids=[str(evidence)],
-                    quote="short quote",
+                    # a verbatim span of the seeded body_text ("def x(): ...")
+                    quote="def x():",
                 )
             ],
             verifier_levels=["L0", "L1"],
@@ -243,6 +244,235 @@ async def test_l1_within_cap_and_cited_passes(
     result = receipt.claim_results[0]
     assert result.result == "passed"
     assert result.checks.L1_coverage is True
+
+
+# ---------------------------------------------------------------------------
+# L1: quote-substring guard (invariant 7, ADR-0011) — a quote must be a verbatim
+# (whitespace-normalized) span of one of the claim's RESOLVABLE cited units.
+# ---------------------------------------------------------------------------
+
+
+async def test_l1_fabricated_quote_not_in_any_cited_unit_fails(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The citation is real + retrieved (L0 passes) and the quote is within the cap,
+    # but the quote text appears in NO cited unit ⇒ L1 fails with quote_not_found.
+    async with factory() as session:
+        evidence = await _symbol_artifact(session, name="login", path="auth.py")
+    await _record_retrieval(factory, [evidence])
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    receipt = await verify_answer(
+        deps,
+        VerifyAnswerRequest(
+            answer_id="a",
+            claims=[
+                ClaimInput(
+                    claim_id="c1",
+                    text="t",
+                    evidence_ids=[str(evidence)],
+                    # the unit body is "def x(): ..."; this is a wholly invented span
+                    quote="raise SystemExit('fabricated')",
+                )
+            ],
+            verifier_levels=["L0", "L1"],
+        ),
+        REQUESTER,
+    )
+
+    result = receipt.claim_results[0]
+    # L0 passes — the FABRICATION is caught only by L1's substring guard.
+    assert result.checks.L0_exists is True
+    assert result.checks.L0_in_requester_ledger is True
+    assert result.checks.L1_coverage is False
+    assert result.result == "failed"
+    assert "quote_not_found" in result.failed_reasons
+
+
+async def test_l1_verbatim_quote_passes(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # A quote that IS a verbatim span of a cited, retrieved unit ⇒ L1 passes.
+    async with factory() as session:
+        evidence = await insert_artifact(
+            session,
+            title="login",
+            body_text="def login(user):\n    return hash_pw(user.password)",
+            artifact_type="code_symbol",
+            knowledge_kind="source_backed",
+            path="auth.py",
+        )
+    await _record_retrieval(factory, [evidence])
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    receipt = await verify_answer(
+        deps,
+        VerifyAnswerRequest(
+            answer_id="a",
+            claims=[
+                ClaimInput(
+                    claim_id="c1",
+                    text="login hashes the password",
+                    evidence_ids=[str(evidence)],
+                    quote="return hash_pw(user.password)",
+                )
+            ],
+            verifier_levels=["L0", "L1"],
+        ),
+        REQUESTER,
+    )
+
+    result = receipt.claim_results[0]
+    assert result.result == "passed"
+    assert result.checks.L1_coverage is True
+    assert "quote_not_found" not in result.failed_reasons
+
+
+async def test_l1_quote_matches_under_whitespace_normalization(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The cited body wraps the span across newlines + extra spaces; the quote uses
+    # single spaces. Whitespace-normalized, they match ⇒ L1 passes (never fuzzy).
+    async with factory() as session:
+        evidence = await insert_artifact(
+            session,
+            title="login",
+            body_text="def login(user):\n        return  hash_pw(  user.password  )",
+            artifact_type="code_symbol",
+            knowledge_kind="source_backed",
+            path="auth.py",
+        )
+    await _record_retrieval(factory, [evidence])
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    receipt = await verify_answer(
+        deps,
+        VerifyAnswerRequest(
+            answer_id="a",
+            claims=[
+                ClaimInput(
+                    claim_id="c1",
+                    text="login hashes the password",
+                    evidence_ids=[str(evidence)],
+                    quote="return hash_pw( user.password )",
+                )
+            ],
+            verifier_levels=["L0", "L1"],
+        ),
+        REQUESTER,
+    )
+
+    result = receipt.claim_results[0]
+    assert result.result == "passed"
+    assert result.checks.L1_coverage is True
+
+
+async def test_l1_quote_in_unretrieved_unit_does_not_satisfy_guard(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The quote IS a verbatim span of a real, in-version, ACL-visible unit — but the
+    # requester never retrieved it (no oracle, invariant 6). Coverage already fails
+    # (claim_uncited); the guard must NOT rescue it, and the body must not be read.
+    async with factory() as session:
+        evidence = await insert_artifact(
+            session,
+            title="login",
+            body_text="def login(user):\n    return hash_pw(user.password)",
+            artifact_type="code_symbol",
+            knowledge_kind="source_backed",
+            path="auth.py",
+        )
+    # retrieved by ANOTHER subject only ⇒ not resolvable for this requester.
+    await _record_retrieval(factory, [evidence], subject="other-agent")
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    receipt = await verify_answer(
+        deps,
+        VerifyAnswerRequest(
+            answer_id="a",
+            claims=[
+                ClaimInput(
+                    claim_id="c1",
+                    text="login hashes the password",
+                    evidence_ids=[str(evidence)],
+                    quote="return hash_pw(user.password)",
+                )
+            ],
+            verifier_levels=["L0", "L1"],
+        ),
+        REQUESTER,
+    )
+
+    result = receipt.claim_results[0]
+    assert result.result == "failed"
+    assert result.checks.L1_coverage is False
+    # The claim is uncited for this requester; the verbatim-in-DB span is irrelevant.
+    assert "claim_uncited" in result.failed_reasons
+    # An uncited claim fails on coverage alone — the quote guard must NOT pile on a
+    # redundant quote_not_found (it could never ground with no resolvable units).
+    assert "quote_not_found" not in result.failed_reasons
+
+
+async def test_l1_no_quote_claim_unaffected_by_guard(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # A claim with NO quote is unaffected by the substring guard: it passes on
+    # coverage alone (quote is optional).
+    async with factory() as session:
+        evidence = await _symbol_artifact(session, name="login", path="auth.py")
+    await _record_retrieval(factory, [evidence])
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    receipt = await verify_answer(
+        deps,
+        VerifyAnswerRequest(
+            answer_id="a",
+            claims=[ClaimInput(claim_id="c1", text="t", evidence_ids=[str(evidence)])],
+            verifier_levels=["L0", "L1"],
+        ),
+        REQUESTER,
+    )
+
+    result = receipt.claim_results[0]
+    assert result.result == "passed"
+    assert result.checks.L1_coverage is True
+    assert "quote_not_found" not in result.failed_reasons
+
+
+async def test_l1_over_cap_quote_still_fails_on_length(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # An over-cap quote fails on LENGTH (existing behavior) regardless of whether it
+    # is grounded; the substring guard does not add a redundant second reason.
+    async with factory() as session:
+        evidence = await _symbol_artifact(session, name="login", path="auth.py")
+    await _record_retrieval(factory, [evidence])
+    deps = make_broker_deps(factory, FakeSearchClient(), settings=BrokerSettings(max_quote_chars=4))
+
+    receipt = await verify_answer(
+        deps,
+        VerifyAnswerRequest(
+            answer_id="a",
+            claims=[
+                ClaimInput(
+                    claim_id="c1",
+                    text="t",
+                    evidence_ids=[str(evidence)],
+                    # a verbatim span of the body but well over the 4-char cap
+                    quote="def x(): ...",
+                )
+            ],
+            verifier_levels=["L0", "L1"],
+        ),
+        REQUESTER,
+    )
+
+    result = receipt.claim_results[0]
+    assert result.result == "failed"
+    assert result.checks.L1_coverage is False
+    assert "quote_over_cap" in result.failed_reasons
+    # over-cap is the only quote reason; the guard is skipped for an over-cap quote.
+    assert "quote_not_found" not in result.failed_reasons
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +533,7 @@ async def test_l2_quote_present_but_assertion_false_fails(
                     claim_id="c1",
                     text="login is defined in billing.py",
                     evidence_ids=[str(evidence)],
-                    quote="def login(): ...",  # genuine quote, within cap
+                    quote="def x():",  # genuine span of the unit, within cap
                     assertion=SymbolInFileAssertion(
                         kind="symbol_in_file", symbol="login", file="billing.py"
                     ),
