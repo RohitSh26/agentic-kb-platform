@@ -9,6 +9,9 @@ from agentic_kb_builder.infrastructure.postgres.models.generation_cache_artifact
 from agentic_kb_builder.infrastructure.postgres.models.kb_build_run import KbBuildRun
 from agentic_kb_builder.infrastructure.postgres.models.knowledge_artifact import KnowledgeArtifact
 from agentic_kb_builder.infrastructure.postgres.models.knowledge_edge import KnowledgeEdge
+from agentic_kb_builder.infrastructure.postgres.models.relationship_candidate import (
+    RelationshipCandidate,
+)
 from agentic_kb_builder.infrastructure.postgres.models.retrieval_event import RetrievalEvent
 from agentic_kb_builder.infrastructure.postgres.models.source_item import SourceItem
 
@@ -20,6 +23,7 @@ __all__ = [
     "KbBuildRun",
     "KnowledgeArtifact",
     "KnowledgeEdge",
+    "RelationshipCandidate",
     "RetrievalEvent",
     "SourceItem",
 ]
