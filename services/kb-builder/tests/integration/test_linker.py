@@ -368,13 +368,15 @@ async def _seed_canonical_chain(session: AsyncSession) -> dict[str, KnowledgeArt
 async def _edge_tuples(
     session: AsyncSession, *, source: str | None = None
 ) -> set[tuple[uuid.UUID, uuid.UUID, str, str | None, str]]:
+    # Only LIVE edges (invalidated_at_seq IS NULL) — the served set. A stale edge is
+    # soft-invalidated, not deleted (ADR-0013 §1), so it stays a row but leaves this set.
     query = select(
         KnowledgeEdge.from_artifact_id,
         KnowledgeEdge.to_artifact_id,
         KnowledgeEdge.edge_type,
         KnowledgeEdge.source,
         KnowledgeEdge.kb_version,
-    )
+    ).where(KnowledgeEdge.invalidated_at_seq.is_(None))
     if source is not None:
         query = query.where(KnowledgeEdge.source == source)
     rows = await session.execute(query)
@@ -386,7 +388,10 @@ async def _linker_edge_count(session: AsyncSession) -> int:
         await session.execute(
             select(func.count())
             .select_from(KnowledgeEdge)
-            .where(KnowledgeEdge.source == EDGE_SOURCE)
+            .where(
+                KnowledgeEdge.source == EDGE_SOURCE,
+                KnowledgeEdge.invalidated_at_seq.is_(None),
+            )
         )
     ).scalar_one()
 
@@ -538,7 +543,7 @@ async def test_stale_edge_is_deleted_when_evidence_disappears(
         inserted, refreshed, deleted = await run_linker(session, kb_version="v-link.2")
 
     assert (inserted, refreshed, deleted) == (0, 2, 1)
-    assert any("event=linker_edge_deleted" in r.getMessage() for r in caplog.records)
+    assert any("event=linker_edge_invalidated" in r.getMessage() for r in caplog.records)
     edges = await _edge_tuples(session, source=EDGE_SOURCE)
     assert {edge_type for _, _, edge_type, *_ in edges} == {"documents", "implements"}
 
@@ -632,10 +637,10 @@ async def test_semantic_edge_survives_rerun_without_provider(
     with caplog.at_level(logging.INFO, logger="agentic_kb_builder.linker.write_edges"):
         inserted, refreshed, deleted = await run_linker(session, kb_version="v-sem.2")
 
-    # documents edge deleted (evidence gone); semantic implements edge protected
+    # documents edge invalidated (evidence gone); semantic implements edge protected
     assert (inserted, refreshed, deleted) == (0, 0, 1)
     assert any(
-        "event=linker_stale_deletion_skipped" in r.getMessage() and r.levelno == logging.WARNING
+        "event=linker_stale_invalidation_skipped" in r.getMessage() and r.levelno == logging.WARNING
         for r in caplog.records
     )
     edges = await _edge_tuples(session, source=EDGE_SOURCE)

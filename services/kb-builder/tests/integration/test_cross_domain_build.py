@@ -345,14 +345,15 @@ async def test_cross_domain_relink_is_idempotent(session: AsyncSession) -> None:
 
 
 @requires_db
-async def test_stale_cross_domain_implements_is_deleted_without_a_provider(
+async def test_stale_cross_domain_implements_is_invalidated_without_a_provider(
     session: AsyncSession,
 ) -> None:
     # run_linker with similarity=None protects edge_type 'implements' from stale
-    # deletion (the skipped semantic pass would reproduce its symbol→concept
+    # invalidation (the skipped semantic pass would reproduce its symbol→concept
     # edges). A DETERMINISTIC cross-domain implements carries an evidence pointer,
     # so it is always recomputed when its reference still exists — its absence
-    # means the reference is gone and it MUST be deleted, never protected.
+    # means the reference is gone and it MUST be invalidated, never protected.
+    # Invalidation is a soft-delete (invalidated_at_seq set), not row removal.
     #
     # The reference lives ONLY in the commit message here (no branch token), so
     # editing the message genuinely removes it.
@@ -411,16 +412,30 @@ async def test_stale_cross_domain_implements_is_deleted_without_a_provider(
     _inserted, _refreshed, deleted = await run_linker(session, kb_version="v-link.1")
     assert deleted >= 1
 
-    after_implements = (
+    live_implements = (
         await session.execute(
             select(KnowledgeEdge.edge_id).where(
                 KnowledgeEdge.source == "linker",
                 KnowledgeEdge.edge_type == "implements",
                 KnowledgeEdge.to_artifact_id == card.artifact_id,
+                KnowledgeEdge.invalidated_at_seq.is_(None),
             )
         )
     ).all()
-    assert after_implements == []  # stale deterministic implements deleted
+    assert live_implements == []  # stale deterministic implements no longer served
+
+    # the row is not deleted — it is soft-invalidated (prior versions still serve it).
+    invalidated_implements = (
+        await session.execute(
+            select(KnowledgeEdge.edge_id).where(
+                KnowledgeEdge.source == "linker",
+                KnowledgeEdge.edge_type == "implements",
+                KnowledgeEdge.to_artifact_id == card.artifact_id,
+                KnowledgeEdge.invalidated_at_seq.is_not(None),
+            )
+        )
+    ).all()
+    assert len(invalidated_implements) == 1
 
     surviving_mentions = (
         await session.execute(
@@ -429,6 +444,7 @@ async def test_stale_cross_domain_implements_is_deleted_without_a_provider(
                 KnowledgeEdge.edge_type == "mentions",
                 KnowledgeEdge.from_artifact_id == commit.artifact_id,
                 KnowledgeEdge.to_artifact_id == code_file.artifact_id,
+                KnowledgeEdge.invalidated_at_seq.is_(None),
             )
         )
     ).all()

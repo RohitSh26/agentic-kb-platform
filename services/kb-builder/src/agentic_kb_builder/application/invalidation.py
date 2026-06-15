@@ -255,7 +255,10 @@ async def _detect_renames(
         # are not orphaned/ghosted. The linker recomputes its own edges, but
         # graphify edges point at the old artifact id; repoint them.
         edges_reattached += await _reattach_edges(
-            session, old_artifact_id=old_artifact_id, new_artifact_id=row.artifact_id
+            session,
+            old_artifact_id=old_artifact_id,
+            new_artifact_id=row.artifact_id,
+            build_seq=build_seq,
         )
         # Invalidate the old artifact (it left the KB this build). Its source is
         # also marked deleted by the deletion sweep's skip — handle it here so the
@@ -285,19 +288,46 @@ async def _detect_renames(
 
 
 async def _reattach_edges(
-    session: AsyncSession, *, old_artifact_id: uuid.UUID, new_artifact_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    old_artifact_id: uuid.UUID,
+    new_artifact_id: uuid.UUID,
+    build_seq: int,
 ) -> int:
     """Repoint still-live edges incident on the old artifact onto the new one.
 
-    A self-loop or a would-be duplicate is dropped (the unique linker index would
-    reject it); graphify edges have no such index, so a repoint that collides with
-    an existing identical edge is invalidated instead of duplicated.
+    For each incident live edge, swap the old endpoint for the new one. An edge
+    whose OTHER endpoint is already the new artifact would become a self-loop on
+    repoint — that edge merely linked the two identities of the same renamed
+    entity, so it is invalidated rather than repointed. Invalidating it (instead
+    of leaving it untouched) is required: the old artifact is invalidated right
+    after, so a skipped edge still pointing at it would be a ghost the no-ghost
+    gate rejects. Duplicate graphify edges a repoint may produce are tolerated —
+    graph BFS dedups by visited-set, so they are benign at read time.
     """
     reattached = 0
-    for column in (KnowledgeEdge.from_artifact_id, KnowledgeEdge.to_artifact_id):
+    for column, other in (
+        (KnowledgeEdge.from_artifact_id, KnowledgeEdge.to_artifact_id),
+        (KnowledgeEdge.to_artifact_id, KnowledgeEdge.from_artifact_id),
+    ):
+        # Would-be self-loops: invalidate instead of repointing (no ghost, no loop).
+        await session.execute(
+            update(KnowledgeEdge)
+            .where(
+                column == old_artifact_id,
+                other == new_artifact_id,
+                KnowledgeEdge.invalidated_at_seq.is_(None),
+            )
+            .values(invalidated_at_seq=build_seq)
+        )
+        # The rest repoint onto the new artifact.
         result = await session.execute(
             update(KnowledgeEdge)
-            .where(column == old_artifact_id, KnowledgeEdge.invalidated_at_seq.is_(None))
+            .where(
+                column == old_artifact_id,
+                other != new_artifact_id,
+                KnowledgeEdge.invalidated_at_seq.is_(None),
+            )
             .values(**{column.key: new_artifact_id})
             .returning(KnowledgeEdge.edge_id)
         )
