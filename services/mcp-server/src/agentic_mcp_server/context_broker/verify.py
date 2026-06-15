@@ -319,10 +319,12 @@ def _l1_coverage(
     quote_ok = claim.quote is None or len(claim.quote) <= max_quote_chars
     if not quote_ok:
         reasons.append(REASON_QUOTE_OVER_CAP)
-    # The substring guard only applies to a within-cap quote; an over-cap quote
-    # already fails (and we don't want a second, redundant reason for the same span).
+    # The substring guard only applies to a within-cap quote on an OTHERWISE-COVERED
+    # claim: an over-cap quote, or a claim with no resolvable cited unit, already
+    # fails — running the guard there only piles a second, redundant reason (and with
+    # no resolvable units cited_texts is empty, so it could never ground anyway).
     quote_grounded = True
-    if claim.quote is not None and quote_ok:
+    if claim.quote is not None and quote_ok and cited:
         quote_grounded = _quote_grounded(claim.quote, cited_texts)
         if not quote_grounded:
             reasons.append(REASON_QUOTE_NOT_FOUND)

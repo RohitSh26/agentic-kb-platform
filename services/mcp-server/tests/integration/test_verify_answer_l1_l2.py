@@ -408,6 +408,9 @@ async def test_l1_quote_in_unretrieved_unit_does_not_satisfy_guard(
     assert result.checks.L1_coverage is False
     # The claim is uncited for this requester; the verbatim-in-DB span is irrelevant.
     assert "claim_uncited" in result.failed_reasons
+    # An uncited claim fails on coverage alone — the quote guard must NOT pile on a
+    # redundant quote_not_found (it could never ground with no resolvable units).
+    assert "quote_not_found" not in result.failed_reasons
 
 
 async def test_l1_no_quote_claim_unaffected_by_guard(

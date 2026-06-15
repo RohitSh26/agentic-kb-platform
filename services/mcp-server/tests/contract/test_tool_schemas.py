@@ -18,6 +18,7 @@ from agentic_mcp_server.mcp.tool_schemas import (
     RequestMoreResponse,
     RequestMoreStatus,
 )
+from agentic_mcp_server.mcp.tool_schemas.verification import ClaimInput, VerifyAnswerRequest
 
 EXPECTED_TOOLS = {
     "context.create_pack",
@@ -79,6 +80,22 @@ def test_run_id_rejects_log_injection_charsets() -> None:
                 retrieval_profile="default",
                 budget_tokens=8000,
             )
+
+
+def test_verify_answer_ids_reject_control_chars() -> None:
+    # answer_id + claim_id land verbatim in the verify_answer audit log; a newline/CR
+    # would let an agent forge log lines (same class of guard as run_id and role).
+    evidence = [str(uuid.uuid4())]
+    with pytest.raises(ValidationError):
+        VerifyAnswerRequest(
+            answer_id="ans\nstatus=ok",
+            claims=[ClaimInput(claim_id="c1", text="t", evidence_ids=evidence)],
+        )
+    with pytest.raises(ValidationError):
+        VerifyAnswerRequest(
+            answer_id="ans",
+            claims=[ClaimInput(claim_id="c1\rstatus=ok", text="t", evidence_ids=evidence)],
+        )
 
 
 def test_ledger_rejects_the_non_run_sentinel() -> None:

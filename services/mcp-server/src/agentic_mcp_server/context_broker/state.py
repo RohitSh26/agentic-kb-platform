@@ -72,8 +72,17 @@ class PackStore:
         # get() moves touched packs to the back) so an actively-read long-running
         # pack is not dropped before a newer, untouched one.
         while len(self.packs) >= self.max_packs:
-            self.packs.pop(next(iter(self.packs)))
+            evicted = self.packs.pop(next(iter(self.packs)))
+            self._evict_run_usage_if_unreferenced(evicted.run_id)
         self.packs[pack.context_pack_id] = pack
+
+    def _evict_run_usage_if_unreferenced(self, run_id: str) -> None:
+        # Bound run_usage alongside packs: drop a run's shared usage meter once its
+        # LAST live pack is evicted. Eviction only fires under max_packs pressure, so
+        # a run with any live pack keeps its meter — the create_pack ceiling bypass
+        # (re-packing within a live run) stays closed; only long-gone runs are pruned.
+        if run_id in self.run_usage and not any(p.run_id == run_id for p in self.packs.values()):
+            del self.run_usage[run_id]
 
     def get(self, context_pack_id: str) -> EvidencePackState:
         try:
