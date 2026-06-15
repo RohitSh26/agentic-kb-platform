@@ -36,7 +36,9 @@ from agentic_kb_builder.connectors import (
     connectors_from_config,
     load_source_config,
 )
+from agentic_kb_builder.connectors.config_loader import BackendFactory
 from agentic_kb_builder.connectors.local_fs import local_fs_backend_factory
+from agentic_kb_builder.connectors.production_factory import production_backend_factory
 from agentic_kb_builder.embeddings import LocalHashEmbedder
 from agentic_kb_builder.graphify import GraphifyGraphifier
 from agentic_kb_builder.indexing import SearchDocUpserter, make_consistency_validator
@@ -88,12 +90,19 @@ async def run_build(
     activate: bool,
     allow_large_delta: bool = False,
     git_metadata: bool = True,
+    backend: str = "local",
 ) -> KbBuildRun:
     """Run one build into Postgres; activate the new kb_version if every publish
     gate passes (docs/contracts/publish-gates.md). allow_large_delta overrides the
-    symbol-count-delta gate only (recorded on kb_build_run, logged)."""
+    symbol-count-delta gate only (recorded on kb_build_run, logged). `backend`
+    selects the fetch backend: `local` (workspace files) or `production` (real
+    GitHub/ADO sources via the production factory, ADR-0015)."""
     config = load_source_config(sources_path)
-    factory = local_fs_backend_factory(Path(workspace), version=version)
+    factory: BackendFactory
+    if backend == "production":
+        factory = production_backend_factory()
+    else:
+        factory = local_fs_backend_factory(Path(workspace), version=version)
     connectors = connectors_from_config(config, factory)
     if git_metadata:
         # Cross-domain phase 2 (PR-26): deterministic, zero-LLM commit artifacts
@@ -148,6 +157,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="kb_version label for this build (default: local.<timestamp>)",
     )
     parser.add_argument("--version", default="local", help="source_version stamp (e.g. a git SHA)")
+    parser.add_argument(
+        "--backend",
+        choices=("local", "production"),
+        default="local",
+        help="fetch backend: 'local' reads --workspace files (default); 'production' fetches "
+        "real GitHub/ADO sources via the production factory (ADR-0015)",
+    )
     parser.add_argument("--no-activate", action="store_true", help="build but do not mark active")
     parser.add_argument(
         "--no-git-metadata",
@@ -178,6 +194,7 @@ async def _main(args: argparse.Namespace) -> int:
                 activate=not args.no_activate,
                 allow_large_delta=args.allow_large_delta,
                 git_metadata=not args.no_git_metadata,
+                backend=args.backend,
             )
             active = await get_active_kb_version(session)
     finally:
