@@ -104,9 +104,7 @@ async def test_error_message_hints_name_the_likely_cause(
     monkeypatch: pytest.MonkeyPatch, status: int, needle: str
 ) -> None:
     monkeypatch.setattr("agentic_kb_builder.connectors.http_client.asyncio.sleep", _no_sleep)
-    client = AsyncHttpClient(
-        transport=httpx.MockTransport(lambda _req: httpx.Response(status))
-    )
+    client = AsyncHttpClient(transport=httpx.MockTransport(lambda _req: httpx.Response(status)))
     async with client:
         with pytest.raises(HttpFetchError, match=needle):
             await client.get_json("https://api.example.com/x")
