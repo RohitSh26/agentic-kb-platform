@@ -1,0 +1,55 @@
+# Real-source test config (dev-guide 06). GitHub code is zero-LLM (graphify);
+# github_doc / azure_wiki / ado_card go through wikify (LLM). Run with:
+#   --backend production   (GITHUB_TOKEN + ADO_PAT in the environment)
+version: 1
+
+defaults:
+  acl_teams: []          # [] = org-public (any authenticated subject)
+
+sources:
+  # --- GitHub: code (graphify, ZERO LLM) ---
+  - name: platform-code
+    type: github_code
+    repo: RohitSh26/agentic-kb-platform
+    branch: main
+    include:
+      - "services/**/*.py"
+      - "scripts/**/*.py"
+    exclude:
+      - "**/tests/**"
+    auth:
+      token_env: GITHUB_TOKEN
+
+  # --- GitHub: docs (wikify, LLM) ---
+  - name: platform-docs
+    type: github_doc
+    repo: RohitSh26/agentic-kb-platform
+    branch: main
+    include:
+      - "docs/**/*.md"
+      - "README.md"
+    auth:
+      token_env: GITHUB_TOKEN
+
+  # --- Azure DevOps Wiki (wikify, LLM) ---
+  - name: platform-wiki
+    type: azure_wiki
+    organization: docodex-testing
+    project: agentic-kb-platform
+    wiki: agentic-kb-platform.wiki
+    include:
+      - "Architecture/**"
+      - "Runbooks/**"
+    auth:
+      token_env: ADO_PAT
+
+  # --- Azure DevOps Work Items (wikify, LLM) ---
+  - name: platform-cards
+    type: ado_card
+    organization: docodex-testing
+    project: agentic-kb-platform
+    area_path: "agentic-kb-platform"
+    work_item_types: ["User Story", "Bug", "Task"]
+    states: ["New", "Active", "Resolved", "Closed", "Done", "To Do"]
+    auth:
+      token_env: ADO_PAT
