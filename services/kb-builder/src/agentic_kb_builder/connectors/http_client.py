@@ -39,7 +39,7 @@ class HttpFetchError(Exception):
 #: can't see, so a bare "returned 404" is misleading — name the likely cause.
 _STATUS_HINTS = {
     401: "bad or expired credentials — check the token value in its auth env var",
-    403: "forbidden — the token lacks the required scope, SSO is not authorized, or you are rate-limited",
+    403: "forbidden — token lacks scope, SSO not authorized for the PAT, or rate-limited",
     404: (
         "not found, OR the resource is private and the token cannot access it — "
         "verify the PAT's scope and that it is granted to this repo/org/project"
