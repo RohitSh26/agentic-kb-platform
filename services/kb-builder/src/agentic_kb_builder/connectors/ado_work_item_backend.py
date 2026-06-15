@@ -66,10 +66,10 @@ def _render_field_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, dict):
-        items = sorted((str(k), _render_field_value(v)) for k, v in value.items())  # type: ignore[no-untyped-call]
+        items = sorted((str(k), _render_field_value(v)) for k, v in value.items())
         return "{" + ", ".join(f"{k}={v}" for k, v in items) + "}"
     if isinstance(value, list):
-        return "[" + ", ".join(_render_field_value(v) for v in value) + "]"  # type: ignore[no-untyped-call]
+        return "[" + ", ".join(_render_field_value(v) for v in value) + "]"
     return str(value)
 
 
@@ -139,7 +139,9 @@ class AdoWorkItemBackend:
             params={"api-version": _API_VERSION},
         )
         rows = data.get("workItems") or []
-        ids = [int(row["id"]) for row in rows]
+        # dict.fromkeys dedupes while preserving WIQL's ORDER BY [System.Id] ordering,
+        # so a duplicate id never produces two SourceRefs for one card.
+        ids = list(dict.fromkeys(int(row["id"]) for row in rows))
         if len(ids) >= _WIQL_ID_CAP:
             # Known limitation (ADR-0015): WIQL caps at ~20000 ids; the listing is partial.
             logger.warning(
@@ -172,7 +174,18 @@ class AdoWorkItemBackend:
             for item in data.get("value") or []:
                 fields = item.get("fields") or {}
                 work_item_id = int(item["id"])
-                revs[work_item_id] = int(fields["System.Rev"])
+                rev = fields.get("System.Rev")
+                if rev is None:
+                    # One malformed row must not abort the whole listing; skip it
+                    # (the id then drops out at the list_sources missing-rev guard).
+                    logger.warning(
+                        "event=ado_work_item_missing_rev_field org=%s project=%s id=%d",
+                        self._org,
+                        self._project,
+                        work_item_id,
+                    )
+                    continue
+                revs[work_item_id] = int(rev)
         return revs
 
     async def list_sources(self) -> list[SourceRef]:

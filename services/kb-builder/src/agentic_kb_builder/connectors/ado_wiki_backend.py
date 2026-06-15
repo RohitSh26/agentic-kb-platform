@@ -163,8 +163,10 @@ class AdoWikiBackend:
             )
         refs: list[SourceRef] = []
         self._walk(tree, refs, sha)
-        # Stable ordering regardless of the API's traversal order (connectors rule).
-        refs.sort(key=lambda ref: ref.path or "")
+        # Dedupe by path (a repeated subPage node must not double-build a page) and
+        # impose a stable order regardless of the API's traversal order (connectors rule).
+        by_path = {ref.path: ref for ref in refs}
+        refs = sorted(by_path.values(), key=lambda ref: ref.path or "")
         logger.info(
             "event=ado_wiki_listed org=%s project=%s wiki=%s sha=%s pages=%d",
             self._org,
