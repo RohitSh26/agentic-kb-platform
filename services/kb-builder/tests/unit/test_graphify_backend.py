@@ -147,12 +147,50 @@ def test_files_and_symbols_become_artifacts() -> None:
     assert len(result.artifacts) == 7
 
 
-def test_symbol_carries_start_line_pointer_span() -> None:
+def test_symbol_without_spans_stays_pointer_style() -> None:
+    # No `spans` argument (a non-Python language, or a caller that skips recovery):
+    # the symbol keeps its start-line pointer with no fabricated end or body
+    # (ADR-0018 leaves unsupported-language symbols graph-only).
     by_key = {a.key: a for a in _result().artifacts}
     assert by_key["sym:pkg/service.py::top"].span_start == 7
-    # Pointer-style until span recovery (ADR-0012): no fabricated end or snippet.
     assert by_key["sym:pkg/service.py::top"].span_end is None
     assert by_key["sym:pkg/service.py::top"].body_text is None
+
+
+def test_spans_attach_exact_body_text_to_matched_symbols() -> None:
+    # ADR-0018: a recovered span map (keyed by def-line) attaches the EXACT source
+    # body_text to the symbol whose Graphify start line matches. `top` starts at L7.
+    from agentic_kb_builder.graphify.span_recovery import SymbolSpan
+
+    spans = {
+        7: [
+            SymbolSpan(
+                name="top", def_line=7, span_start=7, span_end=9, body_text="def top():\n    ..."
+            )
+        ]
+    }
+    by_key = {a.key: a for a in map_extraction(GRAPH, spans=spans).artifacts}
+    top = by_key["sym:pkg/service.py::top"]
+    assert top.span_start == 7
+    assert top.span_end == 9
+    assert top.body_text == "def top():\n    ..."
+    # A symbol with no matching span stays pointer-style (body_text None).
+    assert by_key["sym:pkg/util.py::helper"].body_text is None
+
+
+def test_span_collision_disambiguated_by_name() -> None:
+    # Two defs on one physical line (def_line 7) are resolved by the bare label name.
+    from agentic_kb_builder.graphify.span_recovery import SymbolSpan
+
+    spans = {
+        7: [
+            SymbolSpan(name="other", def_line=7, span_start=7, span_end=7, body_text="WRONG"),
+            SymbolSpan(name="top", def_line=7, span_start=7, span_end=9, body_text="RIGHT"),
+        ]
+    }
+    by_key = {a.key: a for a in map_extraction(GRAPH, spans=spans).artifacts}
+    # The fixture's L7 symbol carries label "top()" -> matches the "top" span.
+    assert by_key["sym:pkg/service.py::top"].body_text == "RIGHT"
 
 
 def test_imports_map_to_file_edges_and_drop_externals() -> None:

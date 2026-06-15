@@ -423,14 +423,20 @@ class BuildRunner:
         code_key_map: dict[tuple[str, str], uuid.UUID],
         pending_edges: list[_PendingEdges],
     ) -> uuid.UUID:
-        """Process one changed source; return its source_id (seen this build)."""
+        """Process one changed source; return its source_id (seen this build).
+
+        Routing (ADR-0018): git_metadata -> one deterministic commit artifact;
+        github_code -> graphify ONLY (zero-LLM; exact spans make code searchable);
+        github_doc / azure_wiki / ado_card -> wikify (the LLM is reserved for prose).
+        """
         if fetched.source.source_type == "git_metadata":
             return await self._process_commit_source(counters, fetched)
         source_id = await self._upsert_source_item(fetched)
-        artifact_ids = await self._wikify_gated(counters, fetched, source_id)
         if fetched.source.source_type == "github_code":
+            # Code is graphify-only: a deterministic AST extraction (NO LLM, llm_calls
+            # untouched) yielding code_symbol artifacts with exact-span body_text.
             try:
-                artifact_ids += await self._graphify_gated(
+                artifact_ids = await self._graphify_gated(
                     counters, fetched, source_id, code_key_map, pending_edges
                 )
             except Exception as error:
@@ -442,6 +448,10 @@ class BuildRunner:
                     fetched.source.source_uri,
                     f"{type(error).__name__}: {error}",
                 )
+                artifact_ids = []
+        else:
+            # Prose sources (github_doc / azure_wiki / ado_card) go through wikify.
+            artifact_ids = await self._wikify_gated(counters, fetched, source_id)
         for artifact_id in artifact_ids:
             await self._embed_gated(counters, artifact_id)
         if artifact_ids:

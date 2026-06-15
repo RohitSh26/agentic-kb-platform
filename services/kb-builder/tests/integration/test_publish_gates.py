@@ -257,7 +257,33 @@ async def test_symbol_count_blowup_blocks_then_override_activates(
             )
         )
     ).scalar_one()
-    await session.execute(text("DELETE FROM knowledge_edge WHERE kb_version = 'v-gate.big'"))
+    # Drop EVERY edge touching a to-be-deleted symbol (by endpoint, any kb_version):
+    # code_symbols now carry body_text (ADR-0018) so they can also be linker/candidate
+    # edge endpoints, not just kb_version='v-gate.big' graphify edges — scope by FK.
+    await session.execute(
+        text(
+            "DELETE FROM knowledge_edge WHERE from_artifact_id IN ("
+            "  SELECT artifact_id FROM knowledge_artifact "
+            "  WHERE kb_version = 'v-gate.big' AND artifact_type = 'code_symbol' "
+            "  AND artifact_id != CAST(:keep AS uuid)) "
+            "OR to_artifact_id IN ("
+            "  SELECT artifact_id FROM knowledge_artifact "
+            "  WHERE kb_version = 'v-gate.big' AND artifact_type = 'code_symbol' "
+            "  AND artifact_id != CAST(:keep AS uuid))"
+        ),
+        {"keep": str(keep)},
+    )
+    # code_symbol artifacts now carry exact-span body_text (ADR-0018) and so are
+    # embedded — clear their embedding_cache rows first to satisfy the FK.
+    await session.execute(
+        text(
+            "DELETE FROM embedding_cache WHERE artifact_id IN ("
+            "  SELECT artifact_id FROM knowledge_artifact "
+            "  WHERE kb_version = 'v-gate.big' AND artifact_type = 'code_symbol' "
+            "  AND artifact_id != CAST(:keep AS uuid))"
+        ),
+        {"keep": str(keep)},
+    )
     await session.execute(
         text(
             "DELETE FROM generation_cache_artifact WHERE artifact_id IN ("

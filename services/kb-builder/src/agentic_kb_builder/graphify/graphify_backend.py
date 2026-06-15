@@ -10,8 +10,11 @@ we keep our trust contract by:
 - DROPPING any call site that resolves to more than one target (a syntactic name
   collision, not a resolved semantic call) instead of fabricating a `calls` edge.
 
-Graphify emits only a start line per node, so phase-1 `code_symbol` artifacts are
-pointer-style (start line known; exact span end is a tracked follow-up, ADR-0012).
+Graphify emits only a start line per node. ADR-0018 recovers each Python symbol's
+EXACT source span with a deterministic `ast` pass (span_recovery.py) so `code_symbol`
+artifacts carry a real, citable `body_text` (start..end incl. decorators/docstring) and
+become keyword-searchable with NO LLM. Non-Python symbols stay span-less (body_text=None,
+graph-only) until per-language recovery lands.
 """
 
 import tempfile
@@ -27,6 +30,7 @@ from agentic_kb_builder.domain import (
     NormalizedContent,
 )
 from agentic_kb_builder.graphify.keys import file_key, symbol_key
+from agentic_kb_builder.graphify.span_recovery import SymbolSpan, recover_spans
 from agentic_kb_builder.graphify.to_edges import CALLS_CONFIDENCE, IMPORTS_CONFIDENCE
 from agentic_kb_builder.structured_logging import get_logger
 
@@ -48,17 +52,57 @@ def _line(source_location: object) -> int | None:
     return None
 
 
+def _label_name(label: object) -> str | None:
+    """Bare symbol name from a Graphify node label ("top()", ".handle()", "Service").
+
+    Used only to disambiguate the rare several-defs-on-one-line span collision; the
+    primary span join is by start line, which Graphify reports as the def/class line.
+    """
+    text = str(label).strip()
+    text = text.removeprefix(".").removesuffix("()")
+    return text or None
+
+
+def _match_span(
+    spans: Mapping[int, list[SymbolSpan]] | None,
+    start_line: int | None,
+    label: object,
+) -> SymbolSpan | None:
+    """Resolve a Graphify symbol node to its recovered exact span by start line.
+
+    Graphify's `source_location` is the symbol's def/class line, the same line span
+    recovery keys on. A single span on that line is an unambiguous match; several
+    (multiple defs sharing one physical line) are disambiguated by bare name. No
+    match ⇒ None ⇒ the symbol stays span-less (body_text=None), never fabricated.
+    """
+    if spans is None or start_line is None:
+        return None
+    candidates = spans.get(start_line)
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    name = _label_name(label)
+    for span in candidates:
+        if span.name == name:
+            return span
+    return None
+
+
 def map_extraction(
     data: Mapping[str, Any],
     *,
     source_file_override: str | None = None,
     file_basename_override: str | None = None,
+    spans: Mapping[int, list[SymbolSpan]] | None = None,
 ) -> GraphifyResult:
     """Normalize one Graphify extraction dict into our artifacts + edges.
 
     Pure and deterministic — no I/O — so it is hermetically testable against a captured
     `graph.json`. `source_file_override` rewrites every node's source path (used for
-    single-file extraction, where Graphify only sees a temp path).
+    single-file extraction, where Graphify only sees a temp path). `spans` (ADR-0018)
+    is the deterministic ast span map keyed by def-line; when a symbol matches, it gets
+    its EXACT body_text + span_start/span_end. Without `spans` symbols stay pointer-style.
     """
     nodes = cast("list[Mapping[str, Any]]", list(data.get("nodes", [])))
     raw_edges = data.get("edges")
@@ -96,16 +140,33 @@ def map_extraction(
         name = nid.removeprefix(prefix + "_") if prefix and nid.startswith(prefix + "_") else nid
         key = symbol_key(path, name)
         node_key[nid] = key
-        artifacts.append(
-            CodeArtifactDraft(
-                key=key,
-                artifact_type="code_symbol",
-                title=str(node.get("label", name)),
-                # Graphify gives only a start line; symbol is pointer-style until span
-                # recovery lands (ADR-0012). body_text stays None (no fabricated snippet).
-                span_start=_line(node.get("source_location")),
+        start_line = _line(node.get("source_location"))
+        span = _match_span(spans, start_line, node.get("label"))
+        if span is not None:
+            # ADR-0018: exact deterministic source span (incl. decorators/docstring) is
+            # the symbol's citable body_text — no LLM, keyword-searchable. span_start is
+            # decorator-inclusive so it may precede Graphify's reported def line.
+            artifacts.append(
+                CodeArtifactDraft(
+                    key=key,
+                    artifact_type="code_symbol",
+                    title=str(node.get("label", name)),
+                    body_text=span.body_text,
+                    span_start=span.span_start,
+                    span_end=span.span_end,
+                )
             )
-        )
+        else:
+            # No recovered span (non-Python language, or an unmatched node): stay
+            # pointer-style with the known start line. body_text=None (no fabrication).
+            artifacts.append(
+                CodeArtifactDraft(
+                    key=key,
+                    artifact_type="code_symbol",
+                    title=str(node.get("label", name)),
+                    span_start=start_line,
+                )
+            )
 
     edge_drafts: list[CodeEdgeDraft] = []
     seen: set[tuple[str, str, str]] = set()
@@ -188,12 +249,20 @@ class GraphifyGraphifier:
 
         path = content.source.path or "unknown"
         suffix = Path(path).suffix or ".py"
+        # ADR-0018: recover exact symbol spans deterministically from the SAME text
+        # Graphify parsed (no LLM) so code_symbol artifacts get a real, citable body.
+        spans = recover_spans(file_text=content.text, suffix=suffix, path=path)
         with tempfile.NamedTemporaryFile("w", suffix=suffix, encoding="utf-8") as handle:
             handle.write(content.text)
             handle.flush()
             tmp = Path(handle.name)
             data = cast("Mapping[str, Any]", extract([tmp], parallel=False))
-        return map_extraction(data, source_file_override=path, file_basename_override=tmp.name)
+        return map_extraction(
+            data,
+            source_file_override=path,
+            file_basename_override=tmp.name,
+            spans=spans,
+        )
 
 
 __all__ = ["GraphifyGraphifier", "map_extraction"]
