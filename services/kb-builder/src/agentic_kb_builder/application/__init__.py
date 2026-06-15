@@ -16,7 +16,6 @@ from agentic_kb_builder.application.cache_gates import (
     GenerationCacheGate,
     chunk_summary_cache_key,
     code_graph_cache_key,
-    concept_rollup_cache_key,
 )
 from agentic_kb_builder.application.publish_gates import (
     ALLOWED_EDGE_TYPES,
@@ -41,7 +40,6 @@ __all__ = [
     "chunk_summary_cache_key",
     "code_graph_cache_key",
     "compose_gates",
-    "concept_rollup_cache_key",
     "get_active_kb_version",
     "make_publish_gate_validator",
 ]

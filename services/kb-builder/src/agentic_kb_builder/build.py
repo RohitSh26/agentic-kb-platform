@@ -212,6 +212,15 @@ async def _main(args: argparse.Namespace) -> int:
             active = await get_active_kb_version(session)
     finally:
         await engine.dispose()
+    # Structured log on the build path (rule: no silent build paths); the prints
+    # below are the CLI's human-readable summary to stdout, not the audit record.
+    logger.info(
+        "event=build_summary status=%s kb_version=%s active_version=%s index_path=%s",
+        run.status,
+        run.kb_version,
+        active,
+        index_path,
+    )
     print(f"build status : {run.status}")
     print(f"kb_version   : {run.kb_version}")
     print(f"active version: {active}")

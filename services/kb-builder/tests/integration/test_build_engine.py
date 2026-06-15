@@ -24,7 +24,6 @@ from agentic_kb_builder.application import (
     activate_kb_version,
     chunk_summary_cache_key,
     code_graph_cache_key,
-    concept_rollup_cache_key,
     get_active_kb_version,
 )
 from agentic_kb_builder.connectors import GitHubCodeConnector
@@ -97,22 +96,6 @@ def test_cache_keys_are_deterministic_and_distinct() -> None:
     )
     assert key_a != key_b
 
-    rollup_one = concept_rollup_cache_key(
-        concept_id="c1",
-        supporting_artifact_hashes=["b", "a"],
-        rollup_prompt_version="1.0.0",
-        model_name="gpt-test",
-        output_schema_version="1.0.0",
-    )
-    rollup_two = concept_rollup_cache_key(
-        concept_id="c1",
-        supporting_artifact_hashes=["a", "b"],
-        rollup_prompt_version="1.0.0",
-        model_name="gpt-test",
-        output_schema_version="1.0.0",
-    )
-    assert rollup_one == rollup_two  # supporting-hash order must not matter
-
     graph_key = code_graph_cache_key(
         repo="o/r",
         commit_sha="sha",
@@ -121,7 +104,7 @@ def test_cache_keys_are_deterministic_and_distinct() -> None:
         graphify_version="1.0.0",
         parser_config_version="1.0.0",
     )
-    assert graph_key not in {key_a, key_b, rollup_one}
+    assert graph_key not in {key_a, key_b}
 
 
 @pytest.fixture(scope="module")

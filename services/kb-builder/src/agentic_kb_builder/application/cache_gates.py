@@ -50,24 +50,6 @@ def chunk_summary_cache_key(
     )
 
 
-def concept_rollup_cache_key(
-    *,
-    concept_id: str,
-    supporting_artifact_hashes: Sequence[str],
-    rollup_prompt_version: str,
-    model_name: str,
-    output_schema_version: str,
-) -> str:
-    return _compose_key(
-        "concept_rollup",
-        concept_id,
-        *sorted(supporting_artifact_hashes),
-        rollup_prompt_version,
-        model_name,
-        output_schema_version,
-    )
-
-
 def code_graph_cache_key(
     *,
     repo: str,
