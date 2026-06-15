@@ -71,18 +71,22 @@ async def insert_artifact(
     source_is_deleted: bool = False,
     valid_from_seq: int = 0,
     invalidated_at_seq: int | None = None,
+    path: str | None = None,
+    span_start: int | None = None,
+    span_end: int | None = None,
 ) -> uuid.UUID:
     source_id = uuid.uuid4()
     artifact_id = uuid.uuid4()
     await session.execute(
         text(
             "INSERT INTO source_item (source_id, source_type, source_uri, source_version,"
-            " content_hash, is_deleted) VALUES (CAST(:source_id AS uuid), 'github_doc',"
-            " :source_uri, 'rev-1', :content_hash, :is_deleted)"
+            " path, content_hash, is_deleted) VALUES (CAST(:source_id AS uuid), 'github_doc',"
+            " :source_uri, 'rev-1', :path, :content_hash, :is_deleted)"
         ),
         {
             "source_id": str(source_id),
             "source_uri": source_uri or f"https://example.test/{artifact_id}",
+            "path": path,
             "content_hash": f"hash-{artifact_id}",
             "is_deleted": source_is_deleted,
         },
@@ -91,10 +95,11 @@ async def insert_artifact(
         text(
             "INSERT INTO knowledge_artifact (artifact_id, artifact_type, source_id, title,"
             " body_text, kb_version, knowledge_kind, authority_score, acl_teams,"
-            " valid_from_seq, invalidated_at_seq) VALUES"
+            " valid_from_seq, invalidated_at_seq, span_start, span_end) VALUES"
             " (CAST(:artifact_id AS uuid), :artifact_type, CAST(:source_id AS uuid), :title,"
             " :body_text, :kb_version, :knowledge_kind, :authority_score,"
-            " CAST(:acl_teams AS text[]), :valid_from_seq, :invalidated_at_seq)"
+            " CAST(:acl_teams AS text[]), :valid_from_seq, :invalidated_at_seq,"
+            " :span_start, :span_end)"
         ),
         {
             "artifact_id": str(artifact_id),
@@ -108,6 +113,8 @@ async def insert_artifact(
             "acl_teams": acl_teams or [],
             "valid_from_seq": valid_from_seq,
             "invalidated_at_seq": invalidated_at_seq,
+            "span_start": span_start,
+            "span_end": span_end,
         },
     )
     await session.commit()

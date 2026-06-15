@@ -1,10 +1,14 @@
-"""Request/response schemas for context.verify_answer (ADR-0011, phase 1).
+"""Request/response schemas for context.verify_answer (ADR-0011).
 
 The verifier is the trust boundary: an answer is platform-trusted iff it
-carries a valid receipt (docs/contracts/verification-receipt.md). Phase 1 runs
-the deterministic, mandatory L0 provenance checks only; the receipt reserves
-``client_id`` and ``signature`` (null) and keeps ``verifier_levels_run`` and
-``checks`` open so phase-4 (L1-L3, signing, client identity) is purely additive.
+carries a valid receipt (docs/contracts/verification-receipt.md). L0 (phase 1)
+runs the deterministic, mandatory provenance checks. Phase 4 adds the
+deterministic L1 (citation coverage + span caps) and L2 (typed-fact) levels;
+both are additive — a phase-1 caller (no ``quote``/``assertion``, default
+``verifier_levels=["L0"]``) is byte-for-byte unchanged. The receipt reserves
+``client_id`` and ``signature`` (null) for phase-4 signing/identity and keeps
+``verifier_levels_run`` and ``checks`` open so each level appends, never
+restructures.
 """
 
 from datetime import datetime
@@ -14,8 +18,8 @@ from pydantic import Field, field_validator
 
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
 
-#: Phase-1 vocabulary; phase 4 appends without restructuring.
-VerifierLevel = Literal["L0"]
+#: Verifier levels available now. L3 (LLM entailment) is PR-31; appended later.
+VerifierLevel = Literal["L0", "L1", "L2"]
 
 ClaimResult = Literal["passed", "failed"]
 OverallResult = Literal["passed", "failed", "partial"]
@@ -23,6 +27,36 @@ OverallResult = Literal["passed", "failed", "partial"]
 #: Receipt schema is versioned independently of MCP_SCHEMA_VERSION: hosts pin to
 #: the receipt shape, not the broker's wire version.
 RECEIPT_SCHEMA_VERSION = 1
+
+
+class SymbolInFileAssertion(McpModel):
+    """ "symbol X is defined in file F" — adjudicated against an AST fact unit."""
+
+    kind: Literal["symbol_in_file"]
+    symbol: str = Field(min_length=1)
+    file: str = Field(min_length=1)
+
+
+class FileImportsModuleAssertion(McpModel):
+    """ "file F imports module M" — adjudicated against an `imports` edge fact."""
+
+    kind: Literal["file_imports_module"]
+    file: str = Field(min_length=1)
+    module: str = Field(min_length=1)
+
+
+class EdgeBetweenAssertion(McpModel):
+    """ "an edge of type T exists between A and B" — adjudicated against an edge fact."""
+
+    kind: Literal["edge_between"]
+    edge_type: str = Field(min_length=1)
+    from_id: str = Field(min_length=1)
+    to_id: str = Field(min_length=1)
+
+
+#: Discriminated by ``kind``; L2 adjudicates each against the ledger. Phase-4
+#: callers may omit ``assertion`` entirely — L2 then skips the claim.
+ClaimAssertion = SymbolInFileAssertion | FileImportsModuleAssertion | EdgeBetweenAssertion
 
 
 class ClaimInput(McpModel):
@@ -33,6 +67,10 @@ class ClaimInput(McpModel):
     # A claim with no cited evidence cannot be provenance-checked: reject it at
     # the schema boundary (verification-receipt.md "reject ... empty evidence").
     evidence_ids: list[str] = Field(min_length=1)
+    # Optional verbatim span the claim relies on; L1 caps its length.
+    quote: str | None = None
+    # Optional typed assertion the L2 verifier adjudicates against the ledger.
+    assertion: ClaimAssertion | None = Field(default=None, discriminator="kind")
 
 
 class VerifyAnswerRequest(McpModel):
@@ -41,19 +79,24 @@ class VerifyAnswerRequest(McpModel):
     claims: list[ClaimInput] = Field(min_length=1)
     # null ⇒ the active/served graph_version.
     graph_version: str | None = None
-    # Phase 1: L0 only. The server may run fewer/more per policy.
+    # Defaults to L0; request up to ["L0","L1","L2"]. Server runs per policy.
     verifier_levels: list[VerifierLevel] = Field(default_factory=lambda: ["L0"])
 
     @field_validator("verifier_levels")
     @classmethod
     def _at_least_one_level(cls, value: list[str]) -> list[str]:
         if not value:
-            raise ValueError("verifier_levels must request at least one level (phase 1: ['L0'])")
+            raise ValueError("verifier_levels must request at least one level (e.g. ['L0'])")
         return value
 
 
-class L0Checks(McpModel):
-    """Open object keyed by check name; L1-L3 add keys without changing these."""
+class ClaimChecks(McpModel):
+    """Open object keyed by check name; each level appends keys, never edits prior ones.
+
+    L0 keys are always present (L0 is mandatory). L1/L2 keys are present only when
+    that level ran and produced a verdict for the claim — ``L2_typed_fact`` is
+    omitted for a claim that carries no assertion (L2 cannot adjudicate it).
+    """
 
     L0_exists: bool
     L0_in_active_version: bool
@@ -62,12 +105,20 @@ class L0Checks(McpModel):
     L0_not_stale: bool
     # Cited support is EXTRACTED, not an INFERRED routing hint.
     L0_supporting_trust_ok: bool
+    # L1: claim cites ≥1 checkable unit and any quote is within the span cap.
+    L1_coverage: bool | None = None
+    # L2: the claim's typed assertion matches a deterministic ledger unit.
+    L2_typed_fact: bool | None = None
+
+
+#: Backwards-compatible alias: L0-only callers/tests still import ``L0Checks``.
+L0Checks = ClaimChecks
 
 
 class ClaimReceipt(McpModel):
     claim_id: str
     result: ClaimResult
-    checks: L0Checks
+    checks: ClaimChecks
     failed_reasons: list[str] = Field(default_factory=list)
 
 

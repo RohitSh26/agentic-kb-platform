@@ -1,17 +1,27 @@
-"""context.verify_answer: deterministic L0 provenance verifier (ADR-0011).
+"""context.verify_answer: deterministic L0/L1/L2 verifier (ADR-0011).
 
 The broker governs retrieval, not the agent's answer; the only enforceable
 trust boundary is "an answer is platform-trusted iff it carries a valid
-receipt" (docs/contracts/verification-receipt.md). Phase 1 ships the mandatory,
-deterministic L0 checks per cited evidence id:
+receipt" (docs/contracts/verification-receipt.md). The mandatory, deterministic
+L0 checks run per cited evidence id:
 
   exists · in active version · ACL-visible to requester · in requester's
   retrieval ledger · not stale · supporting trust is EXTRACTED.
 
-A claim passes L0 iff every cited evidence passes every check. ``overall`` is
-``passed`` iff all claims passed, ``failed`` iff all failed, else ``partial``.
+Phase 4 adds two more deterministic levels, run only when requested (additive —
+an L0-only caller is unchanged):
 
-The verifier performs NO generation and treats answer/evidence text as
+  L1 (coverage)   — the claim cites ≥1 resolvable ledger unit and any quote it
+                    carries is within the configured span cap.
+  L2 (typed fact) — the claim's optional typed assertion (symbol-in-file,
+                    file-imports-module, edge-between) matches a ledger unit;
+                    a real-but-misread citation fails here where L0 passes.
+
+A claim's ``result`` is the AND of every level that ran and produced a verdict
+for it. ``overall`` is ``passed`` iff all claims passed, ``failed`` iff all
+failed, else ``partial``.
+
+The verifier performs NO generation/LLM and treats answer/evidence text as
 untrusted: it never logs answer or evidence text — only ids, hashes, and check
 outcomes. Every call writes a retrieval_event (verification is a broker action).
 """
@@ -27,6 +37,7 @@ from datetime import UTC, datetime
 from fastmcp.exceptions import ToolError
 
 from agentic_mcp_server.auth.rbac import Requester
+from agentic_mcp_server.context_broker.claim_ledger import adjudicate_typed_fact
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.error_ledger import write_error_event
 from agentic_mcp_server.context_broker.trust import CLAIM_SUPPORTING
@@ -42,9 +53,11 @@ from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
     insert_event,
 )
 from agentic_mcp_server.mcp.tool_schemas.verification import (
+    ClaimChecks,
+    ClaimInput,
     ClaimReceipt,
-    L0Checks,
     VerificationReceipt,
+    VerifierLevel,
     VerifyAnswerRequest,
 )
 
@@ -63,6 +76,11 @@ REASON_NOT_RETRIEVED = "evidence_not_retrieved_by_requester"
 REASON_STALE = "evidence_stale"
 REASON_TRUST = "evidence_supported_only_by_inferred_edge"
 REASON_BAD_ID = "evidence_id_not_a_valid_artifact_id"
+# L1 (phase 4): coverage + span cap.
+REASON_UNCITED = "claim_uncited"
+REASON_QUOTE_OVER_CAP = "quote_over_cap"
+# L2 (phase 4): typed-fact adjudication.
+REASON_TYPED_FACT_UNSUPPORTED = "typed_fact_unsupported"
 
 
 def _normalized_answer_hash(request: VerifyAnswerRequest) -> str:
@@ -97,7 +115,28 @@ class _EvidenceContext:
     retrieved_by_requester: set[uuid.UUID]
 
 
-def _check_evidence(raw_id: str, ctx: _EvidenceContext) -> tuple[L0Checks, list[str]]:
+@dataclass(frozen=True)
+class _L0Result:
+    """The six L0 bools for one cited evidence id (claim-level checks AND these)."""
+
+    exists: bool
+    in_active_version: bool
+    acl_visible: bool
+    in_requester_ledger: bool
+    not_stale: bool
+    supporting_trust_ok: bool
+
+    @property
+    def resolvable(self) -> bool:
+        """A unit L1 can count toward coverage: a real, in-version, visible,
+        requester-retrieved ledger unit (the staleness/trust verdicts are L0's
+        concern, not whether the citation resolves to a unit at all)."""
+        return (
+            self.exists and self.in_active_version and self.acl_visible and self.in_requester_ledger
+        )
+
+
+def _check_evidence(raw_id: str, ctx: _EvidenceContext) -> tuple[_L0Result, list[str]]:
     """Run the six L0 checks for one cited evidence id; return checks + reasons."""
     reasons: list[str] = []
     try:
@@ -105,13 +144,13 @@ def _check_evidence(raw_id: str, ctx: _EvidenceContext) -> tuple[L0Checks, list[
     except ValueError:
         # A malformed id cannot reference any artifact: every check fails.
         return (
-            L0Checks(
-                L0_exists=False,
-                L0_in_active_version=False,
-                L0_acl_visible=False,
-                L0_in_requester_ledger=False,
-                L0_not_stale=False,
-                L0_supporting_trust_ok=False,
+            _L0Result(
+                exists=False,
+                in_active_version=False,
+                acl_visible=False,
+                in_requester_ledger=False,
+                not_stale=False,
+                supporting_trust_ok=False,
             ),
             [REASON_BAD_ID],
         )
@@ -149,27 +188,64 @@ def _check_evidence(raw_id: str, ctx: _EvidenceContext) -> tuple[L0Checks, list[
     if in_active_version and not supporting_trust_ok:
         reasons.append(REASON_TRUST)
 
-    checks = L0Checks(
-        L0_exists=exists,
-        L0_in_active_version=in_active_version,
-        L0_acl_visible=acl_visible,
-        L0_in_requester_ledger=in_ledger,
-        L0_not_stale=not_stale,
-        L0_supporting_trust_ok=supporting_trust_ok,
+    result = _L0Result(
+        exists=exists,
+        in_active_version=in_active_version,
+        acl_visible=acl_visible,
+        in_requester_ledger=in_ledger,
+        not_stale=not_stale,
+        supporting_trust_ok=supporting_trust_ok,
     )
-    return checks, reasons
+    return result, reasons
 
 
-def _merge_checks(into: L0Checks, other: L0Checks) -> L0Checks:
-    """A claim's per-claim checks are the AND of every cited evidence's checks."""
-    return L0Checks(
-        L0_exists=into.L0_exists and other.L0_exists,
-        L0_in_active_version=into.L0_in_active_version and other.L0_in_active_version,
-        L0_acl_visible=into.L0_acl_visible and other.L0_acl_visible,
-        L0_in_requester_ledger=into.L0_in_requester_ledger and other.L0_in_requester_ledger,
-        L0_not_stale=into.L0_not_stale and other.L0_not_stale,
-        L0_supporting_trust_ok=into.L0_supporting_trust_ok and other.L0_supporting_trust_ok,
+def _merge_l0(into: _L0Result, other: _L0Result) -> _L0Result:
+    """A claim's per-claim L0 checks are the AND of every cited evidence's checks."""
+    return _L0Result(
+        exists=into.exists and other.exists,
+        in_active_version=into.in_active_version and other.in_active_version,
+        acl_visible=into.acl_visible and other.acl_visible,
+        in_requester_ledger=into.in_requester_ledger and other.in_requester_ledger,
+        not_stale=into.not_stale and other.not_stale,
+        supporting_trust_ok=into.supporting_trust_ok and other.supporting_trust_ok,
     )
+
+
+def _resolve_levels(requested: list[VerifierLevel]) -> list[VerifierLevel]:
+    """Levels actually run: L0 is mandatory; L1/L2 run iff requested + supported.
+
+    Order is fixed (L0, L1, L2) so verifier_levels_run is stable regardless of
+    request ordering. A requested level the server does not support is dropped.
+    """
+    requested_set = set(requested)
+    levels: list[VerifierLevel] = ["L0"]  # always run; the trust floor.
+    levels.extend(lv for lv in ("L1", "L2") if lv in requested_set)
+    return levels
+
+
+def _l1_coverage(
+    claim: ClaimInput, evidence: list[_L0Result], *, max_quote_chars: int
+) -> tuple[bool, list[str]]:
+    """L1: ≥1 cited evidence resolves to a unit AND any quote is within the cap."""
+    reasons: list[str] = []
+    cited = any(unit.resolvable for unit in evidence)
+    if not cited:
+        reasons.append(REASON_UNCITED)
+    quote_ok = claim.quote is None or len(claim.quote) <= max_quote_chars
+    if not quote_ok:
+        reasons.append(REASON_QUOTE_OVER_CAP)
+    return (cited and quote_ok), reasons
+
+
+def _evidence_uuids(claim: ClaimInput) -> list[uuid.UUID]:
+    """The claim's cited evidence ids that parse as UUIDs (bad ids drop out)."""
+    out: list[uuid.UUID] = []
+    for raw in claim.evidence_ids:
+        try:
+            out.append(uuid.UUID(raw))
+        except ValueError:
+            continue
+    return out
 
 
 async def verify_answer(
@@ -177,6 +253,9 @@ async def verify_answer(
 ) -> VerificationReceipt:
     started = time.monotonic()
     answer_hash = _normalized_answer_hash(request)
+    levels = _resolve_levels(request.verifier_levels)
+    run_l1 = "L1" in levels
+    run_l2 = "L2" in levels
 
     async with deps.session_factory() as session:
         active = await fetch_active_version(session)
@@ -193,6 +272,7 @@ async def verify_answer(
         # null graph_version ⇒ active; a pinned version must equal the served
         # one (we serve exactly the last successful active version, invariant 5).
         graph_version = request.graph_version or active_version
+        is_active = graph_version == active_version
 
         # Resolve every cited id once, then run pure per-claim checks over it.
         cited_ids: list[uuid.UUID] = []
@@ -204,7 +284,7 @@ async def verify_answer(
                     continue
         unique_ids = list(dict.fromkeys(cited_ids))
 
-        if graph_version == active_version:
+        if is_active:
             in_version = await fetch_provenance(
                 session, unique_ids, active.build_seq, extracted_bucket=CLAIM_SUPPORTING
             )
@@ -214,6 +294,34 @@ async def verify_answer(
             in_version = {}
         exists_anywhere = await fetch_existing_anywhere(session, unique_ids)
         retrieved = await fetch_subject_retrieved_ids(session, requester.subject)
+
+        # L0's "resolvable" set: cited ids that are in the active version,
+        # ACL-visible, AND retrieved by this requester. L2 may adjudicate a claim's
+        # assertion ONLY against this claim's own resolvable cited evidence — never
+        # a unit the requester didn't retrieve (no verifier oracle, invariant 6).
+        resolvable_ids = frozenset(
+            uid
+            for uid, row in in_version.items()
+            if uid in retrieved
+            and (not row.acl_teams or requester.teams.intersection(row.acl_teams))
+        )
+        # L2 adjudicates each claim's typed assertion against the ledger in the
+        # same session. Only over the active version (L0 already fails a pinned
+        # non-active citation; the ledger reads the served build_seq).
+        l2_verdicts: dict[str, bool] = {}
+        if run_l2 and is_active:
+            for claim in request.claims:
+                if claim.assertion is not None:
+                    cited_resolvable = frozenset(
+                        uid for uid in _evidence_uuids(claim) if uid in resolvable_ids
+                    )
+                    l2_verdicts[claim.claim_id] = await adjudicate_typed_fact(
+                        session,
+                        claim.assertion,
+                        build_seq=active.build_seq,
+                        requester=requester,
+                        cited_ids=cited_resolvable,
+                    )
 
     # ACL visibility reuses the same authorization policy as retrieval: an
     # in-version row is visible iff the policy admits its (acl_teams) artifact.
@@ -232,27 +340,60 @@ async def verify_answer(
 
     claim_results: list[ClaimReceipt] = []
     for claim in request.claims:
-        merged: L0Checks | None = None
+        merged: _L0Result | None = None
+        evidence_results: list[_L0Result] = []
         reasons: list[str] = []
         for raw_id in claim.evidence_ids:
-            checks, evidence_reasons = _check_evidence(raw_id, ctx)
-            merged = checks if merged is None else _merge_checks(merged, checks)
+            unit, evidence_reasons = _check_evidence(raw_id, ctx)
+            evidence_results.append(unit)
+            merged = unit if merged is None else _merge_l0(merged, unit)
             reasons.extend(evidence_reasons)
         # merged is never None: the schema rejects a claim with empty evidence.
         assert merged is not None
-        passed = (
-            merged.L0_exists
-            and merged.L0_in_active_version
-            and merged.L0_acl_visible
-            and merged.L0_in_requester_ledger
-            and merged.L0_not_stale
-            and merged.L0_supporting_trust_ok
+
+        l0_passed = (
+            merged.exists
+            and merged.in_active_version
+            and merged.acl_visible
+            and merged.in_requester_ledger
+            and merged.not_stale
+            and merged.supporting_trust_ok
+        )
+        # A claim's result is the AND of every level that ran with a verdict.
+        passed = l0_passed
+
+        l1_coverage: bool | None = None
+        if run_l1:
+            l1_coverage, l1_reasons = _l1_coverage(
+                claim, evidence_results, max_quote_chars=deps.settings.max_quote_chars
+            )
+            reasons.extend(l1_reasons)
+            passed = passed and l1_coverage
+
+        # L2 only yields a verdict for claims carrying a typed assertion; for the
+        # rest the key stays absent (the verifier never invents an L2 verdict).
+        l2_typed_fact: bool | None = None
+        if run_l2 and claim.claim_id in l2_verdicts:
+            l2_typed_fact = l2_verdicts[claim.claim_id]
+            if not l2_typed_fact:
+                reasons.append(REASON_TYPED_FACT_UNSUPPORTED)
+            passed = passed and l2_typed_fact
+
+        checks = ClaimChecks(
+            L0_exists=merged.exists,
+            L0_in_active_version=merged.in_active_version,
+            L0_acl_visible=merged.acl_visible,
+            L0_in_requester_ledger=merged.in_requester_ledger,
+            L0_not_stale=merged.not_stale,
+            L0_supporting_trust_ok=merged.supporting_trust_ok,
+            L1_coverage=l1_coverage,
+            L2_typed_fact=l2_typed_fact,
         )
         claim_results.append(
             ClaimReceipt(
                 claim_id=claim.claim_id,
                 result="passed" if passed else "failed",
-                checks=merged,
+                checks=checks,
                 # De-duplicate reasons while preserving first-seen order.
                 failed_reasons=list(dict.fromkeys(reasons)),
             )
@@ -284,11 +425,12 @@ async def verify_answer(
 
     logger.info(
         "broker.verify_answer answer_id=%s subject=%s graph_version=%s claims=%d "
-        "overall=%s passed=%d",
+        "levels=%s overall=%s passed=%d",
         request.answer_id,
         requester.subject,
         graph_version,
         len(claim_results),
+        ",".join(levels),
         overall,
         passed_count,
     )
@@ -297,7 +439,7 @@ async def verify_answer(
         answer_hash=answer_hash,
         graph_version=graph_version,
         issued_at=datetime.now(UTC),
-        verifier_levels_run=["L0"],
+        verifier_levels_run=levels,
         overall=overall,
         claim_results=claim_results,
         client_id=None,
