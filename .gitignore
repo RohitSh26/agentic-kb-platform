@@ -27,3 +27,7 @@ dist/
 
 # Generated eval output (baseline.json IS committed)
 evals/report.json
+
+# Local dev search index projection (ADR-0017) — rebuildable from Postgres, never truth
+.kb-local-search-index.json
+*.kb-local-search-index.json

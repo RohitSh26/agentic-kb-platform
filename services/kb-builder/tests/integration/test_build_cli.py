@@ -23,6 +23,7 @@ from agentic_kb_builder.embeddings import LocalHashEmbedder
 from agentic_kb_builder.graphify import GraphifyGraphifier
 from agentic_kb_builder.indexing import SearchDocUpserter
 from agentic_kb_builder.infrastructure.azure_search.search_client import FakeSearchClient
+from agentic_kb_builder.infrastructure.local_search import LocalFileSearchClient
 from agentic_kb_builder.infrastructure.postgres.models import KnowledgeArtifact, KnowledgeEdge
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
@@ -133,6 +134,19 @@ def _collaborators(session: AsyncSession) -> Collaborators:
     )
 
 
+def _persistent_collaborators(session: AsyncSession, index_path: Path) -> Collaborators:
+    """Collaborators backed by the file-persisted search client. A NEW instance per
+    call reloads the index from disk — standing in for a fresh `build` process."""
+    client = LocalFileSearchClient(index_path)
+    return Collaborators(
+        wikifier=FakeWikifier(),
+        graphifier=GraphifyGraphifier(),
+        embedder=LocalHashEmbedder(),
+        indexer=SearchDocUpserter(session, client),
+        search_client=client,
+    )
+
+
 async def _count(session: AsyncSession, model: type) -> int:
     return (await session.execute(select(func.count()).select_from(model))).scalar_one()
 
@@ -194,3 +208,42 @@ async def test_build_is_incremental_on_rerun(session: AsyncSession, tmp_path: Pa
         activate=False,
     )
     assert await _count(session, KnowledgeArtifact) == artifacts_after_first
+
+
+@requires_db
+async def test_incremental_rebuild_with_a_fresh_client_passes_consistency(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    # The cross-process incremental rebuild (ADR-0017): build 1 populates the
+    # PERSISTENT index and activates; build 2 runs with a BRAND-NEW client instance
+    # (== a new `build` process) and, though it upserts nothing, must still pass the
+    # index-consistency gate against the carried-forward membership and activate.
+    # With the in-memory FakeSearchClient the fresh instance would be empty and the
+    # gate would report every member missing — the bug this fixes.
+    workspace, sources = _workspace(tmp_path)
+    index_path = tmp_path / "search-index.json"
+
+    run1 = await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-cli.1",
+        version="local",
+        collaborators=_persistent_collaborators(session, index_path),
+        activate=True,
+    )
+    assert run1.status in {"completed", "active"}
+    assert await get_active_kb_version(session) == "v-cli.1"
+
+    run2 = await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-cli.2",
+        version="local",
+        collaborators=_persistent_collaborators(session, index_path),
+        activate=True,
+    )
+    assert run2.status in {"completed", "active"}
+    # Carried-forward members validated against the persisted index ⇒ activation.
+    assert await get_active_kb_version(session) == "v-cli.2"

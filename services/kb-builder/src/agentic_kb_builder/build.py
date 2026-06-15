@@ -15,6 +15,7 @@ goes active after the consistency validator passes (invariant 5); pass --no-acti
 
 import argparse
 import asyncio
+import os
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,10 +44,8 @@ from agentic_kb_builder.embeddings import LocalHashEmbedder
 from agentic_kb_builder.graphify import GraphifyGraphifier
 from agentic_kb_builder.indexing import SearchDocUpserter, make_consistency_validator
 from agentic_kb_builder.infrastructure.azure_openai.chat_model_client import ChatModelClient
-from agentic_kb_builder.infrastructure.azure_search.search_client import (
-    FakeSearchClient,
-    SearchClient,
-)
+from agentic_kb_builder.infrastructure.azure_search.search_client import SearchClient
+from agentic_kb_builder.infrastructure.local_search import LocalFileSearchClient
 from agentic_kb_builder.infrastructure.postgres.models import KbBuildRun
 from agentic_kb_builder.infrastructure.postgres.session import create_engine, create_session_factory
 from agentic_kb_builder.structured_logging import get_logger
@@ -66,10 +65,14 @@ class Collaborators:
     search_client: SearchClient  # backs the activation consistency validator
 
 
-def default_collaborators(session: AsyncSession) -> Collaborators:
+def default_collaborators(session: AsyncSession, *, index_path: Path) -> Collaborators:
     """Real, no-cloud collaborators: LLM wikify (local Ollama by default), Graphify code
-    extraction, deterministic local embeddings, and the in-memory Search projection."""
-    client = FakeSearchClient()
+    extraction, deterministic local embeddings, and a PERSISTENT local Search projection.
+
+    The projection is file-backed (ADR-0017) so it survives across build invocations the
+    same way the Azure index does — an incremental rebuild that upserts nothing still
+    validates against the carried-forward membership."""
+    client = LocalFileSearchClient(index_path)
     return Collaborators(
         wikifier=WikifyGenerator(ChatModelClient.from_env()),
         graphifier=GraphifyGraphifier(),
@@ -164,6 +167,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="fetch backend: 'local' reads --workspace files (default); 'production' fetches "
         "real GitHub/ADO sources via the production factory (ADR-0015)",
     )
+    parser.add_argument(
+        "--index-path",
+        default=None,
+        help="persistent local search index file (default: $KB_LOCAL_INDEX_PATH or "
+        "./.kb-local-search-index.json). A rebuildable projection of Postgres — delete it "
+        "(or recreate the database) to force a clean reprojection on the next build",
+    )
     parser.add_argument("--no-activate", action="store_true", help="build but do not mark active")
     parser.add_argument(
         "--no-git-metadata",
@@ -180,6 +190,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 async def _main(args: argparse.Namespace) -> int:
+    index_path = Path(
+        args.index_path or os.environ.get("KB_LOCAL_INDEX_PATH") or ".kb-local-search-index.json"
+    )
     engine = create_engine()
     factory = create_session_factory(engine)
     try:
@@ -190,7 +203,7 @@ async def _main(args: argparse.Namespace) -> int:
                 workspace=args.workspace,
                 kb_version=args.kb_version,
                 version=args.version,
-                collaborators=default_collaborators(session),
+                collaborators=default_collaborators(session, index_path=index_path),
                 activate=not args.no_activate,
                 allow_large_delta=args.allow_large_delta,
                 git_metadata=not args.no_git_metadata,
@@ -202,6 +215,7 @@ async def _main(args: argparse.Namespace) -> int:
     print(f"build status : {run.status}")
     print(f"kb_version   : {run.kb_version}")
     print(f"active version: {active}")
+    print(f"search index : {index_path}")
     return 0 if run.status in {"completed", "active"} else 1
 
 

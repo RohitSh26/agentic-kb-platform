@@ -202,6 +202,23 @@ Expect `event=build_skip_unchanged` for most sources and **near-zero `llm_calls`
 hits). Crucially, the newly-activated version must still serve the **complete** set (see the
 membership query in §8) — not just the day's delta.
 
+The local search index is **persistent** (a JSON file, default `./.kb-local-search-index.json`,
+overridable with `--index-path` or `$KB_LOCAL_INDEX_PATH`). It is a *derived, rebuildable projection
+of Postgres* — never truth — and mirrors how Azure AI Search persists between builds, so the
+unchanged rebuild (which upserts nothing) still passes the index-consistency publish gate against
+the carried-forward membership. The CLI prints its location as `search index : <path>`. See
+ADR-0017.
+
+> **If you recreate the database** (a from-scratch Phase 1 rerun), do the **first** rebuild with the
+> *same* index file in place — the build's orphan sweep removes the stale docs and re-projects the
+> fresh ones, so it self-heals. To force a fully clean projection instead, delete the index file
+> (`rm .kb-local-search-index.json`) before rebuilding.
+>
+> An `event=index_drift class=missing … count=N` followed by `publish_gate_failed
+> gate=index_consistency` means the index is missing members the registry has — almost always a
+> *stale or deleted* index file paired with a freshly built database. Rebuild from scratch (DB +
+> index) and the gate clears.
+
 ---
 
 ## 6. Export the graph to an Obsidian vault
