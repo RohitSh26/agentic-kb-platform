@@ -68,15 +68,21 @@ class PackStore:
         return self.run_usage.setdefault(run_id, {})
 
     def create(self, pack: EvidencePackState) -> None:
+        # Evict the least-recently-USED pack (front of the insertion-ordered dict;
+        # get() moves touched packs to the back) so an actively-read long-running
+        # pack is not dropped before a newer, untouched one.
         while len(self.packs) >= self.max_packs:
             self.packs.pop(next(iter(self.packs)))
         self.packs[pack.context_pack_id] = pack
 
     def get(self, context_pack_id: str) -> EvidencePackState:
         try:
-            return self.packs[context_pack_id]
+            pack = self.packs.pop(context_pack_id)
         except KeyError as exc:
             raise UnknownPackError(context_pack_id) from exc
+        # LRU touch: re-insert at the back so this pack is now most-recently-used.
+        self.packs[context_pack_id] = pack
+        return pack
 
 
 def new_pack_id() -> str:
