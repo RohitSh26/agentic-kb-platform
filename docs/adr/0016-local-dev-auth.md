@@ -70,21 +70,29 @@ set, and it **refuses to run** in any configuration that looks production-like. 
   weakens any of them is a security regression. Requires a focused test suite (flag-off ⇒ Entra;
   flag-on + real tenant ⇒ refuse; flag-on + public bind ⇒ refuse; ledger marker present).
 
-## Recommendation
+## Decision
 
-Ship **Option A documentation now** (done — dev-guide/05) and treat **Option B as Proposed** pending
-owner ratification. Option B touches the auth boundary (auth/, dependencies.py) which is owned by
-sibling PRs and is invariant-6 territory; it must not be implemented opportunistically. If ratified,
-it lands as its own PR with the five guardrails above and its own tests, **not** folded into the
-"run the server" change.
+Option B is **ratified and implemented** (2026-06-15). The opt-in, OFF-by-default local-dev verifier
+ships with all five guardrails above. Because it touches the auth boundary (invariant-6 territory),
+it landed as its own change with a dedicated test suite rather than folded into the "run the server"
+work:
+
+- `auth/local_dev.py`, `auth/local_dev_selection.py` — the verifier + boot guardrails.
+- `context_broker/dependencies.py` / `config.py` — flag plumbing and the loopback-bind guard.
+- `tests/unit/test_local_dev_auth.py`, `tests/unit/test_config_local_dev.py` — flag-off ⇒ Entra;
+  flag-on + real tenant ⇒ refuse; flag-on + public bind ⇒ refuse; ledger marker present.
+- `tests/contract/test_local_dev_auth_not_deployed.py` — asserts `MCP_LOCAL_DEV_AUTH` is absent from
+  the Dockerfile, docker-compose, and `infra/` (guardrail 5).
+- `dev-guide/05-running-the-mcp-server.md` §4b documents the loop.
+
+Option A (real Entra) remains the default path; Option B is purely additive.
 
 ## Consequences
 
-- Until ratified, the only way to call a tool locally is a real Entra token (dev-guide/05 §Auth).
-- If Option B is accepted, a follow-up PR owns the verifier + guardrails + tests and updates
-  dev-guide/05 with the `MCP_LOCAL_DEV_AUTH` loop.
-- Either way, the production path stays fail-closed Entra with no auth-off switch.
-
-## Open question for the owner
-
-Ratify Option B (local dev verifier with the five guardrails) or keep Option A (real Entra only)?
+- A developer can run a true laptop-only loop (build → serve → call tools) with `MCP_LOCAL_DEV_AUTH=1`
+  on a loopback bind, exercising the same broker, budgets, ACLs, evidence, and ledger — only the
+  identity seam changes, and every dev-auth session is loudly logged and ledger-marked.
+- The five guardrails are load-bearing: a regression weakening any of them is a security regression,
+  pinned by the test suite above.
+- The production path (flag unset) stays byte-for-byte fail-closed Entra — there is no auth-off
+  switch (invariant 6).
