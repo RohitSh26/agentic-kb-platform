@@ -14,6 +14,11 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
 - [03 — Local testing](03-local-testing.md): how to run everything on a laptop with a local
   Postgres and in-memory fakes — no Azure resources required, including the end-to-end `build` CLI
   and the Obsidian vault export.
+- [04 — KB-builder testing (from a bare machine)](04-kb-builder-testing.md): a complete copy-paste
+  runbook for a brand-new machine — install the toolchain, point at **any** LLM provider (Ollama /
+  Groq / OpenAI / Azure OpenAI / Azure Foundry / Claude / any OpenAI-compatible endpoint), run a
+  local and a production build, export to Obsidian, and a full **database query reference** for
+  checks/analysis (build health, the served set, ghost-edge + cache/cost checks).
 
 Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0015), build units
 in `docs/pr-briefs/` (through PR-33), cross-service agreements in `docs/contracts/`.
