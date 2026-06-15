@@ -36,7 +36,7 @@ from agentic_kb_builder.domain import (
     RelationshipJudgment,
 )
 from agentic_kb_builder.domain.content_hasher import content_hash
-from agentic_kb_builder.domain.judge_records import INFERRED_EDGE_BUCKETS
+from agentic_kb_builder.domain.judge_records import INFERRED_EDGE_BUCKETS, guard_quote
 from agentic_kb_builder.domain.schema_versions import (
     JUDGE_PROMPT_VERSION,
     RELATION_SCHEMA_VERSION,
@@ -132,6 +132,10 @@ async def run_judge(
             judged += 1
             await gate.record(key, judgment=judgment)
 
+        # Defense-in-depth (invariant 7): re-guard at the edge-writing boundary, so a
+        # RelationshipJudge impl that forgot to quote-guard — or a corrupt cache row —
+        # can never write an INFERRED edge whose quote isn't a verbatim source span.
+        judgment = guard_quote(judgment, cited_spans=cand.cited_spans)
         bucket = judgment.trust_bucket
         if bucket == "REJECTED":
             # Never an edge — retained in the cache only (audit).
@@ -170,7 +174,17 @@ async def run_judge(
             EDGE_SOURCE,
         )
 
-    invalidated = await _invalidate_stale(session, computed, invalidated_at_seq=valid_from_seq)
+    # Safety: never run the stale-sweep on an empty candidate set. A transient
+    # candidate-load failure would otherwise leave `computed` empty and soft-invalidate
+    # the ENTIRE live judge subgraph. Genuinely-removed endpoints are already
+    # invalidated by the deletion sweep (invalidation.py), so skipping here is safe.
+    if candidates:
+        invalidated = await _invalidate_stale(session, computed, invalidated_at_seq=valid_from_seq)
+    else:
+        invalidated = 0
+        logger.warning(
+            "event=judge_stale_sweep_skipped reason=no_candidates kb_version=%s", kb_version
+        )
     await session.flush()
     logger.info(
         "event=judge_completed kb_version=%s candidates=%d judged=%d cache_hits=%d "
@@ -299,7 +313,13 @@ async def _invalidate_stale(
     """Soft-invalidate live judge edges no longer produced this run (a candidate
     dropped, or a pair re-judged REJECTED). Sets invalidated_at_seq rather than
     deleting (ADR-0013 §1): the edge leaves the active version but stays a member
-    of every prior version."""
+    of every prior version.
+
+    Scans all live llm_judge edges irrespective of kb_version — correct under the
+    single-writer nightly build (one build mutates the registry at a time). The
+    caller guards against an empty computed set so a load failure can't wipe the
+    subgraph.
+    """
     rows = await session.execute(
         select(
             KnowledgeEdge.edge_id,
