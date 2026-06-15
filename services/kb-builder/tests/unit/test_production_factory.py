@@ -1,6 +1,8 @@
-"""production_backend_factory dispatch: each type -> the right backend class;
-ADO stubs raise NotImplementedError; unsupported type raises SourceConfigError."""
+"""production_backend_factory dispatch: each source type -> the right backend
+class; an unsupported type raises SourceConfigError. The ADO backends are now
+implemented (their fetch behavior is covered by test_ado_*_backend.py)."""
 
+import httpx
 import pytest
 
 from agentic_kb_builder.connectors.ado_wiki_backend import AdoWikiBackend
@@ -24,7 +26,7 @@ def test_dispatches_github_code_and_doc() -> None:
     assert isinstance(doc, GitHubRestBackend)
 
 
-def test_dispatches_ado_stubs() -> None:
+def test_dispatches_ado_backends() -> None:
     factory = production_backend_factory()
     wiki = factory(
         AzureWikiSourceSpec(type="azure_wiki", name="w", organization="o", project="p", wiki="k"),
@@ -37,21 +39,43 @@ def test_dispatches_ado_stubs() -> None:
     assert isinstance(card, AdoWorkItemBackend)
 
 
-async def test_ado_wiki_stub_raises_not_implemented() -> None:
-    backend = AdoWikiBackend(
+async def test_ado_wiki_backend_lists_pages_via_factory() -> None:
+    # azure_wiki dispatches to a working AdoWikiBackend that pins the wiki's
+    # backing git head SHA as the shared source_version.
+    repo_id = "repo-1"
+    sha = "feedface" * 5
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/o/p/_apis/wiki/wikis/k":
+            return httpx.Response(200, json={"repositoryId": repo_id})
+        if path == f"/o/p/_apis/git/repositories/{repo_id}":
+            return httpx.Response(200, json={"defaultBranch": "refs/heads/main"})
+        if path == f"/o/p/_apis/git/repositories/{repo_id}/refs":
+            return httpx.Response(200, json={"value": [{"objectId": sha}]})
+        if path == "/o/p/_apis/wiki/wikis/k/pages":
+            return httpx.Response(200, json={"path": "/", "subPages": [{"id": 1, "path": "/Home"}]})
+        return httpx.Response(404)
+
+    factory = production_backend_factory(client_transport=httpx.MockTransport(handler))
+    backend = factory(
         AzureWikiSourceSpec(type="azure_wiki", name="w", organization="o", project="p", wiki="k"),
-        None,
+        "tok",
     )
-    with pytest.raises(NotImplementedError, match="ADO Wiki PR"):
-        await backend.list_sources()
+    assert isinstance(backend, AdoWikiBackend)
+    refs = await backend.list_sources()
+    assert [r.path for r in refs] == ["/Home"]
+    assert all(r.source_version == sha for r in refs)
 
 
-async def test_ado_work_item_stub_raises_not_implemented() -> None:
-    backend = AdoWorkItemBackend(
-        AdoCardSourceSpec(type="ado_card", name="a", organization="o", project="p"), None
+def test_dispatches_ado_work_item_backend() -> None:
+    # ado_card dispatches to the implemented AdoWorkItemBackend (no longer a stub);
+    # its fetch behavior is covered by test_ado_work_item_backend.py.
+    factory = production_backend_factory()
+    card = factory(
+        AdoCardSourceSpec(type="ado_card", name="a", organization="o", project="p"), "tok"
     )
-    with pytest.raises(NotImplementedError, match="ADO Work Items PR"):
-        await backend.list_sources()
+    assert isinstance(card, AdoWorkItemBackend)
 
 
 def test_unsupported_type_raises() -> None:

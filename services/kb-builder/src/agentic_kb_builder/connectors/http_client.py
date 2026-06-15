@@ -102,25 +102,35 @@ class AsyncHttpClient:
     def _backoff_seconds(self, attempt: int) -> float:
         return min(self._backoff_base * (2**attempt), self._backoff_cap)
 
-    async def _request(self, url: str, params: dict[str, Any] | None) -> httpx.Response:
-        # `url` (path) is logged; query params are NOT logged (could embed creds).
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None,
+        json_body: Any | None = None,
+    ) -> httpx.Response:
+        # `method` + `url` (path) are logged; query params and JSON bodies are NOT
+        # logged (either could embed creds).
         last_exc: Exception | None = None
         for attempt in range(self._max_retries + 1):
             try:
-                response = await self._client.get(url, params=params)
+                response = await self._client.request(method, url, params=params, json=json_body)
             except httpx.TransportError as exc:
                 last_exc = exc
                 if attempt >= self._max_retries:
                     logger.warning(
-                        "event=http_fetch_error url=%s attempt=%d error=%s",
+                        "event=http_fetch_error method=%s url=%s attempt=%d error=%s",
+                        method,
                         url,
                         attempt,
                         type(exc).__name__,
                     )
-                    raise HttpFetchError(f"GET {url} failed: {exc}") from exc
+                    raise HttpFetchError(f"{method} {url} failed: {exc}") from exc
                 delay = self._backoff_seconds(attempt)
                 logger.warning(
-                    "event=http_fetch_retry url=%s attempt=%d reason=transport delay=%.2f",
+                    "event=http_fetch_retry method=%s url=%s attempt=%d "
+                    "reason=transport delay=%.2f",
+                    method,
                     url,
                     attempt,
                     delay,
@@ -138,7 +148,8 @@ class AsyncHttpClient:
                     else self._backoff_seconds(attempt)
                 )
                 logger.warning(
-                    "event=http_fetch_retry url=%s attempt=%d status=%d delay=%.2f",
+                    "event=http_fetch_retry method=%s url=%s attempt=%d status=%d delay=%.2f",
+                    method,
                     url,
                     attempt,
                     response.status_code,
@@ -149,14 +160,16 @@ class AsyncHttpClient:
 
             if response.status_code >= 400:
                 logger.warning(
-                    "event=http_fetch_failed url=%s status=%d",
+                    "event=http_fetch_failed method=%s url=%s status=%d",
+                    method,
                     url,
                     response.status_code,
                 )
-                raise HttpFetchError(f"GET {url} returned {response.status_code}")
+                raise HttpFetchError(f"{method} {url} returned {response.status_code}")
 
             logger.info(
-                "event=http_fetch_ok url=%s status=%d bytes=%d",
+                "event=http_fetch_ok method=%s url=%s status=%d bytes=%d",
+                method,
                 url,
                 response.status_code,
                 len(response.content),
@@ -165,16 +178,26 @@ class AsyncHttpClient:
 
         # Loop only exits via return/raise above, except when retries are exhausted
         # on a retryable status (the final attempt falls through to here).
-        raise HttpFetchError(f"GET {url} exhausted {self._max_retries} retries") from last_exc
+        raise HttpFetchError(f"{method} {url} exhausted {self._max_retries} retries") from last_exc
 
     async def get_json(self, url: str, params: dict[str, Any] | None = None) -> Any:
-        response = await self._request(url, params)
+        response = await self._request("GET", url, params)
         return response.json()
 
     async def get_text(self, url: str, params: dict[str, Any] | None = None) -> str:
-        response = await self._request(url, params)
+        response = await self._request("GET", url, params)
         # Strict UTF-8 so hashes are stable across machines.
         return response.content.decode("utf-8")
+
+    async def post_json(
+        self,
+        url: str,
+        json_body: Any,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        # Same retry/backoff/token-safety path as get_json; the body is never logged.
+        response = await self._request("POST", url, params, json_body=json_body)
+        return response.json()
 
 
 __all__ = ["AsyncHttpClient", "HttpFetchError"]
