@@ -12,7 +12,21 @@ from collections.abc import Iterator
 
 import pytest
 
-from agentic_kb_builder.structured_logging import PACKAGE_LOGGER, configure_logging, get_logger
+from agentic_kb_builder.structured_logging import (
+    PACKAGE_LOGGER,
+    JsonFormatter,
+    TimelineFormatter,
+    _select_formatter,
+    _stage_for,
+    configure_logging,
+    get_logger,
+)
+
+
+def _record(name: str, message: str, level: int = logging.INFO) -> logging.LogRecord:
+    return logging.LogRecord(
+        name=name, level=level, pathname=__file__, lineno=1, msg=message, args=(), exc_info=None
+    )
 
 
 @pytest.fixture
@@ -61,3 +75,91 @@ def test_configure_logging_is_idempotent(package_logger: logging.Logger) -> None
 
 def test_get_logger_adds_no_handler_of_its_own() -> None:
     assert get_logger("agentic_kb_builder.tests.fresh_logger").handlers == []
+
+
+# --- timeline formatter: human rendering must preserve the greppable structured tail ---
+
+
+def test_timeline_keeps_the_full_event_and_key_value_tail() -> None:
+    # The whole point: the human prefix is additive — every existing event=/key=value
+    # token a test greps for must still appear verbatim in the rendered line.
+    message = "event=wikify_started source_uri=file:///x.md path=x.md model=ollama:llama3.1"
+    line = TimelineFormatter().format(_record("agentic_kb_builder.wikify.generate", message))
+    assert message in line
+    assert "event=wikify_started" in line
+    assert "model=ollama:llama3.1" in line
+
+
+def test_timeline_leads_with_clock_stage_and_headline() -> None:
+    line = TimelineFormatter().format(
+        _record("agentic_kb_builder.wikify.generate", "event=wikify_started path=x.md")
+    )
+    # HH:MM:SS.mmm clock, an elapsed delta, the WIKIFY stage, and the human headline.
+    import re
+
+    assert re.match(r"^\d{2}:\d{2}:\d{2}\.\d{3}\s+\+", line)
+    assert "WIKIFY" in line
+    assert "summarizing" in line  # the headline for wikify_started
+
+
+def test_timeline_surfaces_level_for_warnings_and_errors() -> None:
+    line = TimelineFormatter().format(
+        _record(
+            "agentic_kb_builder.application.publish_gates",
+            "event=publish_gate_failed gate=x",
+            level=logging.ERROR,
+        )
+    )
+    assert "ERROR" in line
+    assert "event=publish_gate_failed" in line
+
+
+def test_stage_derivation_covers_the_build_pipeline() -> None:
+    assert _stage_for("agentic_kb_builder.connectors.local_fs") == "FETCH"
+    assert _stage_for("agentic_kb_builder.wikify.generate") == "WIKIFY"
+    assert _stage_for("agentic_kb_builder.graphify.write") == "GRAPHIFY"
+    assert _stage_for("agentic_kb_builder.linker.judge") == "JUDGE"
+    assert _stage_for("agentic_kb_builder.linker.run") == "LINKER"
+    assert _stage_for("agentic_kb_builder.indexing.upsert") == "INDEX"
+    assert _stage_for("agentic_kb_builder.application.publish_gates") == "GATE"
+    assert _stage_for("agentic_kb_builder.application.active_version") == "ACTIVATE"
+    assert _stage_for("agentic_kb_builder.application.build_runner") == "BUILD"
+
+
+def test_json_formatter_emits_one_object_with_the_message_preserved() -> None:
+    import json
+
+    line = JsonFormatter().format(
+        _record("agentic_kb_builder.application.build_runner", "event=build_run_started x=1")
+    )
+    payload = json.loads(line)
+    assert payload["stage"] == "BUILD"
+    assert payload["msg"] == "event=build_run_started x=1"
+    assert payload["level"] == "INFO"
+
+
+def test_select_formatter_honors_explicit_format() -> None:
+    assert isinstance(_select_formatter("timeline"), TimelineFormatter)
+    assert isinstance(_select_formatter("json"), JsonFormatter)
+    raw = _select_formatter("raw")
+    assert not isinstance(raw, (TimelineFormatter, JsonFormatter))
+
+
+def test_select_formatter_reads_log_format_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOG_FORMAT", "json")
+    assert isinstance(_select_formatter(None), JsonFormatter)
+
+
+def test_select_formatter_defaults_to_raw_off_a_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    # CI / a piped nightly build is not a TTY -> the original parseable line, so machine
+    # consumers are unaffected by the human default.
+    monkeypatch.delenv("LOG_FORMAT", raising=False)
+    monkeypatch.setattr("sys.stderr.isatty", lambda: False)
+    fmt = _select_formatter(None)
+    assert not isinstance(fmt, (TimelineFormatter, JsonFormatter))
+
+
+def test_configure_logging_accepts_a_format_override(package_logger: logging.Logger) -> None:
+    configure_logging(log_format="timeline")
+    handler = next(h for h in package_logger.handlers if h.name == "agentic_kb_builder.structured")
+    assert isinstance(handler.formatter, TimelineFormatter)
