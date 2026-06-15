@@ -69,9 +69,10 @@ Three containers, in order:
 1. **postgres** — Postgres 16 with a named volume; host port `55432` by default (NOT 5432, so a
    Homebrew Postgres keeps working — override with `POSTGRES_HOST_PORT`).
 2. **kb-builder** — one-shot: applies the Alembic migrations and exits (it owns the schema,
-   ADR-0008). The `build` CLI does now exist (run it locally — see "Running an end-to-end build"
-   below), but the compose container is deliberately migrations-only; wiring the nightly build into
-   compose is a recorded follow-up.
+   ADR-0008). The default `up` keeps this container migrations-only; to come up **already serving a
+   built KB**, add the optional `kb-build` profile (`docker compose --profile build up`), which runs
+   a full no-cloud build and activates a `kb_version`. Wiring the *nightly* pipeline into compose is
+   still a recorded follow-up. Run the `build` CLI locally too — see "Running an end-to-end build".
 3. **mcp-server** — starts only after the migration job completes; serves
    `http://localhost:8000/mcp/` (override with `MCP_HOST_PORT`). It never runs migrations.
 
@@ -83,9 +84,9 @@ Honesty notes, both by design:
   `MCP_ENTRA_AUDIENCE` — identifiers, never secrets). Auth is fail-closed (invariant 6, no
   auth-off switch), so no bearer token verifies until you export a real tenant id and audience.
 
-The compose invariants — exactly three services, kb-builder as the only migration runner, the
-dependency order, asyncpg URLs, no inline credentials — are pinned by
-`services/kb-builder/tests/contract/test_compose_contract.py`.
+The compose invariants — exactly three services on a default `up` (the optional `kb-build` is
+profile-gated), kb-builder as the only migration runner, the dependency order, asyncpg URLs, no
+inline credentials — are pinned by `services/kb-builder/tests/contract/test_compose_contract.py`.
 
 To reach the compose Postgres from the host (psql, tests):
 `postgresql+asyncpg://postgres:postgres@localhost:55432/agentic_kb`.

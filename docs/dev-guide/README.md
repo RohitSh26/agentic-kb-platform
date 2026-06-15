@@ -19,6 +19,12 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
   Groq / OpenAI / Azure OpenAI / Azure Foundry / Claude / any OpenAI-compatible endpoint), run a
   local and a production build, export to Obsidian, and a full **database query reference** for
   checks/analysis (build health, the served set, ghost-edge + cache/cost checks).
+- [05 — Running the MCP server (fresh separate machine)](05-running-the-mcp-server.md): start the
+  **Context Broker** against an already-built KB — without Docker (`uv run python -m
+  agentic_mcp_server`) and with Docker/compose, the `DATABASE_URL` / `MCP_*` env reference, the
+  fail-closed Entra auth setup (and the proposed local-dev alternative, ADR-0016), the `/health`
+  probe (200 vs 503), and a worked `create_pack → open_evidence → graph.get_neighbors →
+  verify_answer` walk through the tools to **use** the KB.
 
-Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0015), build units
+Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0016), build units
 in `docs/pr-briefs/` (through PR-33), cross-service agreements in `docs/contracts/`.

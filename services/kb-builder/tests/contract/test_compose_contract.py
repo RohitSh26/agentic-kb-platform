@@ -16,7 +16,13 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[4]
 COMPOSE_PATH = REPO_ROOT / "docker-compose.yml"
 
+# The three always-on containers; `kb-build` is an OPTIONAL profile-gated extra
+# (it only starts with `docker compose --profile build up`), so a default `up`
+# still runs exactly these three.
 EXPECTED_SERVICES = {"postgres", "kb-builder", "mcp-server"}
+# A default (profile-less) `up` must never pull in more than the three; only
+# profile-gated services may be added beyond them.
+PROFILE_GATED_SERVICES = {"kb-build"}
 # resources excluded from V1 (CLAUDE.md) that a compose service could smuggle in
 EXCLUDED_IMAGE_MARKERS = ("redis", "azurite", "neo4j", "rabbitmq", "eventhub", "servicebus")
 
@@ -37,13 +43,32 @@ def _services() -> dict[str, dict[str, object]]:
     return services
 
 
-def test_compose_runs_exactly_the_three_sanctioned_containers() -> None:
+def test_default_up_runs_exactly_the_three_sanctioned_containers() -> None:
     services = _services()
-    assert set(services) == EXPECTED_SERVICES, "compose service set drifted"
+    # every service is either one of the always-on three or an explicitly
+    # profile-gated extra — nothing starts on a default `up` that we did not name.
+    profiled = {name for name, svc in services.items() if svc.get("profiles")}
+    assert set(services) - profiled == EXPECTED_SERVICES, "default compose service set drifted"
+    assert profiled == PROFILE_GATED_SERVICES, "unexpected profile-gated service"
     for name, service in services.items():
         image = str(service.get("image", ""))
         for marker in EXCLUDED_IMAGE_MARKERS:
             assert marker not in image.lower(), f"{name}: V1-excluded resource {marker!r}"
+
+
+def test_kb_build_is_an_optional_profile_gated_build_runner() -> None:
+    kb_build = _services()["kb-build"]
+    assert kb_build.get("profiles") == ["build"], "kb-build must be gated behind the build profile"
+    assert kb_build["build"] == "./services/kb-builder", "kb-build reuses the kb-builder image"
+    assert "image" not in kb_build
+    command = str(kb_build.get("command"))
+    assert "agentic_kb_builder.build" in command, "kb-build must run the build CLI"
+    # never migrates (kb-builder owns that) and never re-runs as a daemon
+    assert "alembic" not in command.lower()
+    assert kb_build.get("restart") == "no", "the build job is one-shot"
+    depends = kb_build["depends_on"]
+    assert isinstance(depends, dict)
+    assert depends["kb-builder"] == {"condition": "service_completed_successfully"}
 
 
 def test_postgres_is_the_only_image_and_the_services_build_from_their_dirs() -> None:
