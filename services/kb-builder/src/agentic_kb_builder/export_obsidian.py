@@ -8,13 +8,14 @@ Usage (from services/kb-builder, with a migrated DATABASE_URL set):
 
     uv run python -m agentic_kb_builder.export_obsidian --out ./vault [--kb-version X]
 
-Without `--kb-version` the exporter targets the active kb_version
-(application.active_version.get_active_kb_version). Artifacts and edges are scoped
-to that kb_version by label equality. NOTE: ADR-0013 (interval-membership of a
-kb_version) is landing separately; once it does, the `kb_version == label` filters
-below can switch to the interval-membership predicate without changing the output
-shape. Output is deterministic (stable ordering + stable slugs), so re-running on
-the same KB yields byte-identical files; the out dir is cleaned first (idempotent).
+Without `--kb-version` the exporter targets the active kb_version. Artifacts and
+edges are scoped by ADR-0013 interval membership — a row belongs to a version iff
+`valid_from_seq <= S < invalidated_at_seq` where S is that run's `build_seq` — NOT
+by label equality. (Label equality is wrong post-ADR-0013: an unchanged source's
+artifacts keep the label of the build that first wrote them, while later builds
+advance the active label, so a label filter silently drops the carried-over nodes
+and edges.) Output is deterministic (stable ordering + stable slugs), so re-running
+on the same KB yields byte-identical files; the out dir is cleaned first (idempotent).
 """
 
 import argparse
@@ -28,11 +29,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agentic_kb_builder.application.active_version import get_active_kb_version
 from agentic_kb_builder.infrastructure.postgres.models import (
+    KbBuildRun,
     KnowledgeArtifact,
     KnowledgeEdge,
     SourceItem,
@@ -225,12 +226,37 @@ def _render_index(result: _ExportResult, kb_version: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-async def _load_artifacts(session: AsyncSession, kb_version: str) -> list[KnowledgeArtifact]:
-    # Scope by kb_version label equality (see module docstring re: ADR-0013).
+async def _resolve_target(session: AsyncSession, kb_version: str | None) -> tuple[str, int] | None:
+    """Resolve the export target to (kb_version label, build_seq cutoff S).
+
+    Default (kb_version=None) is the active run; an explicit label selects that
+    historical run. Returns None when no such run exists.
+    """
+    stmt = select(KbBuildRun.kb_version, KbBuildRun.build_seq)
+    stmt = stmt.where(
+        KbBuildRun.status == "active" if kb_version is None else KbBuildRun.kb_version == kb_version
+    )
+    row = (await session.execute(stmt)).first()
+    if row is None:
+        return None
+    return str(row[0]), int(row[1])
+
+
+def _is_member(
+    model: type[KnowledgeArtifact] | type[KnowledgeEdge], build_seq: int
+) -> ColumnElement[bool]:
+    """ADR-0013 interval-membership predicate: live at cutoff S=build_seq."""
+    return (model.valid_from_seq <= build_seq) & (
+        model.invalidated_at_seq.is_(None) | (model.invalidated_at_seq > build_seq)
+    )
+
+
+async def _load_artifacts(session: AsyncSession, build_seq: int) -> list[KnowledgeArtifact]:
+    # Scope by ADR-0013 interval membership at cutoff S=build_seq (see module docstring).
     # Stable order: artifact_type then title then id, so re-runs are identical.
     result = await session.execute(
         select(KnowledgeArtifact)
-        .where(KnowledgeArtifact.kb_version == kb_version)
+        .where(_is_member(KnowledgeArtifact, build_seq))
         .order_by(
             KnowledgeArtifact.artifact_type,
             KnowledgeArtifact.title,
@@ -253,10 +279,10 @@ async def _load_source_uris(
     return {str(sid): uri for sid, uri in result.tuples()}
 
 
-async def _load_edges(session: AsyncSession, kb_version: str) -> list[KnowledgeEdge]:
+async def _load_edges(session: AsyncSession, build_seq: int) -> list[KnowledgeEdge]:
     result = await session.execute(
         select(KnowledgeEdge)
-        .where(KnowledgeEdge.kb_version == kb_version)
+        .where(_is_member(KnowledgeEdge, build_seq))
         .order_by(
             KnowledgeEdge.from_artifact_id,
             KnowledgeEdge.to_artifact_id,
@@ -285,10 +311,17 @@ def _clean_out_dir(out: Path) -> None:
             child.rmdir()
 
 
-async def export_obsidian(session: AsyncSession, *, out: Path, kb_version: str) -> _ExportResult:
-    """Write the Obsidian vault for `kb_version` into `out` and return a summary."""
-    logger.info("event=obsidian_export_started kb_version=%s out=%s", kb_version, out)
-    artifacts = await _load_artifacts(session, kb_version)
+async def export_obsidian(
+    session: AsyncSession, *, out: Path, kb_version: str, build_seq: int
+) -> _ExportResult:
+    """Write the Obsidian vault for `kb_version` (members at cutoff S=build_seq)."""
+    logger.info(
+        "event=obsidian_export_started kb_version=%s build_seq=%d out=%s",
+        kb_version,
+        build_seq,
+        out,
+    )
+    artifacts = await _load_artifacts(session, build_seq)
     notes = _assign_slugs(artifacts)
 
     source_ids = [a.source_id for a in artifacts]
@@ -297,7 +330,7 @@ async def export_obsidian(session: AsyncSession, *, out: Path, kb_version: str) 
         note = notes[str(artifact.artifact_id)]
         note.source_uri = source_uris.get(str(artifact.source_id))
 
-    edges = await _load_edges(session, kb_version)
+    edges = await _load_edges(session, build_seq)
     outgoing: dict[str, list[tuple[KnowledgeEdge, _Note | None]]] = defaultdict(list)
     incoming: dict[str, list[tuple[KnowledgeEdge, _Note | None]]] = defaultdict(list)
     for edge in edges:
@@ -358,12 +391,16 @@ async def _main(args: argparse.Namespace) -> int:
     factory = create_session_factory(engine)
     try:
         async with factory() as session:
-            kb_version = args.kb_version or await get_active_kb_version(session)
-            if kb_version is None:
-                logger.error("event=obsidian_export_no_active_version")
-                print("no active kb_version; pass --kb-version to export a specific one")
+            target = await _resolve_target(session, args.kb_version)
+            if target is None:
+                logger.error("event=obsidian_export_no_target kb_version=%s", args.kb_version)
+                missing = args.kb_version or "active"
+                print(f"no {missing} kb_version; pass --kb-version to export a specific one")
                 return 1
-            result = await export_obsidian(session, out=Path(args.out), kb_version=kb_version)
+            kb_version, build_seq = target
+            result = await export_obsidian(
+                session, out=Path(args.out), kb_version=kb_version, build_seq=build_seq
+            )
     finally:
         await engine.dispose()
     print(f"kb_version : {kb_version}")

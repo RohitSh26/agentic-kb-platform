@@ -20,8 +20,9 @@ from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from agentic_kb_builder.export_obsidian import export_obsidian
+from agentic_kb_builder.export_obsidian import _resolve_target, export_obsidian
 from agentic_kb_builder.infrastructure.postgres.models import (
+    KbBuildRun,
     KnowledgeArtifact,
     KnowledgeEdge,
     SourceItem,
@@ -176,7 +177,7 @@ async def test_export_writes_one_note_per_artifact_in_type_folders(
 ) -> None:
     await _seed(session)
     out = tmp_path / "vault"
-    result = await export_obsidian(session, out=out, kb_version=KB_VERSION)
+    result = await export_obsidian(session, out=out, kb_version=KB_VERSION, build_seq=0)
 
     assert result.notes_written == 3
     code_note = out / "code" / "src-service-py.md"
@@ -195,7 +196,7 @@ async def test_export_writes_one_note_per_artifact_in_type_folders(
 async def test_frontmatter_fields_present(session: AsyncSession, tmp_path: Path) -> None:
     await _seed(session)
     out = tmp_path / "vault"
-    await export_obsidian(session, out=out, kb_version=KB_VERSION)
+    await export_obsidian(session, out=out, kb_version=KB_VERSION, build_seq=0)
 
     code = (out / "code" / "src-service-py.md").read_text(encoding="utf-8")
     assert code.startswith("---\n")
@@ -221,7 +222,7 @@ async def test_links_section_wikilinks_resolve_to_existing_notes(
 ) -> None:
     await _seed(session)
     out = tmp_path / "vault"
-    await export_obsidian(session, out=out, kb_version=KB_VERSION)
+    await export_obsidian(session, out=out, kb_version=KB_VERSION, build_seq=0)
 
     # The code note receives two incoming edges.
     code = (out / "code" / "src-service-py.md").read_text(encoding="utf-8")
@@ -247,13 +248,13 @@ async def test_export_is_deterministic_and_idempotent(
 ) -> None:
     await _seed(session)
     out = tmp_path / "vault"
-    await export_obsidian(session, out=out, kb_version=KB_VERSION)
+    await export_obsidian(session, out=out, kb_version=KB_VERSION, build_seq=0)
     first = {
         p.relative_to(out).as_posix(): p.read_text(encoding="utf-8")
         for p in sorted(out.rglob("*.md"))
     }
     # Re-run over the same KB into the same dir: byte-identical, no leftovers.
-    await export_obsidian(session, out=out, kb_version=KB_VERSION)
+    await export_obsidian(session, out=out, kb_version=KB_VERSION, build_seq=0)
     second = {
         p.relative_to(out).as_posix(): p.read_text(encoding="utf-8")
         for p in sorted(out.rglob("*.md"))
@@ -262,9 +263,33 @@ async def test_export_is_deterministic_and_idempotent(
 
 
 @requires_db
-async def test_unknown_kb_version_exports_nothing(session: AsyncSession, tmp_path: Path) -> None:
-    await _seed(session)
+async def test_resolve_target_active_and_unknown(session: AsyncSession) -> None:
+    session.add(KbBuildRun(kb_version=KB_VERSION, build_seq=5, status="active"))
+    await session.commit()
+    # Default (None) resolves to the active run; an unknown label resolves to None.
+    assert await _resolve_target(session, None) == (KB_VERSION, 5)
+    assert await _resolve_target(session, "does-not-exist") is None
+
+
+@requires_db
+async def test_interval_membership_excludes_superseded_rows(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    # A row invalidated at seq=2 is a member at S=1 but NOT at S=5 (ADR-0013). The
+    # exporter must scope by the interval, not by a label, so a carried-over/retired
+    # artifact appears in exactly the versions that own it.
+    source = await _add_source(session, source_type="github_doc", source_uri="gh://repo/x.md")
+    retired = await _add_artifact(
+        session, source=source, artifact_type="concept", title="Retired Concept", body_text="x"
+    )
+    retired.invalidated_at_seq = 2  # left the KB at seq 2 (valid_from_seq defaults to 0)
+    await session.commit()
+
     out = tmp_path / "vault"
-    result = await export_obsidian(session, out=out, kb_version="does-not-exist")
-    assert result.notes_written == 0
-    assert (out / "index.md").is_file()  # still writes an (empty) MoC
+    at_future = await export_obsidian(session, out=out, kb_version=KB_VERSION, build_seq=5)
+    assert at_future.notes_written == 0  # excluded at S=5
+    assert not (out / "concepts" / "retired-concept.md").exists()
+
+    at_past = await export_obsidian(session, out=out, kb_version=KB_VERSION, build_seq=1)
+    assert at_past.notes_written == 1  # included at S=1
+    assert (out / "concepts" / "retired-concept.md").is_file()
