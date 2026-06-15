@@ -25,13 +25,19 @@ def test_server_config_has_no_secret_shaped_fields() -> None:
     names = {field.name for field in fields(ServerConfig)}
     # agent_allowances_json holds subjects + integer allowances; client_registry_json
     # holds client_ids + scopes + verification policy (secrets referenced by env NAME
-    # only via 'secret_env'): identifiers only, never secret values.
+    # only via 'secret_env'). The local_dev_* fields (ADR-0016) hold a flag + a fixed
+    # dev subject/teams/client_id + the bind host: identifiers only, never secret values.
     assert names == {
         "database_url",
         "entra_tenant_id",
         "entra_audience",
         "agent_allowances_json",
         "client_registry_json",
+        "local_dev_auth",
+        "local_dev_subject",
+        "local_dev_teams",
+        "local_dev_client_id",
+        "http_host",
     }
     for name in names:
         assert not any(token in name for token in _FORBIDDEN_FIELD_TOKENS)
