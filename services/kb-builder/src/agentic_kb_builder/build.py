@@ -48,7 +48,7 @@ from agentic_kb_builder.infrastructure.azure_search.search_client import SearchC
 from agentic_kb_builder.infrastructure.local_search import LocalFileSearchClient
 from agentic_kb_builder.infrastructure.postgres.models import KbBuildRun
 from agentic_kb_builder.infrastructure.postgres.session import create_engine, create_session_factory
-from agentic_kb_builder.structured_logging import get_logger
+from agentic_kb_builder.structured_logging import configure_logging, get_logger
 from agentic_kb_builder.wikify.generate import WikifyGenerator
 
 logger = get_logger(__name__)
@@ -186,10 +186,20 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="override the symbol-count-delta publish gate for an intentional large change "
         "(recorded in kb_build_run and logged); no other gate is overridable",
     )
+    parser.add_argument(
+        "--log-format",
+        choices=("timeline", "raw", "json"),
+        default=None,
+        help="terminal log rendering: 'timeline' (human, real-time; the TTY default), 'raw' "
+        "(the original machine line; the non-TTY default), or 'json'. Overrides $LOG_FORMAT.",
+    )
     return parser.parse_args(argv)
 
 
 async def _main(args: argparse.Namespace) -> int:
+    # Attach the structured handler before any build log fires so the watcher sees the
+    # timeline from line one (rule python.md: structured logging on every build path).
+    configure_logging(log_format=args.log_format)
     index_path = Path(
         args.index_path or os.environ.get("KB_LOCAL_INDEX_PATH") or ".kb-local-search-index.json"
     )

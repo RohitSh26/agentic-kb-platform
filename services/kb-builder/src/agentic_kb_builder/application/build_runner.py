@@ -155,6 +155,16 @@ class BuildRunner:
         row is committed up front so the audit record survives a failed build;
         per-source work is committed only when the whole build succeeds."""
         build_id = await self._start_run()
+        # Connector plan up front so a watcher sees the build's shape before the first
+        # fetch (count + the source types in play). Additive; cheap — just the configured
+        # connectors, not a full source listing.
+        connector_types = ",".join(sorted({str(c.source_type) for c in connectors})) or "none"
+        logger.info(
+            "event=build_connectors_planned build_id=%s connectors=%d source_types=%s",
+            build_id,
+            len(connectors),
+            connector_types,
+        )
         counters = _Counters()
         try:
             seen_source_ids, changed_source_ids = await self._process_sources(connectors, counters)
@@ -250,6 +260,16 @@ class BuildRunner:
                     )
                     continue
                 counters.sources_changed += 1
+                # Per-source headline so a human always knows what is being processed
+                # (connector type + uri + the routing decision). Additive; the existing
+                # per-step events below carry the same source_uri for grep continuity.
+                logger.info(
+                    "event=build_source_started connector=%s source_uri=%s "
+                    "source_version=%s decision=changed",
+                    fetched.source.source_type,
+                    ref.source_uri,
+                    fetched.source.source_version,
+                )
                 changed_id = await self._process_changed_source(
                     counters, fetched, code_key_map, pending_edges
                 )
@@ -514,6 +534,15 @@ class BuildRunner:
             model_params_hash=self._wikifier.model_params_hash,
             output_schema_version=OUTPUT_SCHEMA_VERSION,
         )
+        # Per-file headline as this source ENTERS wikify (path + the model that will
+        # generate on a miss). Additive; fires before the cache lookup so the reader sees
+        # the file even on a hit (where no model call follows).
+        logger.info(
+            "event=build_file_wikify source_uri=%s path=%s model=%s",
+            fetched.source.source_uri,
+            fetched.source.path or "",
+            self._wikifier.model_name,
+        )
         hit = await self._generation_gate.lookup(cache_key)
         if hit is not None:
             # Every known wikifier emits >= 1 draft, so an empty mapping on a hit
@@ -523,6 +552,12 @@ class BuildRunner:
                 empty_event="wikify_cache_hit_empty_mapping",
                 source_uri=fetched.source.source_uri,
             )
+        logger.info(
+            "event=wikify_started source_uri=%s path=%s model=%s",
+            fetched.source.source_uri,
+            fetched.source.path or "",
+            self._wikifier.model_name,
+        )
         drafts = await self._wikifier.wikify(fetched)
         counters.llm_calls += 1
         # write_wikify_artifacts flushes BEFORE the cache row is recorded (same
@@ -568,6 +603,15 @@ class BuildRunner:
             file_content_hash=fetched.content_hash,
             graphify_version=GRAPHIFY_VERSION,
             parser_config_version=PARSER_CONFIG_VERSION,
+        )
+        # Per-file headline as this code file ENTERS graphify (deterministic AST
+        # extraction, zero-LLM — ADR-0018). Additive; fires before the cache lookup so
+        # the reader sees the file even on a hit.
+        logger.info(
+            "event=build_file_graphify source_uri=%s path=%s repo=%s",
+            ref.source_uri,
+            ref.path or "",
+            ref.repo or "",
         )
         if await self._generation_gate.lookup(cache_key) is not None:
             # Every file graph yields at least its code_file artifact, so an empty

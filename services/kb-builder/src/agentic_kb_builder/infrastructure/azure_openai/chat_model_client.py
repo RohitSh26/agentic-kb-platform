@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from collections.abc import Sequence
 from typing import cast
 
@@ -268,7 +269,7 @@ class ChatModelClient:
         # retry a few times before failing the whole generation.
         last_error: ValueError | None = None
         for attempt in range(_MAX_PARSE_ATTEMPTS):
-            raw = await self._complete(messages)
+            raw = await self._complete(messages, purpose="wikify")
             try:
                 return _parse_generation(raw)
             except ValueError as error:
@@ -291,7 +292,7 @@ class ChatModelClient:
         ]
         last_error: ValueError | None = None
         for attempt in range(_MAX_PARSE_ATTEMPTS):
-            raw = await self._complete(messages)
+            raw = await self._complete(messages, purpose="judge")
             try:
                 judgment = _parse_judgment(raw)
                 # Quote-guard at the call boundary (invariant 7): a non-verbatim
@@ -317,23 +318,58 @@ class ChatModelClient:
         assert last_error is not None
         raise last_error
 
-    async def _complete(self, messages: list[ChatCompletionMessageParam]) -> str:
+    async def _complete(
+        self, messages: list[ChatCompletionMessageParam], *, purpose: str = "wikify"
+    ) -> str:
+        started = time.monotonic()
         try:
-            response = await self._client.chat.completions.create(
-                model=self._model,
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-                response_format={"type": "json_object"},
-                messages=messages,
+            try:
+                response = await self._client.chat.completions.create(
+                    model=self._model,
+                    temperature=self._temperature,
+                    max_tokens=self._max_tokens,
+                    response_format={"type": "json_object"},
+                    messages=messages,
+                )
+            except BadRequestError:
+                # some local/older endpoints reject response_format; the parser tolerates
+                # fenced/prose output, so retry without forcing JSON mode
+                logger.warning("event=model_json_mode_unsupported model=%s", self._model)
+                response = await self._client.chat.completions.create(
+                    model=self._model,
+                    temperature=self._temperature,
+                    max_tokens=self._max_tokens,
+                    messages=messages,
+                )
+        except Exception as error:
+            latency_ms = (time.monotonic() - started) * 1000
+            # No silent failures on the model path: record the failed call (provider:model
+            # + purpose + latency) before the retry loop / caller sees the exception.
+            logger.warning(
+                "event=model_call_failed model=%s purpose=%s latency_ms=%.0f error=%s",
+                self.model_name,
+                purpose,
+                latency_ms,
+                f"{type(error).__name__}: {error}",
             )
-        except BadRequestError:
-            # some local/older endpoints reject response_format; the parser tolerates
-            # fenced/prose output, so retry without forcing JSON mode
-            logger.warning("event=model_json_mode_unsupported model=%s", self._model)
-            response = await self._client.chat.completions.create(
-                model=self._model,
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-                messages=messages,
-            )
+            raise
+        latency_ms = (time.monotonic() - started) * 1000
+        # `usage` is optional on the OpenAI-compatible response (some local/older
+        # endpoints omit it); read it defensively and log -1 when absent so the call is
+        # still visible. The token counts are emitted as additive fields on every model
+        # call so a human can watch spend accrue line by line.
+        usage = getattr(response, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        total_tokens = getattr(usage, "total_tokens", None)
+        logger.info(
+            "event=model_call model=%s purpose=%s prompt_tokens=%s completion_tokens=%s "
+            "total_tokens=%s latency_ms=%.0f",
+            self.model_name,
+            purpose,
+            prompt_tokens if prompt_tokens is not None else -1,
+            completion_tokens if completion_tokens is not None else -1,
+            total_tokens if total_tokens is not None else -1,
+            latency_ms,
+        )
         return response.choices[0].message.content or ""
