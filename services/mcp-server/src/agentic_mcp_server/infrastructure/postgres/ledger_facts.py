@@ -52,7 +52,7 @@ _SYMBOL_IN_FILE_QUERY = text(
 # two endpoints' ACLs (acl-source-visibility.md), computed in the caller.
 _FILE_IMPORTS_MODULE_QUERY = text(
     f"""
-    SELECT e.edge_id, e.trust_class,
+    SELECT e.edge_id, e.trust_class, e.from_artifact_id,
            ffile.acl_teams AS from_acl, tmod.acl_teams AS to_acl
     FROM {KNOWLEDGE_EDGE_TABLE} e
     JOIN {KNOWLEDGE_ARTIFACT_TABLE} ffile ON ffile.artifact_id = e.from_artifact_id
@@ -77,7 +77,7 @@ _FILE_IMPORTS_MODULE_QUERY = text(
 # endpoints are membership-filtered; unit ACL = intersection of endpoint ACLs.
 _EDGE_BETWEEN_QUERY = text(
     f"""
-    SELECT e.edge_id, e.trust_class,
+    SELECT e.edge_id, e.trust_class, e.from_artifact_id, e.to_artifact_id,
            af.acl_teams AS from_acl, at2.acl_teams AS to_acl
     FROM {KNOWLEDGE_EDGE_TABLE} e
     JOIN {KNOWLEDGE_ARTIFACT_TABLE} af ON af.artifact_id = e.from_artifact_id
@@ -116,6 +116,9 @@ class EdgeFactRow:
 
     edge_id: uuid.UUID
     trust_class: str
+    # The edge's ``from`` artifact — the cited unit for a file_imports_module fact
+    # (the code_file). Lets L2 require the resolving unit to be cited evidence.
+    from_artifact_id: uuid.UUID
     # Intersection of the two endpoints' ACLs (acl-source-visibility.md): empty
     # = org-public; non-empty = requester team set must intersect.
     acl_teams: tuple[str, ...]
@@ -173,6 +176,7 @@ async def fetch_file_imports_module_units(
         EdgeFactRow(
             edge_id=row.edge_id,
             trust_class=row.trust_class,
+            from_artifact_id=row.from_artifact_id,
             acl_teams=_acl_intersection(row.from_acl, row.to_acl),
         )
         for row in result
@@ -200,6 +204,7 @@ async def fetch_edge_between_units(
         EdgeFactRow(
             edge_id=row.edge_id,
             trust_class=row.trust_class,
+            from_artifact_id=row.from_artifact_id,
             acl_teams=_acl_intersection(row.from_acl, row.to_acl),
         )
         for row in result

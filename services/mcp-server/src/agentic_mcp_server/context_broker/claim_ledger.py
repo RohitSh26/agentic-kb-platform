@@ -66,30 +66,44 @@ async def adjudicate_typed_fact(
     *,
     build_seq: int,
     requester: Requester,
+    cited_ids: frozenset[uuid.UUID],
 ) -> bool:
-    """True iff a deterministic, visible ledger unit supports the typed assertion.
+    """True iff a deterministic ledger unit the claim CITED supports the assertion.
 
     Each assertion kind resolves the matching fact unit family; membership is
-    enforced in SQL and ACL visibility is applied here against the requester's
-    teams. No LLM, no inference — a missing or misread unit ⇒ False.
+    enforced in SQL and ACL visibility against the requester's teams here. The
+    resolving unit must also be in ``cited_ids`` — the claim's own cited evidence
+    that L0 accepts (in-version, ACL-visible, AND retrieved by the requester).
+    This keeps L2 from becoming an oracle over units the requester never retrieved
+    (invariant 6): a true/false verdict can only ever rest on the claim's own
+    cited, retrieved evidence. No LLM, no inference — a missing, invisible,
+    uncited, or misread unit ⇒ False.
     """
     if isinstance(assertion, SymbolInFileAssertion):
         rows = await fetch_symbol_in_file_units(
             session, symbol=assertion.symbol, file=assertion.file, build_seq=build_seq
         )
-        return bool(_visible_symbol_units(rows, requester))
+        return any(row.artifact_id in cited_ids for row in _visible_symbol_units(rows, requester))
 
     if isinstance(assertion, FileImportsModuleAssertion):
         rows = await fetch_file_imports_module_units(
             session, file=assertion.file, module=assertion.module, build_seq=build_seq
         )
-        return bool(_claim_supporting_edge_units(rows, requester))
+        # The cited unit is the code_file (the edge's `from` endpoint).
+        return any(
+            row.from_artifact_id in cited_ids
+            for row in _claim_supporting_edge_units(rows, requester)
+        )
 
     # EdgeBetweenAssertion: a malformed endpoint id can match no edge.
     try:
         from_id = uuid.UUID(assertion.from_id)
         to_id = uuid.UUID(assertion.to_id)
     except ValueError:
+        return False
+    # Both endpoints must be cited, retrieved evidence — otherwise the requester
+    # could probe whether an edge exists between two arbitrary ids they never saw.
+    if from_id not in cited_ids or to_id not in cited_ids:
         return False
     edge_rows = await fetch_edge_between_units(
         session,

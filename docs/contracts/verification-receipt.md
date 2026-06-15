@@ -36,8 +36,9 @@ mandatory in phase 1; L1–L3 added in phase 4) and returns a receipt. It perfor
 }
 ```
 
-Reject a request with no `claims`, or any claim with no `evidence_ids` (that claim fails L1 by
-definition; in phase 1 it fails L0 provenance because there is nothing to check).
+Reject a request with no `claims`, or any claim with no `evidence_ids`, at the schema boundary
+(the request never reaches L0/L1 — an uncited claim is a malformed request, not a verification
+failure).
 
 `quote` and `assertion` are optional and additive: a phase-1 caller that omits them keeps the exact
 behaviour it had. `verifier_levels` defaults to `["L0"]`; higher levels run only when requested (and

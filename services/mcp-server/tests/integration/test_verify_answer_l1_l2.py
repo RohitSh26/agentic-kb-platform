@@ -445,7 +445,9 @@ async def test_l2_edge_between_matches_either_direction(
                 ClaimInput(
                     claim_id="c1",
                     text="login calls hash_pw",
-                    evidence_ids=[str(caller)],
+                    # both endpoints must be cited, retrieved evidence (L2 only
+                    # adjudicates over the claim's own cited units, not arbitrary ids)
+                    evidence_ids=[str(caller), str(callee)],
                     assertion=EdgeBetweenAssertion(
                         kind="edge_between",
                         edge_type="calls",
@@ -460,6 +462,89 @@ async def test_l2_edge_between_matches_either_direction(
     )
 
     assert receipt.claim_results[0].checks.L2_typed_fact is True
+
+
+# ---------------------------------------------------------------------------
+# L2 is not an oracle: it adjudicates ONLY over the claim's cited, retrieved units
+# ---------------------------------------------------------------------------
+
+
+async def test_l2_assertion_over_unretrieved_unit_fails_closed(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The ledger HAS a matching, ACL-visible, in-version unit (login in auth.py),
+    # but the requester never retrieved it. L2 must NOT confirm the typed fact — that
+    # would be an oracle over content the requester was never served (invariant 6).
+    async with factory() as session:
+        evidence = await _symbol_artifact(session, name="login", path="auth.py")
+    # deliberately NO _record_retrieval for this requester.
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    receipt = await verify_answer(
+        deps,
+        VerifyAnswerRequest(
+            answer_id="a",
+            claims=[
+                ClaimInput(
+                    claim_id="c1",
+                    text="login is in auth.py",
+                    evidence_ids=[str(evidence)],
+                    assertion=SymbolInFileAssertion(
+                        kind="symbol_in_file", symbol="login", file="auth.py"
+                    ),
+                )
+            ],
+            verifier_levels=["L0", "L2"],
+        ),
+        REQUESTER,
+    )
+
+    # The fact is true in the ledger, but unretrieved ⇒ L2 fails closed (no leak).
+    assert receipt.claim_results[0].checks.L2_typed_fact is False
+
+
+async def test_l2_edge_between_uncited_endpoint_fails(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # An edge exists between two retrieved symbols, but the claim cites only one of
+    # them. The requester must not be able to probe whether an edge exists to an
+    # endpoint they did not cite — both endpoints must be cited, retrieved evidence.
+    async with factory() as session:
+        caller = await _symbol_artifact(session, name="login", path="auth.py")
+        callee = await _symbol_artifact(session, name="hash_pw", path="crypto.py")
+        await insert_edge(
+            session,
+            from_artifact_id=caller,
+            to_artifact_id=callee,
+            edge_type="calls",
+            trust_class="EXTRACTED",
+        )
+    await _record_retrieval(factory, [caller, callee])
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    receipt = await verify_answer(
+        deps,
+        VerifyAnswerRequest(
+            answer_id="a",
+            claims=[
+                ClaimInput(
+                    claim_id="c1",
+                    text="login calls hash_pw",
+                    evidence_ids=[str(caller)],  # callee deliberately NOT cited
+                    assertion=EdgeBetweenAssertion(
+                        kind="edge_between",
+                        edge_type="calls",
+                        from_id=str(caller),
+                        to_id=str(callee),
+                    ),
+                )
+            ],
+            verifier_levels=["L0", "L2"],
+        ),
+        REQUESTER,
+    )
+
+    assert receipt.claim_results[0].checks.L2_typed_fact is False
 
 
 async def test_l2_edge_between_inferred_trust_does_not_support(

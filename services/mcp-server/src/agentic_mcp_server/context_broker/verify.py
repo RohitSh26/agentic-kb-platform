@@ -237,6 +237,17 @@ def _l1_coverage(
     return (cited and quote_ok), reasons
 
 
+def _evidence_uuids(claim: ClaimInput) -> list[uuid.UUID]:
+    """The claim's cited evidence ids that parse as UUIDs (bad ids drop out)."""
+    out: list[uuid.UUID] = []
+    for raw in claim.evidence_ids:
+        try:
+            out.append(uuid.UUID(raw))
+        except ValueError:
+            continue
+    return out
+
+
 async def verify_answer(
     deps: BrokerDeps, request: VerifyAnswerRequest, requester: Requester
 ) -> VerificationReceipt:
@@ -284,6 +295,16 @@ async def verify_answer(
         exists_anywhere = await fetch_existing_anywhere(session, unique_ids)
         retrieved = await fetch_subject_retrieved_ids(session, requester.subject)
 
+        # L0's "resolvable" set: cited ids that are in the active version,
+        # ACL-visible, AND retrieved by this requester. L2 may adjudicate a claim's
+        # assertion ONLY against this claim's own resolvable cited evidence — never
+        # a unit the requester didn't retrieve (no verifier oracle, invariant 6).
+        resolvable_ids = frozenset(
+            uid
+            for uid, row in in_version.items()
+            if uid in retrieved
+            and (not row.acl_teams or requester.teams.intersection(row.acl_teams))
+        )
         # L2 adjudicates each claim's typed assertion against the ledger in the
         # same session. Only over the active version (L0 already fails a pinned
         # non-active citation; the ledger reads the served build_seq).
@@ -291,11 +312,15 @@ async def verify_answer(
         if run_l2 and is_active:
             for claim in request.claims:
                 if claim.assertion is not None:
+                    cited_resolvable = frozenset(
+                        uid for uid in _evidence_uuids(claim) if uid in resolvable_ids
+                    )
                     l2_verdicts[claim.claim_id] = await adjudicate_typed_fact(
                         session,
                         claim.assertion,
                         build_seq=active.build_seq,
                         requester=requester,
+                        cited_ids=cited_resolvable,
                     )
 
     # ACL visibility reuses the same authorization policy as retrieval: an
