@@ -1,0 +1,37 @@
+id: run-budget-escalation
+task_type: retrieval_recall
+task: "embedding pipeline change escalation budget"
+approved_context_plan: "trace the embedding pipeline change and its review escalation"
+# A deliberately small run budget: create_pack consumes most of it on the initial
+# pack, leaving little run-remaining. The impl-agent's follow-up is within its OWN
+# per-agent allowance (1st of 2 requests, 2000 <= 4000 tokens) so it is NOT a
+# per-agent denial — but its max_tokens exceeds what the RUN has left, so the
+# broker escalates: needs_human_approval (F3). Dedupe-before-budget means the
+# question must be genuinely new, so it cites a distinct keyword.
+budget_tokens: 30
+fixtures:
+  artifacts:
+    - key: embedding_pipeline
+      title: "Embedding pipeline change"
+      body_text: "The embedding pipeline re-embeds only changed chunks on rebuild."
+      authority_score: 0.9
+    - key: review_escalation
+      title: "Review escalation policy"
+      body_text: "A pipeline change over the size threshold escalates to human review."
+      authority_score: 0.85
+  search_seeds:
+    - keyword: embedding
+      hits: [embedding_pipeline]
+    - keyword: escalation
+      hits: [review_escalation]
+script:
+  # within the per-agent allowance, but max_tokens (2000) > the run's remaining
+  # budget ⇒ needs_human_approval (per-run gate), a contractual broker outcome.
+  - tool: context.request_more
+    agent: impl-agent
+    question: "what is the review escalation policy for a pipeline change"
+    why_needed: "deciding whether this change needs human review"
+    decision_needed: "whether to escalate the embedding change to human review"
+    max_tokens: 2000
+expected:
+  docs: [embedding_pipeline]

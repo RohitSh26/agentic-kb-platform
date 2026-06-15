@@ -1,8 +1,12 @@
 """Registry seeding for eval cases.
 
-Raw-SQL seed helpers against an externally migrated TEST_DATABASE_URL —
-deliberately duplicated from mcp-server's test support per ADR-0008 ("duplicate
-small things"; another project's tests/ cannot be imported). Evals never runs
+Raw-SQL seed helpers against an externally migrated TEST_DATABASE_URL. evals is
+a dev-only harness that intentionally depends on the ``agentic_mcp_server``
+package (a dev-only path dependency, see pyproject.toml + docs/contracts/evals-
+report.md "Boundary") so it can drive the real broker in-process. It does NOT,
+however, import mcp-server's ``tests/`` support modules — those are not part of
+the published package — so these raw-SQL seed helpers are duplicated from that
+test support per ADR-0008 ("duplicate small things"). Evals never runs
 migrations: kb-builder owns the schema (make migrate-test-db).
 """
 
@@ -77,9 +81,10 @@ async def seed_case_fixtures(
         await session.execute(
             text(
                 "INSERT INTO knowledge_artifact (artifact_id, artifact_type, source_id, title,"
-                " body_text, kb_version, knowledge_kind, authority_score) VALUES"
+                " body_text, kb_version, knowledge_kind, authority_score, acl_teams) VALUES"
                 " (CAST(:artifact_id AS uuid), :artifact_type, CAST(:source_id AS uuid), :title,"
-                " :body_text, :kb_version, :knowledge_kind, :authority_score)"
+                " :body_text, :kb_version, :knowledge_kind, :authority_score,"
+                " CAST(:acl_teams AS text[]))"
             ),
             {
                 "artifact_id": str(artifact_id),
@@ -90,6 +95,10 @@ async def seed_case_fixtures(
                 "kb_version": KB_VERSION,
                 "knowledge_kind": artifact.knowledge_kind,
                 "authority_score": artifact.authority_score,
+                # team_acl_v1: an empty acl_teams is org-public; a non-empty list
+                # requires a shared team with the requester (rbac.py). A case that
+                # asserts ACL filtering (F7 must_not_leak) seeds a restricted team.
+                "acl_teams": artifact.acl_teams or [],
             },
         )
         ids[artifact.key] = artifact_id

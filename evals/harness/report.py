@@ -6,10 +6,37 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from harness.baseline import BaselineComparison
+from harness.golden import GoldenReport
 from harness.metrics import METRIC_NAMES, MetricValue, per_agent_calls
 from harness.records import RunRecord
 
 REPORT_SCHEMA_VERSION = "1.0.0"
+
+
+def _golden_block(golden: GoldenReport | None) -> dict[str, object]:
+    """The publish-gate (evidence-recall) block, documented in evals-report.md.
+
+    ``cases`` 0 (golden set absent) ⇒ null recall fields, never a faked number —
+    mirrors the not_measured discipline of the metric block."""
+    if golden is None:
+        golden = GoldenReport(
+            cases=0,
+            mean_evidence_recall=None,
+            min_evidence_recall=None,
+            total_acl_leaks=0,
+            cases_below_floor=(),
+            edge_precision={},
+            edge_recall={},
+            intent_ordering_failures=(),
+        )
+    return {
+        "cases": golden.cases,
+        "mean_evidence_recall": golden.mean_evidence_recall,
+        "min_evidence_recall": golden.min_evidence_recall,
+        "total_acl_leaks": golden.total_acl_leaks,
+        "cases_below_floor": list(golden.cases_below_floor),
+        "intent_ordering_failures": list(golden.intent_ordering_failures),
+    }
 
 
 def build_report(
@@ -17,6 +44,7 @@ def build_report(
     metrics: dict[str, MetricValue],
     comparison: BaselineComparison,
     git_sha: str | None,
+    golden: GoldenReport | None = None,
 ) -> dict[str, object]:
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -33,6 +61,7 @@ def build_report(
             for record in records
         ],
         "metrics": {name: metrics[name].as_dict() for name in METRIC_NAMES},
+        "golden": _golden_block(golden),
         "per_agent_calls": per_agent_calls(records),
         "baseline": {
             "present": comparison.present,

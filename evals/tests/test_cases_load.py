@@ -110,6 +110,74 @@ def test_unknown_evidence_handles_skip_fixture_check() -> None:
     EvalCase.model_validate(raw)
 
 
+def test_verify_answer_step_parses_and_references_fixtures() -> None:
+    raw = case_dict()
+    raw["script"] = [
+        {
+            "tool": "context.verify_answer",
+            "agent": "impl-agent",
+            "answer_id": "ans-1",
+            "claim": "retention is 90 days",
+            "evidence": ["doc_a"],
+            "retrieved": ["doc_a"],
+            "expect_overall": "passed",
+        }
+    ]
+    case = EvalCase.model_validate(raw)
+    assert case.script[0].tool == "context.verify_answer"  # type: ignore[union-attr]
+
+
+def test_platform_trust_step_parses_with_default_status() -> None:
+    raw = case_dict()
+    raw["script"] = [
+        {
+            "tool": "context.platform_trust",
+            "agent": "impl-agent",
+            "verification_required": True,
+            "present_receipt": False,
+            "expect_status": "denied",
+        }
+    ]
+    case = EvalCase.model_validate(raw)
+    assert case.script[0].verification_required is True  # type: ignore[union-attr]
+
+
+def test_verify_answer_step_evidence_must_reference_a_fixture() -> None:
+    raw = case_dict()
+    raw["script"] = [
+        {
+            "tool": "context.verify_answer",
+            "agent": "impl-agent",
+            "answer_id": "ans-1",
+            "claim": "fabricated",
+            "evidence": ["ghost"],
+            "expect_overall": "failed",
+        }
+    ]
+    with pytest.raises(ValidationError, match=r"unknown fixture keys.*ghost"):
+        EvalCase.model_validate(raw)
+
+
+def test_must_not_leak_must_reference_a_fixture() -> None:
+    raw = case_dict(must_not_leak=["ghost"])
+    with pytest.raises(ValidationError, match=r"unknown fixture keys.*ghost"):
+        EvalCase.model_validate(raw)
+
+
+def test_requester_teams_and_acl_teams_default_empty() -> None:
+    case = EvalCase.model_validate(case_dict())
+    assert case.requester_teams == []
+    assert case.must_not_leak == []
+    assert case.fixtures.artifacts[0].acl_teams == []
+
+
+def test_acl_teams_on_artifact_parses() -> None:
+    raw = case_dict()
+    raw["fixtures"]["artifacts"][0]["acl_teams"] = ["security"]
+    case = EvalCase.model_validate(raw)
+    assert case.fixtures.artifacts[0].acl_teams == ["security"]
+
+
 def test_duplicate_case_ids_across_files_are_rejected(tmp_path: Path) -> None:
     import yaml
 
