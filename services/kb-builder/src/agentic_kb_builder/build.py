@@ -41,6 +41,7 @@ from agentic_kb_builder.connectors.config_loader import BackendFactory
 from agentic_kb_builder.connectors.local_fs import local_fs_backend_factory
 from agentic_kb_builder.connectors.production_factory import production_backend_factory
 from agentic_kb_builder.embeddings import LocalHashEmbedder
+from agentic_kb_builder.embeddings.ollama_embedder import OllamaEmbedder
 from agentic_kb_builder.graphify import GraphifyGraphifier
 from agentic_kb_builder.indexing import SearchDocUpserter, make_consistency_validator
 from agentic_kb_builder.infrastructure.azure_openai.chat_model_client import ChatModelClient
@@ -48,6 +49,8 @@ from agentic_kb_builder.infrastructure.azure_search.search_client import SearchC
 from agentic_kb_builder.infrastructure.local_search import LocalFileSearchClient
 from agentic_kb_builder.infrastructure.postgres.models import KbBuildRun
 from agentic_kb_builder.infrastructure.postgres.session import create_engine, create_session_factory
+from agentic_kb_builder.linker.embedding_similarity import EmbeddingSimilarityProvider
+from agentic_kb_builder.linker.semantic import SimilarityProvider
 from agentic_kb_builder.structured_logging import configure_logging, get_logger
 from agentic_kb_builder.wikify.generate import WikifyGenerator
 
@@ -63,6 +66,7 @@ class Collaborators:
     embedder: Embedder
     indexer: SearchIndexer
     search_client: SearchClient  # backs the activation consistency validator
+    similarity: SimilarityProvider | None = None  # semantic linker; None ⇒ skipped (ADR-0019)
 
 
 def default_collaborators(session: AsyncSession, *, index_path: Path) -> Collaborators:
@@ -71,14 +75,22 @@ def default_collaborators(session: AsyncSession, *, index_path: Path) -> Collabo
 
     The projection is file-backed (ADR-0017) so it survives across build invocations the
     same way the Azure index does — an incremental rebuild that upserts nothing still
-    validates against the carried-forward membership."""
+    validates against the carried-forward membership.
+
+    When EMBEDDINGS_PROVIDER is set, a real (Ollama) embedding-similarity provider is wired
+    into the linker so the prose<->code semantic pass runs (ADR-0019); otherwise it stays
+    None and that pass is skipped, keeping the default build offline + deterministic."""
     client = LocalFileSearchClient(index_path)
+    similarity: SimilarityProvider | None = None
+    if os.environ.get("EMBEDDINGS_PROVIDER"):
+        similarity = EmbeddingSimilarityProvider(session, OllamaEmbedder.from_env())
     return Collaborators(
         wikifier=WikifyGenerator(ChatModelClient.from_env()),
         graphifier=GraphifyGraphifier(),
         embedder=LocalHashEmbedder(),
         indexer=SearchDocUpserter(session, client),
         search_client=client,
+        similarity=similarity,
     )
 
 
@@ -120,6 +132,7 @@ async def run_build(
         graphifier=collaborators.graphifier,
         embedder=collaborators.embedder,
         indexer=collaborators.indexer,
+        similarity=collaborators.similarity,
     )
     run = await runner.run(connectors)
     logger.info(
