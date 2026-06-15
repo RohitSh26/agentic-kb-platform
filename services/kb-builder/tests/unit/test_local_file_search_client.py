@@ -75,3 +75,18 @@ async def test_delete_is_persisted(tmp_path: Path) -> None:
 async def test_missing_file_loads_as_empty(tmp_path: Path) -> None:
     client = LocalFileSearchClient(tmp_path / "does-not-exist.json")
     assert (await client.fetch_index_state()).docs == {}
+
+
+async def test_corrupt_file_loads_as_empty_and_recovers(tmp_path: Path) -> None:
+    # A truncated/garbage index (e.g. an interrupted write) must not crash the build:
+    # the projection is rebuildable, so we treat it as empty and let the next build
+    # reproject. The client must also be able to overwrite the corrupt file.
+    path = tmp_path / "index.json"
+    path.write_text("{ this is not valid json", encoding="utf-8")
+
+    client = LocalFileSearchClient(path)
+    assert (await client.fetch_index_state()).docs == {}
+
+    doc = _doc("recovered")
+    assert await client.upsert_docs([doc]) == 1
+    assert (await LocalFileSearchClient(path).fetch_index_state()).docs == {doc.doc_id: "recovered"}

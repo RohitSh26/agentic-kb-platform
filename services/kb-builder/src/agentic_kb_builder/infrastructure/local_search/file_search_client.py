@@ -21,6 +21,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
+from pydantic import ValidationError
+
 from agentic_kb_builder.indexing.search_document import IndexState, SearchDoc
 from agentic_kb_builder.structured_logging import get_logger
 
@@ -88,14 +90,27 @@ class LocalFileSearchClient:
 
 def _load(path: Path) -> dict[str, SearchDoc]:
     if not path.exists():
+        logger.debug("event=search_local_no_index path=%s", path)
         return {}
-    parsed = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(parsed, dict):
+    # The index file is a rebuildable projection, never truth: a corrupt or
+    # stale-schema file (e.g. an interrupted write or a SearchDoc shape change)
+    # must NOT crash the build — treat it as empty so the next build reprojects
+    # from Postgres and the orphan sweep reconciles it.
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(parsed, dict):
+            raise ValueError("index file is not a JSON object")
+        mapping = cast("dict[str, Any]", parsed)
+        docs_raw = cast("dict[str, Any]", mapping.get("docs", {}))
+        loaded = {
+            str(doc_id): SearchDoc.model_validate(payload) for doc_id, payload in docs_raw.items()
+        }
+    except (json.JSONDecodeError, ValueError, ValidationError) as exc:
+        logger.warning(
+            "event=search_local_corrupt path=%s error=%s reason=treating_as_empty",
+            path,
+            type(exc).__name__,
+        )
         return {}
-    mapping = cast("dict[str, Any]", parsed)
-    docs_raw = cast("dict[str, Any]", mapping.get("docs", {}))
-    loaded = {
-        str(doc_id): SearchDoc.model_validate(payload) for doc_id, payload in docs_raw.items()
-    }
     logger.info("event=search_local_loaded count=%d path=%s", len(loaded), path)
     return loaded
