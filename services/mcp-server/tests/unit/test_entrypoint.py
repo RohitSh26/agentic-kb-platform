@@ -58,7 +58,8 @@ def test_create_app_builds_the_full_authenticated_tool_surface() -> None:
 async def test_create_app_registers_every_contracted_tool() -> None:
     app = create_app()
     tools = await app.list_tools()
-    assert {tool.name for tool in tools} == set(TOOL_SCHEMAS)
+    # wire names are the canonical dotted names with '.' -> '_' (mcp/server.py)
+    assert {tool.name for tool in tools} == {name.replace(".", "_") for name in TOOL_SCHEMAS}
 
 
 @pytest.mark.usefixtures("_required_env")

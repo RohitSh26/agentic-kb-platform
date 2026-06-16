@@ -47,7 +47,7 @@ async def main() -> int:
         #    within budget; identity/ACL/budget come from the session, not the body.
         pack = _d(
             await client.call_tool(
-                "context.create_pack",
+                "context_create_pack",
                 {
                     "request": {
                         "run_id": "demo-run-1",
@@ -79,7 +79,7 @@ async def main() -> int:
         first = cards[0]["evidence_id"]
         opened = _d(
             await client.call_tool(
-                "context.open_evidence",
+                "context_open_evidence",
                 {"request": {"context_pack_id": pack_id, "evidence_id": first, "max_tokens": 1500}},
             )
         )
@@ -87,11 +87,11 @@ async def main() -> int:
         _ok("open_evidence", f"opened card 1 as {opened['level']} text (injection_flagged={opened['injection_flagged']})")
         print(f'        untrusted_content: "{snippet}…"')
 
-        # 3) graph.get_neighbors — graph behaviour ONLY through this tool over the
+        # 3) graph_get_neighbors — graph behaviour ONLY through this tool over the
         #    Postgres knowledge_edge table (EXTRACTED edges by default).
         neighbors = _d(
             await client.call_tool(
-                "graph.get_neighbors",
+                "graph_get_neighbors",
                 {
                     "request": {
                         "artifact_id": cards[0]["artifact_id"],
@@ -104,14 +104,14 @@ async def main() -> int:
         edge_types = [n["edge_type"] for n in neighbors["neighbors"]]
         _ok("get_neighbors", f"walked the graph from card 1 → {len(edge_types)} EXTRACTED neighbor(s) {edge_types}")
 
-        # 3.5) context.expand — the keystone: from the retrieved cards, walk the graph
+        # 3.5) context_expand — the keystone: from the retrieved cards, walk the graph
         #      trust-tiered (EXTRACTED backbone first) to pull the FULL connected code
         #      context in ONE governed call, charged against the pack budget — so the
         #      agent reaches a symbol's file, callees and imports without reading files.
         seeds = [c["artifact_id"] for c in cards[:3]]
         expanded = _d(
             await client.call_tool(
-                "context.expand",
+                "context_expand",
                 {
                     "request": {
                         "context_pack_id": pack_id,
@@ -125,7 +125,7 @@ async def main() -> int:
         )
         exp = expanded["cards"]
         _ok(
-            "context.expand",
+            "context_expand",
             f"expanded {len(seeds)} seed card(s) → {len(exp)} connected card(s) "
             f"({expanded['tokens_used']} tok, truncated={expanded['truncated']})",
         )
@@ -136,7 +136,7 @@ async def main() -> int:
         #    runs the mandatory deterministic provenance checks and returns a receipt.
         receipt = _d(
             await client.call_tool(
-                "context.verify_answer",
+                "context_verify_answer",
                 {
                     "request": {
                         "answer_id": "demo-answer-1",
@@ -160,7 +160,7 @@ async def main() -> int:
         # 5) list_retrievals — every retrieval path is ledgered; inspect what the
         #    broker did on your behalf for this run.
         ledger = _d(
-            await client.call_tool("ledger.list_retrievals", {"request": {"run_id": "demo-run-1"}})
+            await client.call_tool("ledger_list_retrievals", {"request": {"run_id": "demo-run-1"}})
         )
         events = ledger["events"]
         _ok("list_retrievals", f"{len(events)} ledgered event(s) for run 'demo-run-1':")

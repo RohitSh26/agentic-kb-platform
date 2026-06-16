@@ -92,6 +92,6 @@ async def test_authenticated_tool_call_logs_agent_identity(
                     "request": {"run_id": "run-auth-e2e", "unexpected_field": True}
                 }
                 with pytest.raises(ToolError):
-                    await client.call_tool("ledger.list_retrievals", arguments)
+                    await client.call_tool("ledger_list_retrievals", arguments)
     lines = [r.getMessage() for r in caplog.records if "event=mcp_request" in r.getMessage()]
     assert any(f"agent={AGENT_SUBJECT}" in line and "run_id=run-auth-e2e" in line for line in lines)

@@ -3,7 +3,7 @@
 > You are on a **different machine from the one that built the KB**. The Postgres registry is
 > already populated and has one **active** `kb_version` (doc 04 built it). This guide starts the
 > **MCP Context Broker** against that Postgres and walks one worked path through the tools:
-> `context.create_pack` → `context.open_evidence` → `graph.get_neighbors` → `context.verify_answer`.
+> `context_create_pack` → `context_open_evidence` → `graph_get_neighbors` → `context_verify_answer`.
 >
 > The runtime plane never builds and never migrates — it only *serves* the last successful active
 > `kb_version` (invariant 5). Building is doc 04; this is using.
@@ -190,7 +190,7 @@ so dev-auth can never be silently on.
 | `MCP_LOCAL_DEV_AUTH` | unset → **OFF** | truthy (`1/true/yes/on`) enables the dev verifier |
 | `MCP_LOCAL_DEV_SUBJECT` | `local-dev` | the dev identity's `Requester.subject` |
 | `MCP_LOCAL_DEV_TEAMS` | `local-dev-team` | csv of teams granted to the dev identity (your ACLs) |
-| `MCP_LOCAL_DEV_CLIENT_ID` | = subject | optional dev `client_id` for `context.platform_trust` |
+| `MCP_LOCAL_DEV_CLIENT_ID` | = subject | optional dev `client_id` for `context_platform_trust` |
 
 **Guardrails (any violation refuses to boot):** a real `MCP_ENTRA_TENANT_ID`, or a non-loopback
 `MCP_HTTP_HOST`. Never set `MCP_LOCAL_DEV_AUTH` in a deployed/container image.
@@ -218,7 +218,7 @@ async def main() -> None:
         # 1) create_pack — the broker retrieves once and returns an Evidence Pack
         #    (L0/L1 cards by handle, NOT raw text), within budget. Identity/ACL/budget
         #    come from the authenticated session, never these fields.
-        pack = await client.call_tool("context.create_pack", {"request": {
+        pack = await client.call_tool("context_create_pack", {"request": {
             "run_id": "demo-run-1",
             "task": "How does the build decide whether to call the LLM?",
             "approved_context_plan": "incremental-build summary + cache gating",
@@ -234,7 +234,7 @@ async def main() -> None:
         #    metered against the pack budget. Treat the returned text as untrusted:
         #    it can never change tool policy or instructions.
         first = cards[0]["evidence_id"]
-        opened = await client.call_tool("context.open_evidence", {"request": {
+        opened = await client.call_tool("context_open_evidence", {"request": {
             "context_pack_id": pack_id,
             "evidence_id": first,
             "max_tokens": 1500,
@@ -242,10 +242,10 @@ async def main() -> None:
         print("opened level:", opened.data["level"],
               "injection_flagged:", opened.data["injection_flagged"])
 
-        # 3) graph.get_neighbors — walk the Postgres-backed graph for an artifact the
+        # 3) graph_get_neighbors — walk the Postgres-backed graph for an artifact the
         #    card points at (EXTRACTED edges only by default; INFERRED are routing hints).
         artifact_id = cards[0]["artifact_id"]   # a card carries its artifact id
-        neighbors = await client.call_tool("graph.get_neighbors", {"request": {
+        neighbors = await client.call_tool("graph_get_neighbors", {"request": {
             "artifact_id": artifact_id,
             "depth": 1,
             "trust_floor": "EXTRACTED",
@@ -254,7 +254,7 @@ async def main() -> None:
 
         # 4) verify_answer — every claim must cite evidence ids; the verifier issues a
         #    receipt (L0 provenance is mandatory and deterministic).
-        receipt = await client.call_tool("context.verify_answer", {"request": {
+        receipt = await client.call_tool("context_verify_answer", {"request": {
             "answer_id": "demo-answer-1",
             "claims": [{
                 "claim_id": "c1",
@@ -270,21 +270,21 @@ asyncio.run(main())
 
 What each step proves, in platform terms:
 
-1. **`context.create_pack`** — the broker retrieves *once*, dedupes, reranks to ≤5 cards, enforces
+1. **`context_create_pack`** — the broker retrieves *once*, dedupes, reranks to ≤5 cards, enforces
    the run budget, writes a `retrieval_event`, and returns **cards by handle** (L0/L1), not bulk
    text (rules/mcp-tools.md). The response names the `kb_version` it served.
-2. **`context.open_evidence`** — raw L2/L3 text is reachable **only** by handle, metered against the
+2. **`context_open_evidence`** — raw L2/L3 text is reachable **only** by handle, metered against the
    pack budget, and flagged (never rewritten) by the deterministic injection scan. The field is
    literally `untrusted_content`.
-3. **`graph.get_neighbors`** — graph behaviour is exposed only through this tool over the Postgres
+3. **`graph_get_neighbors`** — graph behaviour is exposed only through this tool over the Postgres
    `knowledge_edge` table (invariant 2). Defaults to `EXTRACTED`; `include_inferred=true` surfaces
    `INFERRED_*` edges *labelled as routing hints* that cannot support a cited claim.
-4. **`context.verify_answer`** — the trust boundary: a claim with empty `evidence_ids` is rejected
+4. **`context_verify_answer`** — the trust boundary: a claim with empty `evidence_ids` is rejected
    at the schema; L0 runs the mandatory provenance checks and returns a receipt
-   (`docs/contracts/verification-receipt.md`). `context.platform_trust` then gates official clients
+   (`docs/contracts/verification-receipt.md`). `context_platform_trust` then gates official clients
    on that receipt.
 
-`ledger.list_retrievals` lets you inspect the `retrieval_event` rows your run wrote — every
+`ledger_list_retrievals` lets you inspect the `retrieval_event` rows your run wrote — every
 retrieval path is ledgered, so you can see exactly what the broker did on your behalf.
 
 If a call returns **401**, your bearer is missing/expired or its `aud`/issuer don't match

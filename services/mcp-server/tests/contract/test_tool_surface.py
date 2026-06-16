@@ -18,7 +18,10 @@ from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 
 async def test_registered_tools_match_contract_registry(server: FastMCP) -> None:
     tools = await server.list_tools()
-    assert {tool.name for tool in tools} == set(TOOL_SCHEMAS)
+    # The wire name is the canonical (dotted) name with '.' -> '_' so OpenAI-style clients
+    # accept it (mcp/server.py); every registered tool maps back to a contract entry.
+    assert {tool.name for tool in tools} == {name.replace(".", "_") for name in TOOL_SCHEMAS}
+    assert all(tool.description for tool in tools)  # every tool is described (clients require it)
 
 
 async def test_bare_query_is_rejected_by_the_schema(server: FastMCP) -> None:
@@ -26,7 +29,7 @@ async def test_bare_query_is_rejected_by_the_schema(server: FastMCP) -> None:
     async with Client(server) as client:
         with pytest.raises(ToolError) as excinfo:
             await client.call_tool(
-                "context.request_more", {"request": {"query": "give me everything"}}
+                "context_request_more", {"request": {"query": "give me everything"}}
             )
     message = str(excinfo.value)
     assert "unknown context_pack_id" not in message  # rejected before the broker ran
@@ -42,13 +45,13 @@ async def test_telemetry_emits_structured_line_per_request(
         async with Client(server) as client:
             with pytest.raises(ToolError):
                 await client.call_tool(
-                    "ledger.list_retrievals",
+                    "ledger_list_retrievals",
                     {"request": {"run_id": "run-42", "unexpected_field": True}},
                 )
     lines = [r.getMessage() for r in caplog.records if "event=mcp_request" in r.getMessage()]
     assert len(lines) == 1
     line = lines[0]
-    assert "tool=ledger.list_retrievals" in line
+    assert "tool=ledger_list_retrievals" in line
     assert "run_id=run-42" in line
     assert "agent=" in line
     assert "latency_ms=" in line
@@ -63,7 +66,7 @@ async def test_telemetry_never_logs_an_unsafe_run_id(
     with caplog.at_level(logging.INFO, logger="agentic_mcp_server.telemetry.middleware"):
         async with Client(server) as client:
             with pytest.raises(ToolError):
-                await client.call_tool("ledger.list_retrievals", {"request": {"run_id": forged}})
+                await client.call_tool("ledger_list_retrievals", {"request": {"run_id": forged}})
     lines = [r.getMessage() for r in caplog.records if "event=mcp_request" in r.getMessage()]
     assert len(lines) == 1
     assert "run_id=<unsafe-run-id>" in lines[0]

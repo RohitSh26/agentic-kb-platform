@@ -37,16 +37,66 @@ from agentic_mcp_server.mcp.tool_schemas.verification import (
 class ToolSchema:
     request: type[McpModel]
     response: type[McpModel]
+    # Shown to the model so it knows when to call the tool. MCP clients that bridge to
+    # OpenAI function-calling REQUIRE a description, and reject a tool without one.
+    description: str
 
 
+# Canonical (dotted) tool names. The WIRE name the MCP server exposes is derived from
+# these by replacing '.' with '_' (mcp/server.py), because OpenAI-function-calling clients
+# (Codex/GPT, and others) reject names that don't match ^[a-z0-9_-]+$. The dotted form
+# stays the internal identity (handlers, retrieval_event audit labels, contracts).
 TOOL_SCHEMAS: dict[str, ToolSchema] = {
-    "context.create_pack": ToolSchema(CreatePackRequest, CreatePackResponse),
-    "context.read_pack": ToolSchema(ReadPackRequest, ReadPackResponse),
-    "context.request_more": ToolSchema(RequestMoreRequest, RequestMoreResponse),
-    "context.open_evidence": ToolSchema(OpenEvidenceRequest, OpenEvidenceResponse),
-    "context.expand": ToolSchema(ExpandRequest, ExpandResponse),
-    "graph.get_neighbors": ToolSchema(GetNeighborsRequest, GetNeighborsResponse),
-    "ledger.list_retrievals": ToolSchema(ListRetrievalsRequest, ListRetrievalsResponse),
-    "context.verify_answer": ToolSchema(VerifyAnswerRequest, VerificationReceipt),
-    "context.platform_trust": ToolSchema(PlatformTrustRequest, PlatformTrustDecision),
+    "context.create_pack": ToolSchema(
+        CreatePackRequest,
+        CreatePackResponse,
+        "Retrieve once and return a budgeted Evidence Pack of L0/L1 cards (by handle, not "
+        "raw text) for a task. Start here.",
+    ),
+    "context.read_pack": ToolSchema(
+        ReadPackRequest,
+        ReadPackResponse,
+        "Return the run's existing Evidence Pack cards (free, reused; no new retrieval).",
+    ),
+    "context.request_more": ToolSchema(
+        RequestMoreRequest,
+        RequestMoreResponse,
+        "Request more context with a justified question (question, why_needed, "
+        "decision_needed, already_checked, max_tokens). A bare query is rejected.",
+    ),
+    "context.open_evidence": ToolSchema(
+        OpenEvidenceRequest,
+        OpenEvidenceResponse,
+        "Open one evidence card to its raw source text (L2) by handle, metered against the "
+        "pack budget.",
+    ),
+    "context.expand": ToolSchema(
+        ExpandRequest,
+        ExpandResponse,
+        "Walk the knowledge graph from seed cards (trust-tiered, ACL-filtered) to pull the "
+        "connected neighbourhood into the pack in one call.",
+    ),
+    "graph.get_neighbors": ToolSchema(
+        GetNeighborsRequest,
+        GetNeighborsResponse,
+        "Return a node's neighbours from the Postgres knowledge graph (EXTRACTED edges by "
+        "default).",
+    ),
+    "ledger.list_retrievals": ToolSchema(
+        ListRetrievalsRequest,
+        ListRetrievalsResponse,
+        "List the retrieval_event audit rows for a run — what the broker did on your behalf.",
+    ),
+    "context.verify_answer": ToolSchema(
+        VerifyAnswerRequest,
+        VerificationReceipt,
+        "Verify an answer's claims against their cited evidence (L0 provenance checks) and "
+        "return a receipt.",
+    ),
+    "context.platform_trust": ToolSchema(
+        PlatformTrustRequest,
+        PlatformTrustDecision,
+        "Return the platform trust decision for an answer (whether it carries a valid "
+        "verification receipt).",
+    ),
 }

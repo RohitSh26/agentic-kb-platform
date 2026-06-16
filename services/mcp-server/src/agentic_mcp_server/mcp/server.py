@@ -51,8 +51,17 @@ def build_server(
     server = FastMCP(name=SERVER_NAME, auth=auth, middleware=[TelemetryMiddleware()])
 
     handlers = make_handlers(deps)
-    for tool_name in TOOL_SCHEMAS:
-        server.tool(handlers[tool_name], name=tool_name)
+    # Expose a WIRE name that satisfies every MCP client: OpenAI-function-calling clients
+    # (Codex/GPT and others) reject tool names that aren't ^[a-z0-9_-]+$, so the dotted
+    # canonical name (context.create_pack) is registered as context_create_pack. A
+    # description is required by those clients too. The dotted name stays the internal
+    # identity (handlers, retrieval_event labels).
+    for tool_name, schema in TOOL_SCHEMAS.items():
+        server.tool(
+            handlers[tool_name],
+            name=tool_name.replace(".", "_"),
+            description=schema.description,
+        )
 
     @server.custom_route("/health", methods=["GET"])
     async def health_route(request: Request) -> JSONResponse:

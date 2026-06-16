@@ -85,7 +85,7 @@ _KNOWN_SUBAGENTS = [
     "code_reviewer",
 ]
 # Build roles need the DEEP connected code (defining file, callees, imports); planning roles
-# work from the high-level overview cards. So only build roles trigger context.expand — once,
+# work from the high-level overview cards. So only build roles trigger context_expand — once,
 # into the SHARED pack (the broker dedupes), and later build roles reuse it. This keeps planners
 # cheap and pulls the deep code exactly once for the whole run (no per-agent re-fetch).
 _BUILD_ROLES = frozenset({"implementation", "test_layer", "code_reviewer"})
@@ -365,7 +365,7 @@ async def _expand_into_pack(
         return []
     result = _unwrap(
         await broker.call_tool(
-            "context.expand",
+            "context_expand",
             {
                 "request": {
                     "context_pack_id": pack_id,
@@ -379,7 +379,7 @@ async def _expand_into_pack(
     )
     exp = result.get("cards", [])
     print(
-        f"  context.expand: {len(seed_artifact_ids)} seeds -> {len(exp)} connected card(s) "
+        f"  context_expand: {len(seed_artifact_ids)} seeds -> {len(exp)} connected card(s) "
         f"({result.get('tokens_used', 0)} tok, truncated={result.get('truncated')}) "
         f"[shared pack, deduped]"
     )
@@ -540,10 +540,10 @@ async def _run(task: str, auto_approve: bool) -> int:  # orchestration loop
             # ----------------------------------------------------------------
             # Step 2: create_pack ONCE
             # ----------------------------------------------------------------
-            _print_section("Step 2 — context.create_pack")
+            _print_section("Step 2 — context_create_pack")
             pack_result = _unwrap(
                 await broker.call_tool(
-                    "context.create_pack",
+                    "context_create_pack",
                     {
                         "request": {
                             "run_id": run_id,
@@ -643,13 +643,13 @@ async def _run(task: str, auto_approve: bool) -> int:  # orchestration loop
             # ----------------------------------------------------------------
             # Step 5: verify_answer (with cited evidence_ids from cards)
             # ----------------------------------------------------------------
-            _print_section("Step 5 — context.verify_answer")
+            _print_section("Step 5 — context_verify_answer")
             evidence_ids = [c["evidence_id"] for c in cards[:5] if c.get("evidence_id")]
 
             if evidence_ids:
                 receipt = _unwrap(
                     await broker.call_tool(
-                        "context.verify_answer",
+                        "context_verify_answer",
                         {
                             "request": {
                                 "answer_id": f"{run_id}-answer",

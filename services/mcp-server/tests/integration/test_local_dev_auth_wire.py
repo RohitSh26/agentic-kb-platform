@@ -62,7 +62,7 @@ async def test_dev_verifier_authorizes_tool_call_as_dev_subject(
                     "request": {"run_id": "run-dev-auth", "unexpected_field": True}
                 }
                 with pytest.raises(ToolError):
-                    await client.call_tool("ledger.list_retrievals", arguments)
+                    await client.call_tool("ledger_list_retrievals", arguments)
 
     lines = [r.getMessage() for r in caplog.records if "event=mcp_request" in r.getMessage()]
     assert any(f"agent={DEV_SUBJECT}" in line and "run_id=run-dev-auth" in line for line in lines)
