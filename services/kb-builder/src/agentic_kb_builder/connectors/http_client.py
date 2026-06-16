@@ -46,9 +46,21 @@ _STATUS_HINTS = {
     ),
 }
 
+#: When the request carried NO Authorization header, a 401/403/404 is almost always a
+#: *missing auth* config, not a scope problem — the source omitted auth.token_env while
+#: pointing at a private resource (a private repo returns 404, not 403). This is the
+#: single most time-consuming misconfig, so name it precisely instead of blaming the PAT.
+_UNAUTHENTICATED_HINT = (
+    "no Authorization header was sent — this source has no auth.token_env configured, so it "
+    "runs UNAUTHENTICATED (public resources only); a PRIVATE repo/org/project returns 404. "
+    "Add an auth.token_env to this source in your sources.yaml to send a token"
+)
 
-def _http_error_message(method: str, url: str, status: int) -> str:
+
+def _http_error_message(method: str, url: str, status: int, *, authenticated: bool = True) -> str:
     base = f"{method} {url} returned {status}"
+    if not authenticated and status in (401, 403, 404):
+        return f"{base} ({_UNAUTHENTICATED_HINT})"
     hint = _STATUS_HINTS.get(status)
     return f"{base} ({hint})" if hint else base
 
@@ -79,6 +91,9 @@ class AsyncHttpClient:
             headers.update(extra_headers)
         if auth_header is not None:
             headers["Authorization"] = auth_header
+        # remember whether we sent a token, so a 401/403/404 can distinguish a
+        # missing-auth config from a real scope/visibility problem
+        self._authenticated = auth_header is not None
         self._max_retries = max_retries
         self._backoff_base = backoff_base
         self._backoff_cap = backoff_cap
@@ -184,7 +199,11 @@ class AsyncHttpClient:
                     url,
                     response.status_code,
                 )
-                raise HttpFetchError(_http_error_message(method, url, response.status_code))
+                raise HttpFetchError(
+                    _http_error_message(
+                        method, url, response.status_code, authenticated=self._authenticated
+                    )
+                )
 
             logger.info(
                 "event=http_fetch_ok method=%s url=%s status=%d bytes=%d",

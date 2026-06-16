@@ -368,7 +368,8 @@ Then **serve and use it exactly as in Parts 5–8** (same server command, same V
 > **Troubleshooting real-source fetches**
 > | Symptom | Cause & fix |
 > |---|---|
-> | GitHub/ADO **404** | Repo/wiki/project is private and the token can't see it (GitHub returns 404, not 403). A classic PAT needs `repo` scope; a fine-grained PAT must be *granted to that repo*; an ADO PAT needs Wiki/Work-Item **Read**. |
+> | One GitHub source `404`s while another (same repo) succeeds | That source is **missing its `auth:` block** — it ran unauthenticated, and a private repo returns 404. Every `github_*` / `azure_wiki` / `ado_card` source pointing at a **private** resource needs its own `auth: token_env: …`. The error now says "no Authorization header was sent" when this happens. |
+> | GitHub/ADO **404** (auth present) | Repo/wiki/project is private and the token can't see it (GitHub returns 404, not 403). A classic PAT needs `repo` scope; a fine-grained PAT must be *granted to that repo*; an ADO PAT needs Wiki/Work-Item **Read**. |
 > | **401** bad/expired credentials | The token is wrong or expired. Re-create it and re-`source .env` in *this* shell. |
 > | **403** scope/SSO/rate-limit | Missing scope, org SSO not authorized for the PAT, or you hit a rate limit. |
 > | build wants an LLM but none is set | You included a prose source (doc/wiki/card). Either set `LLM_*` in `.env`, or index code only. |

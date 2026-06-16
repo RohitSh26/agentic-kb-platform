@@ -55,7 +55,10 @@ def test_example_pins_documented_field_semantics() -> None:
 
     docs = by_name["platform-docs"]
     assert isinstance(docs, GithubDocSourceSpec)
-    assert docs.auth is None  # unauthenticated is representable
+    # The example points at a PRIVATE repo, so every github source must send a token —
+    # an auth-less source 404s on a private repo. (auth-optional is representable in the
+    # schema and is covered by the loader unit tests, not by this private-repo example.)
+    assert docs.auth is not None and docs.auth.token_env == "GITHUB_TOKEN"
     assert docs.exclude == []  # default: exclude nothing
 
     wiki = by_name["platform-wiki"]

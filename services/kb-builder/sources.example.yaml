@@ -33,6 +33,11 @@ sources:
     include:
       - "docs/**/*.md"
       - "README.md"
+    auth:
+      # auth.token_env is OPTIONAL in the schema — omit it ONLY for a PUBLIC repo.
+      # This repo is private, so (like platform-code above) it MUST send a token, or
+      # GitHub returns 404 on every request. When in doubt, set it.
+      token_env: GITHUB_TOKEN
 
   - name: platform-wiki
     type: azure_wiki

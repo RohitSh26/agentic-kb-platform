@@ -79,6 +79,17 @@ class GitHubRestBackend:
         self._owner = owner
         self._repo = name
         self._branch = _validate_branch(spec.branch)
+        # A github source with no token runs unauthenticated and will 404 on a private
+        # repo (GitHub hides private repos behind 404). Surface the misconfig at build
+        # start, not 100 fetches later — auth.token_env is optional only for PUBLIC repos.
+        if token is None:
+            logger.warning(
+                "event=github_source_unauthenticated repo=%s/%s type=%s "
+                "msg=no-auth.token_env-configured-private-repos-return-404",
+                owner,
+                name,
+                spec.type,
+            )
 
     def _new_client(self, *, accept: str = _JSON_ACCEPT) -> AsyncHttpClient:
         return _github_client(self._token, accept=accept, transport=self._transport)

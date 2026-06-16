@@ -87,7 +87,8 @@ async def test_non_retryable_4xx_raises_immediately(monkeypatch: pytest.MonkeyPa
         calls.append(1)
         return httpx.Response(404)
 
-    client = AsyncHttpClient(transport=httpx.MockTransport(handler))
+    # authenticated client: a 404 is an auth/visibility problem on a token that WAS sent
+    client = AsyncHttpClient(auth_header="Bearer x", transport=httpx.MockTransport(handler))
     async with client:
         # The 404 message must name the likely cause (private resource / token access),
         # not just the bare status — most provider 404s are an auth/visibility problem.
@@ -104,10 +105,29 @@ async def test_error_message_hints_name_the_likely_cause(
     monkeypatch: pytest.MonkeyPatch, status: int, needle: str
 ) -> None:
     monkeypatch.setattr("agentic_kb_builder.connectors.http_client.asyncio.sleep", _no_sleep)
-    client = AsyncHttpClient(transport=httpx.MockTransport(lambda _req: httpx.Response(status)))
+    # a token WAS sent ⇒ the hints blame scope/credentials/visibility, not missing auth
+    client = AsyncHttpClient(
+        auth_header="Bearer x",
+        transport=httpx.MockTransport(lambda _req: httpx.Response(status)),
+    )
     async with client:
         with pytest.raises(HttpFetchError, match=needle):
             await client.get_json("https://api.example.com/x")
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+async def test_unauthenticated_4xx_names_missing_auth(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """No Authorization header ⇒ a 401/403/404 must point at the MISSING auth config
+    (a source with no auth.token_env hitting a private resource), not the PAT's scope.
+    This is the misconfig that cost the most debugging time."""
+    monkeypatch.setattr("agentic_kb_builder.connectors.http_client.asyncio.sleep", _no_sleep)
+    # no auth_header ⇒ unauthenticated request
+    client = AsyncHttpClient(transport=httpx.MockTransport(lambda _req: httpx.Response(status)))
+    async with client:
+        with pytest.raises(HttpFetchError, match=r"no Authorization header.*auth\.token_env"):
+            await client.get_json("https://api.example.com/private")
 
 
 async def test_token_never_logged(
