@@ -41,8 +41,11 @@ logger = get_logger(__name__)
 CANDIDATE_FAN_OUT_K = 10
 
 # Signal score floors. A signal below its floor does not fire (its key is absent
-# from `signals`). embedding_similarity reuses the semantic linker's accept floor.
-EMBEDDING_SIMILARITY_FLOOR = 0.70
+# from `signals`). The embedding floor was raised 0.70 -> 0.80 (ADR-0019 tuning): at
+# 0.70, weak code_symbol↔concept pairs reached the judge and were labelled INFERRED_LOW
+# at ~50% precision (the dominant noise source); 0.80 keeps only strong nomic matches,
+# cutting that noise without losing the high-confidence cross-domain links.
+EMBEDDING_SIMILARITY_FLOOR = 0.80
 TOKEN_OVERLAP_FLOOR = 0.10
 SECTION_PROXIMITY_SCORE = 0.6
 PATH_COLOCATION_SCORE = 0.4
