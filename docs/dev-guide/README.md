@@ -38,6 +38,9 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
   reproduction** of the entire chain — build a KB from your real GitHub + ADO sources
   (`--backend production`), serve the broker, drive the gated multi-agent runner with a Groq model,
   and replay the run. (§7 has a no-tokens local-files alternative.)
+- [09 — GitHub Copilot CLI against the broker](09-copilot-cli-end-to-end.md): wire the **real
+  GitHub Copilot CLI** to our MCP broker and run a non-interactive task — a third-party agent gets
+  context only through the governed broker; verified the per-agent budget + audit apply to it.
 
 Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0017), build units
 in `docs/pr-briefs/` (through PR-33), cross-service agreements in `docs/contracts/`.
