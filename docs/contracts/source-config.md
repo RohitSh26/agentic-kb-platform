@@ -48,8 +48,22 @@ sources: []           # required; one block per ingested source, see below
 | `enabled` | bool | default `true`; a disabled source is skipped (and logged) without being deleted from config history |
 | `acl_teams` | list[str] | default = `defaults.acl_teams`; written to `source_item.acl_teams` |
 | `auth.token_env` | str | optional; `^[A-Z][A-Z0-9_]*$` — the **name** of the environment variable holding the PAT/token. If present, the variable must be set at load time or the build aborts. If absent, the connector runs unauthenticated (public sources only). |
+| `public` | bool | default `false`; explicit opt-in that an **auth-less** remote source is intentionally public. Without it, a source missing `auth` is a **pre-flight ERROR** in `--backend production` (an unauthenticated request 404s on a private repo). Set `public: true` only for a genuinely public source. |
 
 Unknown fields anywhere are rejected (`extra="forbid"`)— a typo never silently changes meaning.
+
+## Pre-flight validation (`--validate-only`)
+
+Before any fetch, the build validates the config against the chosen backend and reports
+**all** problems at once (`connectors/config_validator.py`). `--validate-only` runs just this
+check and exits (no DB, no network). Any ERROR aborts the build.
+
+- **`--backend production`** — ERROR if a remote source has no `auth` and is not `public: true`;
+  ERROR if a referenced `auth.token_env` is not set in the environment; WARN if a source is both
+  `public` and authed.
+- **`--backend local`** — ERROR if `--workspace` does not exist; WARN if a source type is not
+  file-readable locally (`azure_wiki` / `ado_card`); WARN if a `github_*` source's include globs
+  match no workspace file. Tokens are not required (the local backend reads files).
 
 ## Path selection (`github_code`, `github_doc`, `azure_wiki`)
 

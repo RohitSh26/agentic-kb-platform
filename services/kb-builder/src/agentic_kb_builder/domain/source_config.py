@@ -133,6 +133,11 @@ class BaseSourceSpec(ConfigModel):
     enabled: bool = True
     acl_teams: list[str] = []
     auth: AuthRef | None = None
+    # Explicit opt-in that an auth-less source is intentionally PUBLIC. Without this,
+    # a remote source missing `auth` is a config ERROR in production (it would send no
+    # token and 404 on a private resource — the most common, most time-consuming
+    # misconfig). Validated by config_validator, not by the schema itself.
+    public: bool = False
 
 
 class PathSelectSpec(BaseSourceSpec):

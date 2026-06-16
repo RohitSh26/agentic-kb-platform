@@ -38,6 +38,11 @@ from agentic_kb_builder.connectors import (
     load_source_config,
 )
 from agentic_kb_builder.connectors.config_loader import BackendFactory
+from agentic_kb_builder.connectors.config_validator import (
+    Severity,
+    has_errors,
+    validate_source_config,
+)
 from agentic_kb_builder.connectors.local_fs import local_fs_backend_factory
 from agentic_kb_builder.connectors.production_factory import production_backend_factory
 from agentic_kb_builder.embeddings import LocalHashEmbedder
@@ -197,6 +202,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "./.kb-local-search-index.json). A rebuildable projection of Postgres — delete it "
         "(or recreate the database) to force a clean reprojection on the next build",
     )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="run the config pre-flight (auth/tokens/paths for the chosen --backend) and exit "
+        "without building — no database or network access",
+    )
     parser.add_argument("--no-activate", action="store_true", help="build but do not mark active")
     parser.add_argument(
         "--no-git-metadata",
@@ -223,6 +234,29 @@ async def _main(args: argparse.Namespace) -> int:
     # Attach the structured handler before any build log fires so the watcher sees the
     # timeline from line one (rule python.md: structured logging on every build path).
     configure_logging(log_format=args.log_format)
+
+    # Config pre-flight (no DB, no network): catch auth/token/path mistakes for the
+    # chosen backend up front, and report ALL of them — never fetch with a broken config.
+    config = load_source_config(args.sources)
+    issues = validate_source_config(
+        config, backend=args.backend, environ=os.environ, workspace=Path(args.workspace)
+    )
+    for issue in issues:
+        log = logger.error if issue.severity is Severity.ERROR else logger.warning
+        log(
+            "event=config_validation severity=%s source=%s msg=%s",
+            issue.severity.value,
+            issue.source or "-",
+            issue.message,
+        )
+        print(issue.render())
+    if args.validate_only:
+        print("config ok" if not has_errors(issues) else "config has errors (see above)")
+        return 1 if has_errors(issues) else 0
+    if has_errors(issues):
+        print("\nconfig validation failed — fix the errors above and re-run.")
+        return 1
+
     index_path = Path(
         args.index_path or os.environ.get("KB_LOCAL_INDEX_PATH") or ".kb-local-search-index.json"
     )
