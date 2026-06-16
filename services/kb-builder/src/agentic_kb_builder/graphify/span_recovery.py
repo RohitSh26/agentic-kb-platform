@@ -118,4 +118,53 @@ def recover_spans(*, file_text: str, suffix: str, path: str) -> dict[int, list[S
     return {}
 
 
-__all__ = ["SymbolSpan", "recover_python_spans", "recover_spans"]
+def extract_import_modules(*, file_text: str, suffix: str, path: str) -> tuple[str, ...]:
+    """Return the ABSOLUTE imported module dotted-names for a Python source file.
+
+    Rules:
+    - ``import a.b.c`` -> ``"a.b.c"``
+    - ``from a.b import c`` -> ``"a.b"`` (the containing package, not the attribute)
+    - Relative imports (level > 0, e.g. ``from . import x``) are SKIPPED — V1
+      limitation; resolving relative imports requires the full package layout.
+      Follow-up: emit relative edges once the build knows the full dotted package path.
+    - Non-Python suffixes -> empty (Python-first, same convention as recover_spans).
+    - Syntax errors -> empty (never raise; the build continues).
+
+    The result is deterministic: same text + suffix -> same tuple.
+    """
+    if suffix.lower() not in _PYTHON_SUFFIXES:
+        return ()
+    try:
+        tree = ast.parse(file_text)
+    except SyntaxError as error:
+        logger.warning(
+            "event=import_extract_parse_failed path=%s error=%s",
+            path,
+            f"{type(error).__name__}: {error}",
+        )
+        return ()
+    modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.append(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.level > 0:
+                # Relative import — skip (V1 limitation, requires package-layout knowledge).
+                continue
+            if node.module:
+                modules.append(node.module)
+    logger.info(
+        "event=import_extract_completed path=%s modules=%d",
+        path,
+        len(modules),
+    )
+    return tuple(modules)
+
+
+__all__ = [
+    "SymbolSpan",
+    "extract_import_modules",
+    "recover_python_spans",
+    "recover_spans",
+]

@@ -1,11 +1,17 @@
-"""Deterministic exact-span recovery (ADR-0018), hermetic — pure ast, no LLM, no DB.
+"""Deterministic exact-span recovery (ADR-0018) and import extraction (ADR-0020),
+hermetic — pure ast, no LLM, no DB.
 
 Asserts the span map keys on each symbol's def/class line (Graphify's join key) while
 the recovered body_text spans decorators + docstring + body, that bad input degrades
 gracefully (no spans, never a fabricated one), and that non-Python suffixes fall back.
+
+Import-extraction tests assert: ``import a.b`` and ``from a.b import c`` are captured,
+relative imports are skipped, non-Python suffixes return empty, syntax errors return
+empty, and the result is deterministic.
 """
 
 from agentic_kb_builder.graphify.span_recovery import (
+    extract_import_modules,
     recover_python_spans,
     recover_spans,
 )
@@ -77,3 +83,58 @@ def test_recovery_is_deterministic() -> None:
     assert recover_python_spans(file_text=SOURCE, path="m.py") == recover_python_spans(
         file_text=SOURCE, path="m.py"
     )
+
+
+# ---------------------------------------------------------------------------
+# ADR-0020: import extraction
+# ---------------------------------------------------------------------------
+
+IMPORT_SOURCE = (
+    "import a.b\n"
+    "import functools\n"
+    "from a.b import c\n"
+    "from . import sibling\n"  # relative — must be skipped
+    "from ..pkg import util\n"  # relative — must be skipped
+)
+
+
+def test_import_simple_captures_dotted_name() -> None:
+    mods = extract_import_modules(file_text="import a.b\n", suffix=".py", path="m.py")
+    assert "a.b" in mods
+
+
+def test_from_import_captures_package_not_attribute() -> None:
+    # `from a.b import c` -> module "a.b" (the package), not "a.b.c"
+    mods = extract_import_modules(file_text="from a.b import c\n", suffix=".py", path="m.py")
+    assert "a.b" in mods
+    assert "a.b.c" not in mods
+
+
+def test_relative_imports_are_skipped() -> None:
+    mods = extract_import_modules(file_text=IMPORT_SOURCE, suffix=".py", path="m.py")
+    # Relative imports (level > 0) must not appear
+    assert "sibling" not in mods
+    assert "util" not in mods
+    assert "pkg" not in mods
+
+
+def test_non_python_suffix_returns_empty() -> None:
+    mods = extract_import_modules(file_text="import a.b\n", suffix=".go", path="main.go")
+    assert mods == ()
+
+
+def test_syntax_error_returns_empty_not_exception() -> None:
+    mods = extract_import_modules(file_text="def broken(:\n", suffix=".py", path="bad.py")
+    assert mods == ()
+
+
+def test_import_extraction_is_deterministic() -> None:
+    a = extract_import_modules(file_text=IMPORT_SOURCE, suffix=".py", path="m.py")
+    b = extract_import_modules(file_text=IMPORT_SOURCE, suffix=".py", path="m.py")
+    assert a == b
+
+
+def test_all_absolute_imports_captured() -> None:
+    mods = extract_import_modules(file_text=IMPORT_SOURCE, suffix=".py", path="m.py")
+    assert "a.b" in mods
+    assert "functools" in mods

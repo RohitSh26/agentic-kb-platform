@@ -98,6 +98,11 @@ class CodeEdgeDraft(ArtifactModel):
 class GraphifyResult(ArtifactModel):
     artifacts: tuple[CodeArtifactDraft, ...] = ()
     edges: tuple[CodeEdgeDraft, ...] = ()
+    # Absolute dotted module names imported by this file (AST-extracted, Python only).
+    # Carried across the build so _write_pending_imports can resolve file→file `imports`
+    # edges after every file's artifacts are persisted (ADR-0020 §2).
+    # Relative imports are excluded in V1 — see extract_import_modules follow-up note.
+    import_modules: tuple[str, ...] = ()
 
 
 __all__ = [

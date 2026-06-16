@@ -43,6 +43,9 @@ from agentic_kb_builder.domain.schema_versions import (
     PARSER_CONFIG_VERSION,
     PROMPT_VERSION,
 )
+from agentic_kb_builder.graphify.keys import file_key as _file_key
+from agentic_kb_builder.graphify.span_recovery import extract_import_modules
+from agentic_kb_builder.graphify.to_edges import IMPORTS_CONFIDENCE
 from agentic_kb_builder.graphify.write import write_code_artifacts, write_code_edges
 from agentic_kb_builder.infrastructure.postgres.models import (
     KbBuildRun,
@@ -106,6 +109,33 @@ class _PendingEdges:
 
     repo: str
     drafts: tuple[CodeEdgeDraft, ...]
+
+
+@dataclass(frozen=True)
+class _PendingImports:
+    """Import modules from one graphified Python file, held until end-of-run resolution.
+
+    ADR-0020 §3: accumulated per-file so the post-run resolver can build a
+    module->file_key index from the full code_key_map and emit cross-file `imports` edges
+    without ever touching a file whose artifacts don't exist yet.
+    """
+
+    repo: str
+    from_file_key: str
+    import_modules: tuple[str, ...]
+
+
+def _match_import_files(repo_files: Sequence[tuple[str, str]], module: str) -> list[str]:
+    """Resolve an imported module to in-build file_keys by dotted-path SUFFIX.
+
+    A repo file lives under a source-tree prefix (services/kb-builder/src/...), but an
+    import names only the package-relative module (agentic_kb_builder.graphify.keys), so
+    a module M matches a file whose dotted path equals M or ends with ".M". Returns all
+    matches; the caller resolves only a UNIQUE match (0 = stdlib/third-party, >1 =
+    ambiguous — both dropped, never written dangling).
+    """
+    dotted_suffix = "." + module
+    return [fk for mod, fk in repo_files if mod == module or mod.endswith(dotted_suffix)]
 
 
 @dataclass
@@ -243,6 +273,7 @@ class BuildRunner:
         generation so the new version does not serve both."""
         code_key_map: dict[tuple[str, str], uuid.UUID] = {}
         pending_edges: list[_PendingEdges] = []
+        pending_imports: list[_PendingImports] = []
         seen_source_ids: set[uuid.UUID] = set()
         changed_source_ids: set[uuid.UUID] = set()
         for connector in connectors:
@@ -271,11 +302,12 @@ class BuildRunner:
                     fetched.source.source_version,
                 )
                 changed_id = await self._process_changed_source(
-                    counters, fetched, code_key_map, pending_edges
+                    counters, fetched, code_key_map, pending_edges, pending_imports
                 )
                 seen_source_ids.add(changed_id)
                 changed_source_ids.add(changed_id)
         await self._write_pending_edges(code_key_map, pending_edges)
+        await self._write_pending_imports(code_key_map, pending_imports, pending_edges)
         return seen_source_ids, changed_source_ids
 
     async def _finalize_graph(
@@ -442,6 +474,7 @@ class BuildRunner:
         fetched: NormalizedContent,
         code_key_map: dict[tuple[str, str], uuid.UUID],
         pending_edges: list[_PendingEdges],
+        pending_imports: list[_PendingImports],
     ) -> uuid.UUID:
         """Process one changed source; return its source_id (seen this build).
 
@@ -457,7 +490,7 @@ class BuildRunner:
             # untouched) yielding code_symbol artifacts with exact-span body_text.
             try:
                 artifact_ids = await self._graphify_gated(
-                    counters, fetched, source_id, code_key_map, pending_edges
+                    counters, fetched, source_id, code_key_map, pending_edges, pending_imports
                 )
             except Exception as error:
                 # One unparsable file must not abort the build; count it for the
@@ -589,6 +622,7 @@ class BuildRunner:
         source_id: uuid.UUID,
         code_key_map: dict[tuple[str, str], uuid.UUID],
         pending_edges: list[_PendingEdges],
+        pending_imports: list[_PendingImports],
     ) -> list[uuid.UUID]:
         """Graphify one changed code file; returns its code artifact ids so they
         reach embed/index on hits and misses alike (graphify itself is a
@@ -613,6 +647,24 @@ class BuildRunner:
             ref.path or "",
             ref.repo or "",
         )
+        # ADR-0020 §3: extract imported module names BEFORE the cache check so this runs
+        # on both cache hits and misses. extract_import_modules is pure AST (zero-LLM,
+        # zero-I/O) — negligible cost. Stashing here ensures the end-of-run resolver sees
+        # every changed file's imports regardless of whether the generation cache fires.
+        path = ref.path or ""
+        suffix = path.rsplit(".", 1)[-1] if "." in path else ""
+        import_modules = extract_import_modules(
+            file_text=fetched.text, suffix=f".{suffix}", path=path
+        )
+        repo = ref.repo or ""
+        if import_modules:
+            pending_imports.append(
+                _PendingImports(
+                    repo=repo,
+                    from_file_key=_file_key(path),
+                    import_modules=import_modules,
+                )
+            )
         if await self._generation_gate.lookup(cache_key) is not None:
             # Every file graph yields at least its code_file artifact, so an empty
             # mapping on a hit means a corrupt/unbackfilled cache row.
@@ -631,7 +683,6 @@ class BuildRunner:
             drafts=result.artifacts,
         )
         counters.artifacts_created += len(key_to_id)
-        repo = ref.repo or ""
         code_key_map.update({(repo, key): artifact_id for key, artifact_id in key_to_id.items()})
         if result.edges:
             pending_edges.append(_PendingEdges(repo=repo, drafts=result.edges))
@@ -661,6 +712,127 @@ class BuildRunner:
                 repo=pending.repo,
                 drafts=pending.drafts,
                 key_to_id=code_key_map,
+            )
+
+    async def _write_pending_imports(
+        self,
+        code_key_map: dict[tuple[str, str], uuid.UUID],
+        pending_imports: list[_PendingImports],
+        pending_edges: list[_PendingEdges],
+    ) -> None:
+        """ADR-0020 §4: resolve module names to file keys and write `imports` edges.
+
+        Resolution algorithm:
+        1. Build a module-path -> file_key index from ALL file keys in code_key_map:
+           - A key is a file key when it starts with ``"file:"``.
+           - Strip ``.py`` suffix and ``/__init__`` suffix, then convert ``/`` to ``.``
+             to get the candidate dotted module path.
+           - Index by (repo, module_dotted_path) -> file_key.
+        2. For each pending file's import_modules:
+           - Look up the module in the index. Require a UNIQUE match (identical module
+             path across different files is ambiguous -> drop; stdlib/third-party won't
+             match, which is also correct). Self-imports are skipped.
+           - Skip if the same (from_key, to_key, "imports") edge was already emitted by
+             a per-file graphify result in pending_edges (avoids duplication when the
+             graphifier's own AST extracted the same import path via ParsedImport).
+           - Emit a ``CodeEdgeDraft`` with edge_type="imports", confidence=1.0.
+        3. Write through write_code_edges so key->id resolution, dedup, and
+           trust_class=EXTRACTED are reused. Never writes a dangling edge.
+        """
+        if not pending_imports:
+            return
+
+        # Collect all (repo, from_key, to_key) imports already in pending_edges so we
+        # skip duplicates. The graphify per-file path (to_edges.py) already handles
+        # imports that the graphifier itself resolved (e.g. via ParsedImport.target_path);
+        # emitting them again here would create duplicate rows in the DB.
+        already_emitted: set[tuple[str, str, str]] = set()
+        for pe in pending_edges:
+            for draft in pe.drafts:
+                if draft.edge_type == "imports":
+                    already_emitted.add((pe.repo, draft.from_key, draft.to_key))
+
+        # Per-repo list of (file's dotted-path, file_key). A repo file lives under a
+        # source-tree prefix (e.g. services/kb-builder/src/), but an import names only the
+        # package-relative module (agentic_kb_builder.graphify.keys), so we resolve by
+        # SUFFIX: a module M matches a file whose dotted path equals M or ends with ".M".
+        # Several files can share a suffix; only a UNIQUE match resolves (else drop).
+        repo_files: dict[str, list[tuple[str, str]]] = {}
+        for repo, key in code_key_map:
+            if not key.startswith("file:"):
+                continue
+            normalized = key.removeprefix("file:")
+            for suffix in (".pyi", ".py"):
+                if normalized.endswith(suffix):
+                    normalized = normalized[: -len(suffix)]
+                    break
+            if normalized.endswith("/__init__"):
+                normalized = normalized[: -len("/__init__")]
+            module_dotted = normalized.replace("/", ".").replace("\\", ".").lstrip(".")
+            if not module_dotted:
+                continue
+            repo_files.setdefault(repo, []).append((module_dotted, key))
+
+        # Emit one CodeEdgeDraft per resolved unique import, per pending file.
+        by_repo: dict[str, list[CodeEdgeDraft]] = {}
+        for pending in pending_imports:
+            repo = pending.repo
+            from_key = pending.from_file_key
+            seen: set[str] = set()
+            for module in pending.import_modules:
+                candidates = _match_import_files(repo_files.get(repo, []), module)
+                if len(candidates) != 1:
+                    # 0 = stdlib/third-party/unbuilt (correct: drop, no dangling edge)
+                    # >1 = ambiguous (two files with same effective module path: drop)
+                    if len(candidates) > 1:
+                        logger.info(
+                            "event=imports_edge_dropped reason=ambiguous_module "
+                            "module=%s from_key=%s candidates=%d repo=%s",
+                            module,
+                            from_key,
+                            len(candidates),
+                            repo,
+                        )
+                    continue
+                to_key = candidates[0]
+                if to_key == from_key or to_key in seen:
+                    continue
+                if (repo, from_key, to_key) in already_emitted:
+                    # The graphifier's own extraction already covered this import edge
+                    # (e.g. ParsedImport from the graphifier's FileGraph). Skip to avoid
+                    # writing duplicate rows in knowledge_edge.
+                    logger.info(
+                        "event=imports_edge_skipped reason=already_in_pending_edges "
+                        "from_key=%s to_key=%s repo=%s",
+                        from_key,
+                        to_key,
+                        repo,
+                    )
+                    continue
+                seen.add(to_key)
+                by_repo.setdefault(repo, []).append(
+                    CodeEdgeDraft(
+                        from_key=from_key,
+                        to_key=to_key,
+                        edge_type="imports",
+                        confidence=IMPORTS_CONFIDENCE,
+                    )
+                )
+
+        for repo, drafts in by_repo.items():
+            inserted, dropped = await write_code_edges(
+                self._session,
+                kb_version=self._kb_version,
+                valid_from_seq=self._build_seq,
+                repo=repo,
+                drafts=tuple(drafts),
+                key_to_id=code_key_map,
+            )
+            logger.info(
+                "event=imports_edges_resolved repo=%s inserted=%d dropped=%d",
+                repo,
+                inserted,
+                dropped,
             )
 
     async def _embed_gated(self, counters: _Counters, artifact_id: uuid.UUID) -> None:

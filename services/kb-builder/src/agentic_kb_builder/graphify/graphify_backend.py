@@ -30,7 +30,11 @@ from agentic_kb_builder.domain import (
     NormalizedContent,
 )
 from agentic_kb_builder.graphify.keys import file_key, symbol_key
-from agentic_kb_builder.graphify.span_recovery import SymbolSpan, recover_spans
+from agentic_kb_builder.graphify.span_recovery import (
+    SymbolSpan,
+    extract_import_modules,
+    recover_spans,
+)
 from agentic_kb_builder.graphify.to_edges import (
     CALLS_CONFIDENCE,
     DEFINED_IN_CONFIDENCE,
@@ -278,16 +282,25 @@ class GraphifyGraphifier:
         # ADR-0018: recover exact symbol spans deterministically from the SAME text
         # Graphify parsed (no LLM) so code_symbol artifacts get a real, citable body.
         spans = recover_spans(file_text=content.text, suffix=suffix, path=path)
+        # ADR-0020 §2: extract imported module names from the same parse (Python only).
+        # Carry them on GraphifyResult so the build-level resolver can emit file→file
+        # `imports` edges after all files are processed (cross-file resolution pass).
+        import_modules = extract_import_modules(file_text=content.text, suffix=suffix, path=path)
         with tempfile.NamedTemporaryFile("w", suffix=suffix, encoding="utf-8") as handle:
             handle.write(content.text)
             handle.flush()
             tmp = Path(handle.name)
             data = cast("Mapping[str, Any]", extract([tmp], parallel=False))
-        return map_extraction(
+        result = map_extraction(
             data,
             source_file_override=path,
             file_basename_override=tmp.name,
             spans=spans,
+        )
+        return GraphifyResult(
+            artifacts=result.artifacts,
+            edges=result.edges,
+            import_modules=import_modules,
         )
 
 

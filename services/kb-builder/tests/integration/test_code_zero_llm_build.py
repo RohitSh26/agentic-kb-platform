@@ -29,7 +29,11 @@ from agentic_kb_builder.embeddings import LocalHashEmbedder
 from agentic_kb_builder.graphify import GraphifyGraphifier
 from agentic_kb_builder.indexing import SearchDocUpserter
 from agentic_kb_builder.infrastructure.azure_search.search_client import FakeSearchClient
-from agentic_kb_builder.infrastructure.postgres.models import KbBuildRun, KnowledgeArtifact
+from agentic_kb_builder.infrastructure.postgres.models import (
+    KbBuildRun,
+    KnowledgeArtifact,
+    KnowledgeEdge,
+)
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
@@ -189,3 +193,202 @@ async def test_code_only_build_is_zero_llm_and_keyword_searchable(
     assert code_symbol_docs, "code_symbol artifacts must project into the search index"
     hits = [d for d in code_symbol_docs if "helper" in (d.body_text or "")]
     assert hits, "the raw-code token 'helper' must be keyword-findable in the projection"
+
+
+@requires_db
+async def test_imports_edges_emitted_for_in_build_module(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    """ADR-0020: `imports` file->file edge is written when file A imports file B in the build.
+
+    SERVICE_PY starts with ``from pkg.util import helper`` — this resolves to util.py
+    (``pkg.util`` -> ``pkg/util.py``) which IS in the build, so an ``imports`` edge must
+    be written from service.py's code_file artifact to util.py's code_file artifact.
+    """
+    workspace, sources = _workspace(tmp_path)
+    client = FakeSearchClient()
+    await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-imports.1",
+        version="local",
+        collaborators=Collaborators(
+            wikifier=ExplodingWikifier(),
+            graphifier=GraphifyGraphifier(),
+            embedder=LocalHashEmbedder(),
+            indexer=SearchDocUpserter(session, client),
+            search_client=client,
+        ),
+        activate=True,
+    )
+
+    imports_edges = (
+        (
+            await session.execute(
+                select(KnowledgeEdge).where(
+                    KnowledgeEdge.edge_type == "imports",
+                    KnowledgeEdge.kb_version == "v-imports.1",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # service.py imports pkg.util -> resolves to pkg/util.py -> 1 imports edge
+    assert len(imports_edges) >= 1, "expected at least one imports edge (service->util)"
+
+    # Verify edge goes from the service.py code_file to the util.py code_file
+    from_ids = {e.from_artifact_id for e in imports_edges}
+    to_ids = {e.to_artifact_id for e in imports_edges}
+    from_artifacts = (
+        (
+            await session.execute(
+                select(KnowledgeArtifact).where(
+                    KnowledgeArtifact.artifact_id.in_(from_ids),
+                    KnowledgeArtifact.artifact_type == "code_file",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    to_artifacts = (
+        (
+            await session.execute(
+                select(KnowledgeArtifact).where(
+                    KnowledgeArtifact.artifact_id.in_(to_ids),
+                    KnowledgeArtifact.artifact_type == "code_file",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    from_titles = {a.title or "" for a in from_artifacts}
+    to_titles = {a.title or "" for a in to_artifacts}
+    assert any("service" in t for t in from_titles), (
+        f"imports edge from should be service.py, got {from_titles}"
+    )
+    assert any("util" in t for t in to_titles), (
+        f"imports edge to should be util.py, got {to_titles}"
+    )
+
+    # All edges must have trust_class=EXTRACTED and confidence=1.0 (no dangling)
+    for edge in imports_edges:
+        assert edge.trust_class == "EXTRACTED"
+        assert edge.confidence == 1.0
+
+
+@requires_db
+async def test_imports_edge_not_emitted_for_stdlib_or_third_party(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    """ADR-0020: third-party/stdlib imports (not in the build) produce NO edge — no dangling."""
+    # util.py has no imports; service.py imports functools (stdlib) which is not in the build.
+    # Only pkg.util is in the build and maps to util.py.
+    workspace, sources = _workspace(tmp_path)
+    client = FakeSearchClient()
+    await run_build(
+        session,
+        sources_path=str(sources),
+        workspace=str(workspace),
+        kb_version="v-imports.2",
+        version="local",
+        collaborators=Collaborators(
+            wikifier=ExplodingWikifier(),
+            graphifier=GraphifyGraphifier(),
+            embedder=LocalHashEmbedder(),
+            indexer=SearchDocUpserter(session, client),
+            search_client=client,
+        ),
+        activate=False,
+    )
+    all_edges = (
+        (
+            await session.execute(
+                select(KnowledgeEdge).where(
+                    KnowledgeEdge.edge_type == "imports",
+                    KnowledgeEdge.kb_version == "v-imports.2",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # No edge from functools (stdlib) or any other unbuilt module
+    # All edges that do exist must point to artifacts we persisted (not dangling)
+    all_artifact_ids = {
+        r.artifact_id
+        for r in (
+            (
+                await session.execute(
+                    select(KnowledgeArtifact).where(KnowledgeArtifact.kb_version == "v-imports.2")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    }
+    for edge in all_edges:
+        assert edge.to_artifact_id in all_artifact_ids, (
+            f"dangling imports edge: to_artifact_id {edge.to_artifact_id} not in build artifacts"
+        )
+        assert edge.from_artifact_id in all_artifact_ids, (
+            f"dangling imports edge: from_artifact_id {edge.from_artifact_id} "
+            "not in build artifacts"
+        )
+
+
+@requires_db
+async def test_imports_edges_idempotent_same_kb_version(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    """ADR-0020: running the build twice for the same kb_version does not duplicate edges.
+
+    The first pass writes the `imports` edges; the second pass with unchanged content
+    skips all source processing (incremental build: nothing changed => nothing rewritten)
+    so the edge count is stable — no duplication on retry.
+    """
+    workspace, sources = _workspace(tmp_path)
+    client = FakeSearchClient()
+    kb_version = "v-imports.idem"
+
+    async def _run() -> None:
+        await run_build(
+            session,
+            sources_path=str(sources),
+            workspace=str(workspace),
+            kb_version=kb_version,
+            version="local",
+            collaborators=Collaborators(
+                wikifier=ExplodingWikifier(),
+                graphifier=GraphifyGraphifier(),
+                embedder=LocalHashEmbedder(),
+                indexer=SearchDocUpserter(session, client),
+                search_client=client,
+            ),
+            activate=False,
+        )
+
+    async def _edge_count() -> int:
+        return (
+            await session.execute(
+                select(func.count())
+                .select_from(KnowledgeEdge)
+                .where(
+                    KnowledgeEdge.edge_type == "imports",
+                    KnowledgeEdge.kb_version == kb_version,
+                )
+            )
+        ).scalar_one()
+
+    await _run()
+    count_after_first = await _edge_count()
+    assert count_after_first >= 1, "first build must produce at least one imports edge"
+
+    await _run()
+    count_after_second = await _edge_count()
+    assert count_after_second == count_after_first, (
+        f"second run duplicated edges: {count_after_first} -> {count_after_second}"
+    )
