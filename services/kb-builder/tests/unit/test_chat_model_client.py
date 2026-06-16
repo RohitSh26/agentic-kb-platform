@@ -37,6 +37,19 @@ def test_strips_markdown_fences_and_surrounding_prose() -> None:
     assert generation.facts == ()
 
 
+def test_unwraps_single_element_array_object() -> None:
+    # Some models wrap the result object in a one-element array ([{...}]); the parser
+    # must unwrap it rather than failing an otherwise-valid generation (real Groq output).
+    raw = (
+        '[{"summary": "A doc about X.",'
+        ' "concepts": [{"name": "X", "description": "the thing"}],'
+        ' "facts": []}]'
+    )
+    generation = _parse_generation(raw)
+    assert generation.summary == "A doc about X."
+    assert generation.concepts[0].name == "X"
+
+
 def test_drops_malformed_concepts_and_facts() -> None:
     raw = (
         '{"summary": "S",'

@@ -139,6 +139,21 @@ def _parse_generation(raw: str) -> WikifyGeneration:
         # whole generation; _clean_items still drops any entry that survives malformed.
         data = repair_json(extracted, return_objects=True)
         logger.warning("event=wikify_model_json_repaired")
+    if isinstance(data, list):
+        # Some models wrap the single result object in a one-element array ([{...}]);
+        # unwrap to the first object rather than failing an otherwise-valid generation.
+        first = next(
+            (
+                cast("dict[str, object]", x)
+                for x in cast("list[object]", data)
+                if isinstance(x, dict)
+            ),
+            None,
+        )
+        if first is None:
+            raise ValueError(f"model did not return usable JSON: {raw[:1000]!r}")
+        data = first
+        logger.warning("event=wikify_model_json_unwrapped_array")
     if not isinstance(data, dict) or not data:
         # Pure prose ("I cannot help...") repairs to nothing usable; fail loudly so the
         # caller's retry loop resamples rather than recording an empty generation.
