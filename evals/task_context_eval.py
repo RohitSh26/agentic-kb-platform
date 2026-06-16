@@ -37,6 +37,10 @@ TOKEN_BUDGET = int(
     os.environ.get("TASK_CONTEXT_BUDGET", "7000")
 )  # initial Evidence Pack (6-8k rule)
 SEED_K = int(os.environ.get("TASK_CONTEXT_SEED_K", "8"))
+# Weight of a search_text hit in this harness's SEED scorer. Default 0: a naive substring
+# scorer can't exploit search_text without surfacing common code words ("source", "code")
+# that crowd good seeds — proper ranking (BM25/tsvector) is the broker's job (MCP phase).
+SEARCH_W = int(os.environ.get("TASK_CONTEXT_SEARCH_W", "0"))
 
 EXTRACTED_EDGES = frozenset({"defined_in", "calls", "imports", "exposes", "tests"})
 INFERRED_EDGES = frozenset({"documents", "implements", "mentions", "requests"})
@@ -86,7 +90,7 @@ def _seed(arts: list[dict], query: str, k: int, df: dict[str, int], n: int) -> l
             * (
                 (3 if w in title else 0)
                 + (2 if w in path else 0)
-                + (2 if w in search else 0)
+                + (SEARCH_W if w in search else 0)
                 + (1 if w in body else 0)
             )
             for w in qwords
