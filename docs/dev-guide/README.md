@@ -2,6 +2,11 @@
 
 Onboarding documentation for engineers joining the Agentic KB Platform.
 
+- **[00 — Getting Started](00-getting-started.md): START HERE.** The single end-to-end guide from
+  `git clone` to asking GitHub Copilot questions in VS Code — install, build a KB (no tokens/LLM),
+  serve it, connect VS Code, ask, and audit. Beginner-friendly, with troubleshooting throughout.
+  *(Merges the former guides 06, 08, and 10.)*
+
 - [01 — Platform design deep dive](01-design-deep-dive.md): what we are building, the two planes,
   the Postgres Knowledge Registry, the trust contract (trust buckets, the layered verifier, signed
   receipts), and the architecture invariants with pointers to where each is enforced in code.
@@ -25,26 +30,19 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
   fail-closed Entra auth setup (and the proposed local-dev alternative, ADR-0016), the `/health`
   probe (200 vs 503), and a worked `create_pack → open_evidence → graph.get_neighbors →
   verify_answer` walk through the tools to **use** the KB.
-- [06 — End-to-end local walkthrough](06-end-to-end-walkthrough.md): **start here to understand the
-  whole system.** One command (`make demo`) builds a KB, serves it through the broker, and drives all
-  five tools — Postgres + uv only, no Ollama/Azure — with a stage-by-stage explanation of how the
-  build plane, the registry, the Context Broker, and the agent tools fit together and which invariant
-  each step enforces.
+- [06 — End-to-end local walkthrough](06-end-to-end-walkthrough.md): **merged into [00](00-getting-started.md)**
+  (happy path = Parts 1–8; the architecture explanation = the Appendix).
 - [07 — What "MCP ready" means](07-what-mcp-ready-means.md): a plain-language explainer (with a worked
   example prompt) of the agent's context toolkit — create_pack, context.expand, open_evidence,
   verify_answer — and why an agent gets the full connected context cheaply and cited instead of
   reading whole files.
-- [08 — Run the whole system from scratch](08-run-everything-from-scratch.md): **fresh-Mac, copy-paste
-  reproduction** of the entire chain — build a KB from your real GitHub + ADO sources
-  (`--backend production`), serve the broker, drive the gated multi-agent runner with a Groq model,
-  and replay the run. (§7 has a no-tokens local-files alternative.)
+- [08 — Run the whole system from scratch](08-run-everything-from-scratch.md): **merged into
+  [00](00-getting-started.md)** (real GitHub + ADO sources = Part 9; multi-agent runner = Part 10).
 - [09 — GitHub Copilot CLI against the broker](09-copilot-cli-end-to-end.md): wire the **real
   GitHub Copilot CLI** to our MCP broker and run a non-interactive task — a third-party agent gets
   context only through the governed broker; verified the per-agent budget + audit apply to it.
-- [10 — VS Code (Copilot agent mode) against the broker](10-vscode-against-the-broker.md): the
-  **IDE** companion to 08 — open VS Code, connect the ships-in-repo `.vscode/mcp.json` to the
-  local broker, and ask Copilot's agent questions answered through the governed KB tools (cited +
-  replayable). Distinct from the terminal multi-agent runner.
+- [10 — VS Code (Copilot agent mode) against the broker](10-vscode-against-the-broker.md): **merged
+  into [00](00-getting-started.md)** (Parts 6–8 — open VS Code, connect `.vscode/mcp.json`, ask, audit).
 
 Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0017), build units
 in `docs/pr-briefs/` (through PR-33), cross-service agreements in `docs/contracts/`.

@@ -7,7 +7,7 @@
 
 > Scope note: the Copilot CLI runs **one** agent (Copilot's model) with tools. The full
 > **gated multi-agent orchestration** (orchestrator → subagents, human-approval gate at every
-> delegation, ADR-0021) is the Groq runner in `dev-guide 08 §4`. This doc is the single-agent
+> delegation, ADR-0021) is the Groq runner in `dev-guide 00 Part 10`. This doc is the single-agent
 > product runtime — Copilot calling our broker.
 
 ---
@@ -15,7 +15,7 @@
 ## 0. Prerequisites
 
 - A **GitHub account with a Copilot license**, logged in via `gh` (`gh auth status`).
-- A **built KB** + the **broker running** (dev-guide 08 §1–§3; `/health` → ok on `:8765`).
+- A **built KB** + the **broker running** (dev-guide 00 Parts 3–5; `/health` → ok on `:8765`).
 - **Node 18+** and npm.
 
 ---
@@ -103,6 +103,6 @@ context.open_evidence[denied]    (over budget again)
 | Symptom | Fix |
 |---|---|
 | `copilot` auth fails | Your `gh` account lacks a Copilot license, or run `copilot login` (device flow). Classic `ghp_` PATs aren't accepted. |
-| Copilot can't reach `context-broker` | The broker isn't running — start dev-guide 08 §3 first; confirm `curl :8765/health`. |
+| Copilot can't reach `context-broker` | The broker isn't running — start dev-guide 00 Part 5 first; confirm `curl :8765/health`. |
 | Copilot reads files instead of the broker | Add `--disable-mcp-server github/postgres-dev` and instruct it to use only `context-broker`; or restrict with `--available-tools`. |
 | `agent token allowance exceeded` | Working as intended (per-agent budget). Raise it via `MCP_AGENT_ALLOWANCES` on the broker if you want a bigger cap. |
