@@ -88,6 +88,33 @@ async def test_search_text_hit_retrieves_a_symbol_and_outranks_body(
     assert ids[0] == via_search  # search_text (1.5) outranks a body-only (1.0) hit
 
 
+async def test_distinctive_term_outranks_generic_overlap(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """IDF weighting: a rare, decisive token must beat broader overlap on common tokens.
+
+    Without it, a "…graphify…code…graph…" question ranks generic retrieval/ranking cards
+    over the graphify cards because every token scores equally. Here ``graphify`` hits only
+    a TITLE (raw 2.0) while the off-topic card hits TWO common tokens in its title (raw 4.0);
+    IDF lifts the rare ``graphify`` term above the common ``alpha``/``beta`` overlap.
+    """
+    async with factory() as session:
+        on_topic = await insert_artifact(session, title="graphify", body_text="extraction backend")
+        off_topic = await insert_artifact(
+            session, title="alpha beta gadget", body_text="generic helper"
+        )
+        # decoys make alpha/beta common (high df -> low IDF); graphify stays rare (df=1)
+        for i in range(8):
+            await insert_artifact(session, title=f"misc {i}", body_text="alpha beta filler")
+    client = PostgresKeywordSearchClient(factory)
+
+    hits = await client.search("graphify alpha beta", build_seq=ACTIVE_SEQ, top=10)
+
+    ids = [hit.artifact_id for hit in hits]
+    assert ids[0] == on_topic, "the distinctive term must dominate generic overlap"
+    assert ids.index(on_topic) < ids.index(off_topic)
+
+
 async def test_scores_are_floats_so_the_ranker_can_weight_them(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
