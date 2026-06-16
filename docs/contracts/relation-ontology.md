@@ -20,6 +20,7 @@ MUST treat an unknown `edge_type` as `AMBIGUOUS` (excluded from default traversa
 |---------------|------------------------------|--------------------------------------------------------------------------------|---------------------|----------------------|
 | `imports`     | file/module → module         | AST import statement, with source span                                         | `EXTRACTED`         | yes                  |
 | `calls`       | symbol → symbol              | AST call site resolved to a definition, with source span                       | `EXTRACTED`         | yes                  |
+| `defined_in`  | symbol → file                | the symbol's containing file (exact AST fact; the file is the symbol's key)    | `EXTRACTED`         | yes                  |
 | `inherits`    | class → class                | AST base-class reference, with source span                                     | `EXTRACTED`         | yes                  |
 | `exposes`     | symbol → endpoint/route      | AST decorator/route binding, with source span                                  | `EXTRACTED`         | yes                  |
 | `tests`       | test symbol → symbol         | AST reference from a test module to the symbol under test, with span           | `EXTRACTED`         | yes                  |

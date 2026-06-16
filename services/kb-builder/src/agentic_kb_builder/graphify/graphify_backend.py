@@ -31,7 +31,11 @@ from agentic_kb_builder.domain import (
 )
 from agentic_kb_builder.graphify.keys import file_key, symbol_key
 from agentic_kb_builder.graphify.span_recovery import SymbolSpan, recover_spans
-from agentic_kb_builder.graphify.to_edges import CALLS_CONFIDENCE, IMPORTS_CONFIDENCE
+from agentic_kb_builder.graphify.to_edges import (
+    CALLS_CONFIDENCE,
+    DEFINED_IN_CONFIDENCE,
+    IMPORTS_CONFIDENCE,
+)
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
@@ -126,6 +130,9 @@ def map_extraction(
 
     node_key: dict[str, str] = {}
     node_is_file: dict[str, str] = {}  # id -> source_file (file nodes only)
+    # (symbol key, file path) for every symbol whose file node exists in this extraction,
+    # so we can emit a deterministic symbol->file `defined_in` edge below (ADR-0020).
+    symbol_files: list[tuple[str, str]] = []
     artifacts: list[CodeArtifactDraft] = []
     for node in nodes:
         nid = str(node.get("id", ""))
@@ -140,6 +147,8 @@ def map_extraction(
         name = nid.removeprefix(prefix + "_") if prefix and nid.startswith(prefix + "_") else nid
         key = symbol_key(path, name)
         node_key[nid] = key
+        if path in file_node_id:  # only when the file artifact exists (never dangling)
+            symbol_files.append((key, path))
         start_line = _line(node.get("source_location"))
         span = _match_span(spans, start_line, node.get("label"))
         if span is not None:
@@ -186,6 +195,13 @@ def map_extraction(
                 confidence=confidence,
             )
         )
+
+    # defined_in -> symbol->file (ADR-0020). A symbol is defined in its file: a pure,
+    # deterministic AST fact (the file is the symbol's own key), highest trust. This gives
+    # every file a role (a hub of its symbols) so traversal can hop symbol<->file<->sibling
+    # symbols and pull only the relevant spans instead of reading the whole file.
+    for symbol_key_, file_path in symbol_files:
+        add(symbol_key_, file_key(file_path), "defined_in", DEFINED_IN_CONFIDENCE)
 
     # Imports -> file->file. Resolve the target to a known node's file; external imports
     # (targets with no node) are dropped — they would not resolve in our graph anyway.

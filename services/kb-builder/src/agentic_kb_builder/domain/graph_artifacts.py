@@ -14,7 +14,7 @@ from pydantic import Field, model_validator
 from agentic_kb_builder.domain.artifact_model import ArtifactModel
 
 CodeArtifactType = Literal["code_file", "code_symbol", "endpoint", "test"]
-CodeEdgeType = Literal["imports", "calls", "tests", "exposed_as"]
+CodeEdgeType = Literal["imports", "calls", "tests", "exposed_as", "defined_in"]
 SymbolKind = Literal["function", "class", "method"]
 
 

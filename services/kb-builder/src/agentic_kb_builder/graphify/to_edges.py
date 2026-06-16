@@ -10,6 +10,8 @@ logger = get_logger(__name__)
 # test-target extraction can be confused by dynamic dispatch, hence < 1.0.
 IMPORTS_CONFIDENCE = 1.0
 EXPOSED_AS_CONFIDENCE = 1.0
+# A symbol's containing file is an exact AST fact (the file is the symbol's own key).
+DEFINED_IN_CONFIDENCE = 1.0
 CALLS_CONFIDENCE = 0.9
 TESTS_CONFIDENCE = 0.9
 

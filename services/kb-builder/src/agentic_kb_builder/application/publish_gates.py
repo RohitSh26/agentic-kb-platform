@@ -54,6 +54,8 @@ ALLOWED_EDGE_TYPES: frozenset[str] = frozenset(
         # producer aliases in use today
         "exposed_as",
         "requests",
+        # structural code edges (ADR-0020): deterministic symbol->file / file->file
+        "defined_in",
     }
 )
 

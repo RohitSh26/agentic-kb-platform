@@ -236,7 +236,22 @@ def test_ambiguous_call_site_is_dropped_not_stored() -> None:
 
 def test_structural_relations_produce_no_edges() -> None:
     types = {e.edge_type for e in _result().edges}
-    assert types <= {"imports", "calls"}  # contains/method never become edges
+    # Graphify's own contains/method relations never become edges; the only edge types
+    # we emit are imports, calls (from the graph) and our deterministic defined_in (ADR-0020).
+    assert types <= {"imports", "calls", "defined_in"}
+
+
+def test_every_symbol_links_to_its_file_via_defined_in() -> None:
+    result = _result()
+    files = {a.key for a in result.artifacts if a.artifact_type == "code_file"}
+    symbols = [a for a in result.artifacts if a.artifact_type == "code_symbol"]
+    defined_in = {(e.from_key, e.to_key) for e in result.edges if e.edge_type == "defined_in"}
+    assert symbols and files
+    for sym in symbols:
+        # exactly one defined_in edge, pointing at a real code_file artifact (never dangling).
+        targets = [t for (f, t) in defined_in if f == sym.key]
+        assert len(targets) == 1, sym.key
+        assert targets[0] in files
 
 
 def test_mapping_is_deterministic() -> None:
