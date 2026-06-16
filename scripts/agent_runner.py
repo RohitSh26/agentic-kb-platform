@@ -504,7 +504,7 @@ async def _explain(
                     "task": task,
                     "approved_context_plan": "explain: retrieve the relevant code/docs",
                     "retrieval_profile": "default",
-                    "budget_tokens": 8000,
+                    "budget_tokens": 16000,
                     "intent": "how_does_x_work",
                 }
             },
@@ -514,15 +514,10 @@ async def _explain(
     cards: list[dict[str, Any]] = pack.get("evidence_cards", [])
     print(f"  pack_id={pack_id}  kb_version={pack.get('kb_version', '?')}  cards={len(cards)}")
 
-    seed_ids = [c["artifact_id"] for c in cards if c.get("artifact_id")][:3]
-    expanded: list[dict[str, Any]] = []
-    if seed_ids:
-        expanded = await _expand_into_pack(broker, pack_id=pack_id, seed_artifact_ids=seed_ids)
-    all_cards = (cards + expanded)[:_MAX_CARDS_IN_PROMPT]
-
-    # Open a few top spans so the explanation has real content (best-effort under budget).
+    # Open the top spans FIRST so the explanation is built from real code, not thin
+    # summaries — expand (breadth) must not starve open_evidence (depth) of budget.
     opened: list[str] = []
-    for card in all_cards[:3]:
+    for card in cards[:3]:
         eid = card.get("evidence_id")
         if not eid:
             continue
@@ -539,6 +534,13 @@ async def _explain(
         body = (ev.get("untrusted_content") or "").strip()
         if body:
             opened.append(f"[{card.get('display_citation', eid)}]\n{body[:1200]}")
+
+    # Then expand for the connected neighbourhood with the remaining budget.
+    seed_ids = [c["artifact_id"] for c in cards if c.get("artifact_id")][:3]
+    expanded: list[dict[str, Any]] = []
+    if seed_ids:
+        expanded = await _expand_into_pack(broker, pack_id=pack_id, seed_artifact_ids=seed_ids)
+    all_cards = (cards + expanded)[:_MAX_CARDS_IN_PROMPT]
 
     user = (
         f"Question: {task}\n\n"
