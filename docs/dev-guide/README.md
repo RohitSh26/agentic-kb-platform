@@ -35,8 +35,9 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
   verify_answer — and why an agent gets the full connected context cheaply and cited instead of
   reading whole files.
 - [08 — Run the whole system from scratch](08-run-everything-from-scratch.md): **fresh-Mac, copy-paste
-  reproduction** of the entire chain — build a KB (zero token, zero LLM), serve the broker, drive the
-  gated multi-agent runner with a Groq model, and replay the run. Needs only Postgres + uv + a Groq key.
+  reproduction** of the entire chain — build a KB from your real GitHub + ADO sources
+  (`--backend production`), serve the broker, drive the gated multi-agent runner with a Groq model,
+  and replay the run. (§7 has a no-tokens local-files alternative.)
 
 Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0017), build units
 in `docs/pr-briefs/` (through PR-33), cross-service agreements in `docs/contracts/`.

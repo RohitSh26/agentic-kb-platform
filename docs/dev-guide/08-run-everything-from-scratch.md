@@ -1,26 +1,35 @@
 # 08 — Run the whole system from scratch (fresh Mac)
 
-> Build a KB → serve it through the MCP Context Broker → drive the **gated multi-agent
-> orchestration** with a Groq model → **replay** the whole run. Every command below was run
-> end-to-end on macOS; the minimal path needs **no GitHub/ADO tokens, no Ollama, and no LLM
-> for the build** — just Postgres, uv, and a Groq API key (for the agent brains).
+> Build a KB from your **real GitHub + Azure DevOps sources** → serve it through the MCP
+> Context Broker → drive the **gated multi-agent orchestration** with a Groq model → **replay**
+> the run. Every command below was run end-to-end on macOS against the real sources.
 
 The chain you are standing up:
-`KB build → connected graph (defined_in/calls/imports) → search_text → MCP broker →
-context.expand (role-scoped, shared) → trust + ACL + budget → audit ledger →
-gated multi-agent runner → replay`.
+`KB build (GitHub code + docs, ADO wiki + work items) → connected graph
+(defined_in/calls/imports) → search_text → MCP broker → context.expand (role-scoped, shared)
+→ trust + ACL + budget → audit ledger → gated multi-agent runner → replay`.
 
 ---
 
 ## 0. Prerequisites
 
-- **Postgres 16**, reachable locally, with a role you can `createdb` as. The commands use
-  peer auth as `$USER` (Homebrew Postgres default): `brew install postgresql@16 && brew services start postgresql@16`.
-- **uv** (manages Python 3.12 per service): `curl -LsSf https://astral.sh/uv/install.sh | sh`.
-- **A Groq API key** — only the *agent runner* uses an LLM (the broker is deterministic and
-  the minimal build is zero-LLM). Get one at console.groq.com.
-- *(Optional, not needed for this guide)* Ollama + a real GitHub/ADO PAT — only for the
-  full-fidelity build in §7.
+- **Postgres 16**, reachable locally. The commands use peer auth as `$USER` (Homebrew default):
+  `brew install postgresql@16 && brew services start postgresql@16`. If your Postgres uses a
+  password/role, adjust the `DATABASE_URL` accordingly.
+- **uv**: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+- A repo-root **`.env`** with your real credentials (you said you'll provide these):
+
+```sh
+# .env  (repo root)
+GITHUB_TOKEN=ghp_...            # PAT with read access to the repo you index
+ADO_PAT=...                     # Azure DevOps PAT (Wiki + Work Items read) — if you index ADO
+LLM_PROVIDER=groq
+LLM_API_KEY=gsk_...             # Groq key — wikify (build) + the agent brains (runner)
+LLM_MODEL=llama-3.1-8b-instant
+```
+
+- *(Optional)* **Ollama** — only for the semantic (embedding) graph layer in §2b:
+  `ollama pull nomic-embed-text`. The deterministic graph + search_text do not need it.
 
 ```sh
 git clone https://github.com/RohitSh26/agentic-kb-platform.git
@@ -28,15 +37,9 @@ cd agentic-kb-platform
 make sync            # uv sync for both services + evals
 ```
 
-Create a repo-root `.env` with the Groq settings the runner reads:
-
-```sh
-# .env  (repo root)
-LLM_PROVIDER=groq
-LLM_API_KEY=gsk_your_groq_key_here
-LLM_MODEL=llama-3.1-8b-instant
-# LLM_BASE_URL is optional — the runner defaults it from LLM_PROVIDER.
-```
+The source set lives in **`scripts/test-sources.yaml`** (GitHub code + docs, ADO wiki + work
+items). Point it at *your* repo/org by editing `repo:` / `organization:` / `project:`; it reads
+from the cloud at build time. (Or use `services/kb-builder/sources.example.yaml` as a template.)
 
 ---
 
@@ -45,37 +48,52 @@ LLM_MODEL=llama-3.1-8b-instant
 kb-builder owns the schema; migrate it to head once.
 
 ```sh
-createdb agentic_kb_local
-export DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb_local"
+createdb agentic_kb
+export DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb"
 ( cd services/kb-builder && DATABASE_URL="$DATABASE_URL" uv run alembic upgrade head )
 ```
 
 ---
 
-## 2. Build the KB from the local code (zero token, zero LLM)
+## 2. Build the KB from your real sources (`--backend production`)
 
-Builds this repo's own Python source from your local checkout (`--backend local`). Code
-extraction is deterministic — **no LLM, no Ollama**. The `GITHUB_TOKEN` is a dummy: the
-config loader requires the env var to be *present*, but `--backend local` reads local files
-and ignores its value.
+Fetches GitHub code + docs and ADO wiki + work items for real. Code is extracted
+deterministically (zero-LLM); prose (docs/wiki/cards) is summarised by the Groq model from
+your `.env`.
 
 ```sh
 cd services/kb-builder
-GITHUB_TOKEN="local-unused" DATABASE_URL="$DATABASE_URL" \
+set -a; source ../../.env; set +a          # GITHUB_TOKEN, ADO_PAT, LLM_*
+DATABASE_URL="$DATABASE_URL" \
   uv run python -m agentic_kb_builder.build \
-    --backend local --workspace ../.. \
-    --sources ../../scripts/local-code-sources.yaml \
-    --no-git-metadata --index-path /tmp/kb_local_index.json
+    --sources ../../scripts/test-sources.yaml --workspace ../.. \
+    --backend production --no-git-metadata --log-format timeline
 cd ../..
 ```
 
-Expect: `llm_calls=0`, `publish_gates_passed`, `kb_version_activated`, `build status : active`.
-Sanity check (≈1,500 code symbols, a connected graph, search_text populated):
+Expect a real-time timeline ending in `publish_gates_passed`, `kb_version_activated`,
+`build status : active`. Sanity check (code graph + search_text):
 
 ```sh
-psql agentic_kb_local -c "select artifact_type, count(*) from knowledge_artifact where invalidated_at_seq is null group by 1 order by 2 desc;"
-psql agentic_kb_local -c "select count(*) as edges from knowledge_edge where invalidated_at_seq is null;"
+psql agentic_kb -c "select artifact_type, count(*) from knowledge_artifact where invalidated_at_seq is null group by 1 order by 2 desc;"
+psql agentic_kb -c "select count(*) as edges from knowledge_edge where invalidated_at_seq is null;"
 ```
+
+### 2b. (Optional) Add the semantic layer
+
+The build above is deterministic graph + wikified prose. To also add the LLM-judged prose↔code
+edges (needs Ollama for embeddings + Groq for the judge — a one-time, cached cost):
+
+```sh
+ollama pull nomic-embed-text     # once
+EMBEDDINGS_PROVIDER=ollama RELATIONSHIP_JUDGE=1 DATABASE_URL="$DATABASE_URL" \
+  uv run python -m agentic_kb_builder.build \
+    --sources ../../scripts/test-sources.yaml --workspace ../.. \
+    --backend production --no-git-metadata --log-format timeline
+```
+
+> A task-context eval showed the semantic layer adds ~0 to *task-context recall* — the
+> deterministic graph does the work — so 2b is optional for testing the agent flow.
 
 ---
 
@@ -88,7 +106,7 @@ running in its own terminal.
 cd services/mcp-server
 MCP_LOCAL_DEV_AUTH=1 MCP_HTTP_HOST=127.0.0.1 MCP_HTTP_PORT=8765 \
 MCP_ENTRA_TENANT_ID=local-dev MCP_ENTRA_AUDIENCE=api://local MCP_LOCAL_DEV_TEAMS=platform \
-DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb_local" \
+DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb" \
   uv run python -m agentic_mcp_server
 ```
 
@@ -117,7 +135,7 @@ delegation** (`[a]pprove / [e]dit / [r]eject / [x]abort`); build agents pull the
 ```sh
 cd agentic-kb-platform
 set -a; source .env; set +a
-export DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb_local"
+export DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb"
 export MCP_URL="http://127.0.0.1:8765/mcp/"
 
 # Interactive — you approve each gate:
@@ -144,7 +162,7 @@ You'll see: a plan → gate → `create_pack` (5 cards) → a gate before each s
 The "prove everything worked" view: every action and every approval gate, in time order.
 
 ```sh
-DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb_local" \
+DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb" \
   uv run --project services/mcp-server python -m agentic_mcp_server.replay <run_id>
 ```
 
@@ -158,22 +176,26 @@ cards + tokens) — one timeline per request.
 
 ```sh
 # stop the broker: Ctrl-C in its terminal (or)  pkill -f agentic_mcp_server
-dropdb agentic_kb_local      # optional: discard the local KB
+dropdb agentic_kb            # optional: discard the KB
 ```
 
 ---
 
-## 7. (Optional) Full-fidelity build — real sources + the semantic layer
+## 7. (Optional) No-tokens build — local files only
 
-The minimal path above is **code-only** and skips the semantic (embeddings + LLM-judge) layer
-— which a task-context eval showed adds ~0 to *task* context (the deterministic graph does the
-work). To reproduce the full build instead:
+To exercise the chain with **no GitHub/ADO tokens and no LLM** (code-only, deterministic), build
+this repo's own source from your local checkout instead of §2:
 
-- Real sources: use `scripts/test-sources.yaml` (or your own), set real `GITHUB_TOKEN` +
-  `ADO_PAT`, and build with `--backend production`.
-- Semantic edges: run Ollama (`ollama pull nomic-embed-text`) and add
-  `EMBEDDINGS_PROVIDER=ollama RELATIONSHIP_JUDGE=1` to the build command (adds prose↔code
-  edges via the LLM judge; one-time cost, cached). See dev-guide 06 for the build narrative.
+```sh
+cd services/kb-builder
+GITHUB_TOKEN="local-unused" DATABASE_URL="$DATABASE_URL" \
+  uv run python -m agentic_kb_builder.build \
+    --backend local --workspace ../.. \
+    --sources ../../scripts/local-code-sources.yaml --no-git-metadata
+```
+
+`--backend local` reads local files; the dummy `GITHUB_TOKEN` is required *present* but its value
+is ignored. You still need a Groq key for the §4 runner.
 
 ---
 
@@ -181,9 +203,10 @@ work). To reproduce the full build instead:
 
 | Symptom | Fix |
 |---|---|
-| `auth.token_env GITHUB_TOKEN is not set` on a local build | Set the dummy `GITHUB_TOKEN="local-unused"` (§2) — required present, value ignored by `--backend local`. |
-| `/health` → 503 `no_active_kb_version` | The build didn't activate — re-run §2 and check for `kb_version_activated`. |
-| runner: `LLM_API_KEY ... required` | Your `.env` lacks the Groq key, or you didn't `source .env` in the runner's shell (§4). |
+| build: `GITHUB_TOKEN`/`ADO_PAT` not set | `set -a; source ../../.env; set +a` before the build (§2). |
+| build: GitHub/ADO **404** | The PAT is expired/lacks scope, or the repo/org/project in `test-sources.yaml` isn't yours — fix the token or the identifiers. |
+| `/health` → 503 `no_active_kb_version` | The build didn't activate — re-check §2 for `kb_version_activated`. |
+| runner: `LLM_API_KEY ... required` | `.env` lacks the Groq key, or you didn't `source .env` in the runner's shell (§4). |
 | runner: `Connection refused` to `:8765` | The broker isn't running — start §3 first. |
 | `must use the asyncpg driver` | `DATABASE_URL` must start `postgresql+asyncpg://`. |
-| tool call → 401 | Local-dev auth not enabled, or a non-loopback host — see §3 (it refuses non-loopback). |
+| tool call → 401 | Local-dev auth not enabled, or a non-loopback host — see §3. |
