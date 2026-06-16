@@ -141,19 +141,17 @@ def _collapse_near_duplicates(
     return kept, dropped
 
 
-# An evidence card serializes to more than title+summary: two UUIDs, the source_uri, and
-# ~10 fixed fields. Counting only title+summary under-charged the budget ~15x, so a 5k
-# "budget" actually returned hundreds of cards. This fixed overhead reflects the real cost.
-_CARD_OVERHEAD_TOKENS = 40
-
-
 def card_tokens(card: EvidenceCard) -> int:
-    return (
-        _CARD_OVERHEAD_TOKENS
-        + estimate_tokens(card.title)
-        + estimate_tokens(card.summary)
-        + estimate_tokens(card.source_uri or "")
-    )
+    """Tokens the agent actually pays to ingest this card.
+
+    A card is delivered as its full JSON serialization — two UUIDs, the source_uri,
+    and ~10 fixed scalar/enum fields, not just title+summary. Charging only a few
+    hand-picked fields under-counted the wire cost ~3.3x, so the budget meter let an
+    agent ingest far more than its allowance thought. Estimate against the EXACT
+    serialized payload so the meter == what crosses the wire (verified against a live
+    run: 33.6 KB / 30 cards ~ 280 tok/card, which this now charges).
+    """
+    return estimate_tokens(card.model_dump_json())
 
 
 def authorization_decision(deps: BrokerDeps) -> AuthorizationDecision:

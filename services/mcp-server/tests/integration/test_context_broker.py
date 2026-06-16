@@ -664,8 +664,8 @@ async def test_create_pack_trims_cards_so_it_is_never_born_over_budget(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     # several distinct cards but a budget that only fits some ⇒ trimmed to fit.
-    # card_tokens now charges the per-card serialization overhead (uuids/uri/fields),
-    # so each card costs ~60 tokens; a budget of 150 fits some but not all five. The
+    # card_tokens charges the full serialized card (uuids + uri + every field), so a
+    # short card here costs ~100 tokens; a budget of 150 fits some but not all five. The
     # survivor count + token sum are derived from card_tokens below, so they stay correct.
     search = FakeSearchClient()
     hits = []
