@@ -278,6 +278,19 @@ Other good first questions:
 > **This is the win:** instead of reading entire files, the agent asked for exactly the connected
 > pieces it needed, within a budget, and cited them.
 
+> **How the orchestrator decides what to do (read this).** The orchestrator is a *router*: it
+> triages your request into one of two lanes (ADR-0022).
+> - **EXPLAIN** ("how/where/why does X work") → it answers directly, read-only, with a **Sources**
+>   footer (`file:symbol`) — no plan, no approval, no code-change specialists.
+> - **BUILD** ("add/fix/refactor X") → the gated specialist pipeline (plan → approve → implement →
+>   test → review → PRs).
+>
+> **Important honesty:** in VS Code this routing is **broker-*assisted***, not governed — the
+> triage is a *prompt*, so a weak model (e.g. GPT-5-mini) may still over-plan a question. Use a
+> strong model (Claude/Haiku, GPT-5) for reliable behavior. The **broker-*governed*** path — where
+> code, not a prompt, guarantees a question can never trigger a build — is the **terminal runner**
+> (Part 10), which routes deterministically.
+
 > **Troubleshooting**
 > | Symptom | Fix |
 > |---|---|
@@ -381,9 +394,16 @@ Then **serve and use it exactly as in Parts 5–8** (same server command, same V
 
 ## Part 10 — (Optional) The terminal multi-agent runner
 
-VS Code (Part 6) gives you **Copilot using our tools**. This project also ships a **5-agent gated
-orchestrator** — a script where a planner agent delegates to specialist agents and **pauses for your
-approval at every hand-off**. It's a different experience (terminal, not the IDE) on the same KB.
+VS Code (Part 6) gives you **Copilot using our tools**. This project also ships the **broker-governed
+reference**: a terminal runner that **routes deterministically in code** (ADR-0022). Unlike VS Code
+(where the lane is a prompt the model may ignore), here a question *cannot* reach the build pipeline:
+
+- a **question** ("explain how X works") runs the read-only EXPLAIN workflow — one pass, a cited
+  answer with a `file:symbol` Sources footer, no approval, no specialists;
+- a **change** ("add/fix/refactor X") runs the **5-agent gated pipeline** that delegates to
+  specialists and **pauses for your approval at every hand-off**.
+
+It uses an AI model only for the *wording* of answers/plans, not for the routing decision.
 
 It uses an AI model for the agents' "brains", so set `LLM_*` in `.env` first (a Groq key is cheap/
 fast). With the server from Part 5 running:
