@@ -30,6 +30,10 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
   five tools — Postgres + uv only, no Ollama/Azure — with a stage-by-stage explanation of how the
   build plane, the registry, the Context Broker, and the agent tools fit together and which invariant
   each step enforces.
+- [07 — What "MCP ready" means](07-what-mcp-ready-means.md): a plain-language explainer (with a worked
+  example prompt) of the agent's context toolkit — create_pack, context.expand, open_evidence,
+  verify_answer — and why an agent gets the full connected context cheaply and cited instead of
+  reading whole files.
 
 Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0017), build units
 in `docs/pr-briefs/` (through PR-33), cross-service agreements in `docs/contracts/`.
