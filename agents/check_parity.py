@@ -263,7 +263,7 @@ class ParityChecker:
         if fields.get("mode") != expected_mode:
             self.fail(f"{label}: mode must be {expected_mode!r} (create_pack grant decides)")
         tools = fields.get("tools")
-        expected = [f"context-broker_{tool}" for tool in canon_tools]
+        expected = [f"context-broker_{tool.replace('.', '_')}" for tool in canon_tools]
         if not isinstance(tools, dict) or list(tools) != expected:
             self.fail(f"{label}: tools map drifted from canonical allowed_tools")
         if isinstance(tools, dict) and any(value != "true" for value in tools.values()):
@@ -346,7 +346,7 @@ class ParityChecker:
         for target in agents:
             if target not in canon_names.values():
                 self.fail(f"{label}: subagent {target!r} is not a canonical agent name")
-        expected = [f"context-broker/{tool}" for tool in canon_tools]
+        expected = [f"context-broker/{tool.replace('.', '_')}" for tool in canon_tools]
         if agents:
             expected = [*expected, "agent"]
         if fields.get("tools") != expected:
@@ -395,7 +395,7 @@ class ParityChecker:
             # a role whose canon failed to parse has no tool list to compare against
             if role not in agents or role not in canon_tools_by_role:
                 continue
-            expected = {f"context-broker_{tool}": True for tool in canon_tools_by_role[role]}
+            expected = {f"context-broker_{tool.replace('.', '_')}": True for tool in canon_tools_by_role[role]}
             if agents[role].get("tools") != expected:
                 self.fail(f".opencode/opencode.json: agent[{role!r}].tools drifted from canon")
 

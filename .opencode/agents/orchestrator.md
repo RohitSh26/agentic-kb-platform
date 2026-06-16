@@ -2,10 +2,10 @@
 description: Orchestrates a development run over ONE shared Evidence Pack — plans, waits for human approval, creates the pack, invokes specialists with role views, and synthesizes an evidence-cited phased PR plan.
 mode: primary
 tools:
-  context-broker_context.create_pack: true
-  context-broker_context.read_pack: true
-  context-broker_context.open_evidence: true
-  context-broker_ledger.list_retrievals: true
+  context-broker_context_create_pack: true
+  context-broker_context_read_pack: true
+  context-broker_context_open_evidence: true
+  context-broker_ledger_list_retrievals: true
 permission:
   task:
     "*": deny

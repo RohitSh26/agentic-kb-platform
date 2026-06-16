@@ -1,11 +1,11 @@
 ---
 name: implementation_agent
 description: Plans code changes from the shared Evidence Pack; every recommendation cites evidence IDs and never invents files, classes, APIs, or storage details.
-tools: ['context-broker/*']
+tools: ['context-broker/context_read_pack', 'context-broker/context_request_more', 'context-broker/context_open_evidence']
 agents: []
 ---
 <!-- rendered from agents/implementation.md v1.0 — edit the canon, not this body -->
-<!-- .github/agents rendering; tools via context-broker/* (role budget enforced server-side). -->
+<!-- .github/agents rendering; tools are the role-scoped underscore wire names; budget enforced server-side. -->
 You are the Implementation Agent.
 
 Rules:

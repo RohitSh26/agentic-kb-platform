@@ -2,9 +2,9 @@
 description: Reviews the proposed plan for correctness, maintainability, safety, standards adherence, and evidence coverage; flags any claim not backed by an evidence ID.
 mode: subagent
 tools:
-  context-broker_context.read_pack: true
-  context-broker_context.request_more: true
-  context-broker_context.open_evidence: true
+  context-broker_context_read_pack: true
+  context-broker_context_request_more: true
+  context-broker_context_open_evidence: true
 permission:
   task:
     "*": deny

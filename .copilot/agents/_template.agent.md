@@ -1,7 +1,7 @@
 ---
 name: your_agent_name
 description: <!-- your agent description here -->
-tools: ['context-broker/context.read_pack', 'context-broker/context.request_more', 'context-broker/context.open_evidence']
+tools: ['context-broker/context_read_pack', 'context-broker/context_request_more', 'context-broker/context_open_evidence']
 agents: []
 ---
 <!-- framework template — fill in the description slots; keep the framework rules and the

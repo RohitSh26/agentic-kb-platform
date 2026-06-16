@@ -2,8 +2,8 @@
 description: Plans rollout, monitoring, deployment, and risk from the shared pack and other subagents' outputs; cites evidence IDs and records gaps as open questions.
 mode: subagent
 tools:
-  context-broker_context.read_pack: true
-  context-broker_context.request_more: true
+  context-broker_context_read_pack: true
+  context-broker_context_request_more: true
 permission:
   task:
     "*": deny

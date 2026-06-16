@@ -2,9 +2,9 @@
 description: Plans code changes from the shared Evidence Pack; every recommendation cites evidence IDs and never invents files, classes, APIs, or storage details.
 mode: subagent
 tools:
-  context-broker_context.read_pack: true
-  context-broker_context.request_more: true
-  context-broker_context.open_evidence: true
+  context-broker_context_read_pack: true
+  context-broker_context_request_more: true
+  context-broker_context_open_evidence: true
 permission:
   task:
     "*": deny

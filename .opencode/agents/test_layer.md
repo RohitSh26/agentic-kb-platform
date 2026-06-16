@@ -2,9 +2,9 @@
 description: Plans tests, fixtures, edge cases, and regression scope from the shared Evidence Pack; cites evidence IDs and surfaces untested paths as open questions.
 mode: subagent
 tools:
-  context-broker_context.read_pack: true
-  context-broker_context.request_more: true
-  context-broker_context.open_evidence: true
+  context-broker_context_read_pack: true
+  context-broker_context_request_more: true
+  context-broker_context_open_evidence: true
 permission:
   task:
     "*": deny

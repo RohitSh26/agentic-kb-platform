@@ -2,8 +2,8 @@
 description: Slices the approved implementation into reviewable PRs with title, scope, and dependency order; every PR's scope cites evidence IDs.
 mode: subagent
 tools:
-  context-broker_context.read_pack: true
-  context-broker_context.request_more: true
+  context-broker_context_read_pack: true
+  context-broker_context_request_more: true
 permission:
   task:
     "*": deny

@@ -16,43 +16,43 @@
   "agent": {
     "orchestrator": {
       "tools": {
-        "context-broker_context.create_pack": true,
-        "context-broker_context.read_pack": true,
-        "context-broker_context.open_evidence": true,
-        "context-broker_ledger.list_retrievals": true
+        "context-broker_context_create_pack": true,
+        "context-broker_context_read_pack": true,
+        "context-broker_context_open_evidence": true,
+        "context-broker_ledger_list_retrievals": true
       }
     },
     "implementation": {
       "tools": {
-        "context-broker_context.read_pack": true,
-        "context-broker_context.request_more": true,
-        "context-broker_context.open_evidence": true
+        "context-broker_context_read_pack": true,
+        "context-broker_context_request_more": true,
+        "context-broker_context_open_evidence": true
       }
     },
     "test_layer": {
       "tools": {
-        "context-broker_context.read_pack": true,
-        "context-broker_context.request_more": true,
-        "context-broker_context.open_evidence": true
+        "context-broker_context_read_pack": true,
+        "context-broker_context_request_more": true,
+        "context-broker_context_open_evidence": true
       }
     },
     "code_reviewer": {
       "tools": {
-        "context-broker_context.read_pack": true,
-        "context-broker_context.request_more": true,
-        "context-broker_context.open_evidence": true
+        "context-broker_context_read_pack": true,
+        "context-broker_context_request_more": true,
+        "context-broker_context_open_evidence": true
       }
     },
     "delivery_planner": {
       "tools": {
-        "context-broker_context.read_pack": true,
-        "context-broker_context.request_more": true
+        "context-broker_context_read_pack": true,
+        "context-broker_context_request_more": true
       }
     },
     "pr_planner": {
       "tools": {
-        "context-broker_context.read_pack": true,
-        "context-broker_context.request_more": true
+        "context-broker_context_read_pack": true,
+        "context-broker_context_request_more": true
       }
     }
   }

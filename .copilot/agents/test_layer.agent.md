@@ -1,7 +1,7 @@
 ---
 name: test_layer_agent
 description: Plans tests, fixtures, edge cases, and regression scope from the shared Evidence Pack; cites evidence IDs and surfaces untested paths as open questions.
-tools: ['context-broker/context.read_pack', 'context-broker/context.request_more', 'context-broker/context.open_evidence']
+tools: ['context-broker/context_read_pack', 'context-broker/context_request_more', 'context-broker/context_open_evidence']
 agents: []
 ---
 <!-- rendered from agents/test_layer.md v1.0 — edit the canon, not this body -->

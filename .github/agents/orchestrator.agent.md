@@ -1,7 +1,7 @@
 ---
 name: orchestrator
 description: Orchestrates a development run over ONE shared Evidence Pack — plans, waits for human approval, creates the pack, invokes specialists with role views, and synthesizes an evidence-cited phased PR plan.
-tools: ['context-broker/*', 'agent']
+tools: ['context-broker/context_create_pack', 'context-broker/context_read_pack', 'context-broker/context_open_evidence', 'context-broker/ledger_list_retrievals', 'agent']
 agents: ['implementation_agent', 'test_layer_agent', 'code_reviewer_agent', 'delivery_planner_agent', 'pr_planner_agent']
 handoffs:
   - label: Plan the implementation
@@ -27,9 +27,8 @@ handoffs:
 ---
 <!-- rendered from agents/orchestrator.md v1.0 — edit the canon, not this body -->
 <!-- `.github/agents/` is the location VS Code Copilot discovers (code.visualstudio.com/docs/agent-customization/custom-agents).
-     tools use the `context-broker/*` wildcard so every broker tool resolves regardless of how a
-     client normalizes dotted tool names; the per-agent budget/policy is enforced SERVER-SIDE by the
-     Context Broker, not by this list. The `agent` tool entry is required by the `agents` field. -->
+     tools are the role-scoped underscore WIRE names (context_create_pack, …) that the server
+     exposes; the per-agent budget/policy is also enforced SERVER-SIDE by the Context Broker. The `agent` tool entry is required by the `agents` field. -->
 
 You are the Orchestrator.
 

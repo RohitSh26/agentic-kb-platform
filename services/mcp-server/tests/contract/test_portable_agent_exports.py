@@ -273,7 +273,7 @@ def test_every_discovered_manifest_exists_in_both_renderings_plus_templates() ->
 
 def test_opencode_frontmatter_tools_exactly_match_canonical_allowed_tools() -> None:
     for role in _discovered_roles():
-        expected = [f"context-broker_{tool}" for tool in _canon_tools(role)]
+        expected = [f"context-broker_{tool.replace('.', '_')}" for tool in _canon_tools(role)]
         tools = _opencode_agent(role)[0]["tools"]
         assert isinstance(tools, dict), f"{role}: opencode tools must be a map"
         assert list(tools) == expected, f"{role}: opencode tools drifted from canon"
@@ -288,14 +288,14 @@ def test_opencode_json_per_agent_tools_exactly_match_canonical_allowed_tools() -
         "opencode.json agent entries must cover exactly the manifests in agents/"
     )
     for role in _discovered_roles():
-        expected = {f"context-broker_{tool}": True for tool in _canon_tools(role)}
+        expected = {f"context-broker_{tool.replace('.', '_')}": True for tool in _canon_tools(role)}
         assert agents[role]["tools"] == expected, f"{role}: opencode.json drifted from canon"
 
 
 def test_copilot_frontmatter_tools_exactly_match_canonical_allowed_tools() -> None:
     for role in _discovered_roles():
         fields, _ = _copilot_agent(role)
-        expected = [f"context-broker/{tool}" for tool in _canon_tools(role)]
+        expected = [f"context-broker/{tool.replace('.', '_')}" for tool in _canon_tools(role)]
         if fields.get("agents"):
             # the `agents` field requires the host `agent` tool — the single pinned
             # exception to broker-only tool lists (composition, not a data tool)
@@ -451,7 +451,7 @@ def test_opencode_skill_permissions_deny_by_default_and_track_the_canonical_gran
         if name == "_template":
             tools = fields["tools"]
             assert isinstance(tools, dict)
-            creates_packs = "context-broker_context.create_pack" in tools
+            creates_packs = "context-broker_context_create_pack" in tools
         else:
             creates_packs = _creates_packs(name)
         assert ("evidence-pack-orchestration" in allowed) == creates_packs, (
@@ -469,7 +469,7 @@ def test_request_discipline_skill_tracks_the_request_more_grant() -> None:
         if name == "_template":
             tools = fields["tools"]
             assert isinstance(tools, dict)
-            has_request_more = "context-broker_context.request_more" in tools
+            has_request_more = "context-broker_context_request_more" in tools
         else:
             has_request_more = "context.request_more" in _canon_tools(name)
         has_discipline = skill.get("context-request-discipline") == "allow"
@@ -612,8 +612,8 @@ def test_the_checker_flags_tool_drift_and_literal_credentials(tmp_path: Path) ->
     drifted = root / ".opencode" / "agents" / "code_reviewer.md"
     drifted.write_text(
         drifted.read_text().replace(
-            "context-broker_context.request_more: true",
-            "context-broker_context.create_pack: true",
+            "context-broker_context_request_more: true",
+            "context-broker_context_create_pack: true",
         )
     )
     literal = root / ".copilot" / "mcp" / "vscode-mcp.json"
