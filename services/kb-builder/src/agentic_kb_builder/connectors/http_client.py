@@ -57,12 +57,43 @@ _UNAUTHENTICATED_HINT = (
 )
 
 
-def _http_error_message(method: str, url: str, status: int, *, authenticated: bool = True) -> str:
+def _provider_message(response: httpx.Response) -> str | None:
+    """Pull the provider's own error text out of a 4xx/5xx body. GitHub and Azure
+    DevOps both return ``{"message": "..."}`` — surfacing it turns a bare "returned
+    400" into the actual reason (e.g. "Area path 'Platform\\KB' does not exist"). The
+    body is the SERVER's error text, never the request (which could carry creds), so
+    it is safe to include; truncate so an HTML error page can't flood the log."""
+    try:
+        data = response.json()
+    except (ValueError, UnicodeDecodeError):
+        data = None
+    if isinstance(data, dict):
+        message = data.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()[:300]
+    text = response.text.strip()
+    return text[:300] if text else None
+
+
+def _http_error_message(
+    method: str,
+    url: str,
+    status: int,
+    *,
+    authenticated: bool = True,
+    provider_message: str | None = None,
+) -> str:
     base = f"{method} {url} returned {status}"
     if not authenticated and status in (401, 403, 404):
-        return f"{base} ({_UNAUTHENTICATED_HINT})"
-    hint = _STATUS_HINTS.get(status)
-    return f"{base} ({hint})" if hint else base
+        hint: str | None = _UNAUTHENTICATED_HINT
+    else:
+        hint = _STATUS_HINTS.get(status)
+    parts = [base]
+    if hint:
+        parts.append(f"({hint})")
+    if provider_message:
+        parts.append(f"— server said: {provider_message}")
+    return " ".join(parts)
 
 
 class AsyncHttpClient:
@@ -201,7 +232,11 @@ class AsyncHttpClient:
                 )
                 raise HttpFetchError(
                     _http_error_message(
-                        method, url, response.status_code, authenticated=self._authenticated
+                        method,
+                        url,
+                        response.status_code,
+                        authenticated=self._authenticated,
+                        provider_message=_provider_message(response),
                     )
                 )
 

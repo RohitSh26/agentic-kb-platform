@@ -115,6 +115,20 @@ async def test_error_message_hints_name_the_likely_cause(
             await client.get_json("https://api.example.com/x")
 
 
+async def test_error_surfaces_provider_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 4xx body's `message` (GitHub/ADO both send one) must reach the error, turning a
+    bare 'returned 400' into the real reason — e.g. an ADO WIQL area-path mistake."""
+    monkeypatch.setattr("agentic_kb_builder.connectors.http_client.asyncio.sleep", _no_sleep)
+    body = {"message": "VS402371: Area path 'Platform\\KB' does not exist."}
+    client = AsyncHttpClient(
+        auth_header="Bearer x",
+        transport=httpx.MockTransport(lambda _req: httpx.Response(400, json=body)),
+    )
+    async with client:
+        with pytest.raises(HttpFetchError, match=r"server said: VS402371.*does not exist"):
+            await client.post_json("https://dev.azure.com/o/p/_apis/wit/wiql", {"query": "x"})
+
+
 @pytest.mark.parametrize("status", [401, 403, 404])
 async def test_unauthenticated_4xx_names_missing_auth(
     monkeypatch: pytest.MonkeyPatch, status: int

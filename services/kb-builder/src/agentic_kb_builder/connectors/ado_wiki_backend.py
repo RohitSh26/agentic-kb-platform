@@ -136,6 +136,12 @@ class AdoWikiBackend:
         """
         path = page.get("path")
         if isinstance(path, str) and path not in ("", "/"):
+            # ADO returns wiki paths with a LEADING SLASH ("/Architecture"). Strip it on
+            # SourceRef.path so include/exclude globs can match — the glob grammar forbids
+            # a leading '/', so an un-stripped path can never match any pattern (not even
+            # '**'), which silently dropped every wiki page. source_uri keeps the slash as
+            # a separator; fetch_text re-adds it for the ADO API.
+            rel_path = path.removeprefix("/")
             refs.append(
                 SourceRef(
                     source_type="azure_wiki",
@@ -143,7 +149,7 @@ class AdoWikiBackend:
                         f"azuredevops://{self._org}/{self._project}/_wiki/wikis/{self._wiki}{path}"
                     ),
                     source_version=sha,
-                    path=path,
+                    path=rel_path,
                     external_id=str(page["id"]) if page.get("id") is not None else None,
                 )
             )
@@ -179,7 +185,9 @@ class AdoWikiBackend:
 
     async def fetch_text(self, source: SourceRef) -> str:
         # Page content is untrusted data — returned verbatim, never interpreted.
-        path = source.path or "/"
+        # SourceRef.path is slash-relative (see _walk); the ADO API wants a leading slash.
+        rel = source.path or ""
+        path = rel if rel.startswith("/") else f"/{rel}"
         async with self._new_client() as client:
             page = await client.get_json(
                 self._path(f"/_apis/wiki/wikis/{self._wiki}/pages"),

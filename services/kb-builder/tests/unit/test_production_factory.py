@@ -64,7 +64,7 @@ async def test_ado_wiki_backend_lists_pages_via_factory() -> None:
     )
     assert isinstance(backend, AdoWikiBackend)
     refs = await backend.list_sources()
-    assert [r.path for r in refs] == ["/Home"]
+    assert [r.path for r in refs] == ["Home"]  # leading slash stripped so globs can match
     assert all(r.source_version == sha for r in refs)
 
 

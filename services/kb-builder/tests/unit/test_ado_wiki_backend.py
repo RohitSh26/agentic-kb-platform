@@ -86,11 +86,13 @@ async def test_list_sources_pins_head_sha_and_emits_refs() -> None:
     backend = AdoWikiBackend(_spec(), _TOKEN, client_transport=_make_handler())
     refs = await backend.list_sources()
 
-    assert {r.path for r in refs} == set(_PAGES)
+    # ADO returns "/Home"; the backend strips the leading slash so globs can match.
+    assert {r.path for r in refs} == {p.removeprefix("/") for p in _PAGES}
     for ref in refs:
         assert ref.source_version == _SHA
         assert ref.source_type == "azure_wiki"
-        assert ref.source_uri == f"azuredevops://myorg/proj/_wiki/wikis/mywiki{ref.path}"
+        # source_uri keeps the slash separator even though ref.path is slash-relative
+        assert ref.source_uri == f"azuredevops://myorg/proj/_wiki/wikis/mywiki/{ref.path}"
         # token never embedded in identity fields
         assert _TOKEN not in ref.source_uri
         assert _TOKEN not in ref.source_version
@@ -100,7 +102,7 @@ async def test_list_sources_is_sorted_by_path() -> None:
     # The mock returns the subtree unsorted; the backend must impose a stable order.
     backend = AdoWikiBackend(_spec(), _TOKEN, client_transport=_make_handler())
     paths = [r.path for r in await backend.list_sources()]
-    assert paths == sorted(_PAGES)
+    assert paths == sorted(p.removeprefix("/") for p in _PAGES)
 
 
 async def test_source_version_is_stable_across_runs() -> None:
@@ -115,8 +117,21 @@ async def test_fetch_text_returns_page_markdown() -> None:
     backend = AdoWikiBackend(_spec(), _TOKEN, client_transport=_make_handler())
     refs = await backend.list_sources()
     by_path = {r.path: r for r in refs}
-    text = await backend.fetch_text(by_path["/Guides/Setup"])
+    # ref.path is slash-relative; fetch_text must re-add the slash for the ADO API
+    # (the handler asserts the requested path is one of _PAGES, which are slash-prefixed).
+    text = await backend.fetch_text(by_path["Guides/Setup"])
     assert text == _PAGES["/Guides/Setup"]
+
+
+async def test_wiki_paths_are_matchable_by_include_globs() -> None:
+    """Regression: ADO wiki paths used to keep their leading slash, so NO include glob
+    (not even '**') could match them and every wiki page was silently dropped."""
+    from agentic_kb_builder.domain.source_config import PathFilter
+
+    backend = AdoWikiBackend(_spec(), _TOKEN, client_transport=_make_handler())
+    refs = await backend.list_sources()
+    assert any(PathFilter(["Guides/**"]).matches(r.path or "") for r in refs)
+    assert all(PathFilter(["**"]).matches(r.path or "") for r in refs)
 
 
 async def test_basic_auth_header_is_correct() -> None:
