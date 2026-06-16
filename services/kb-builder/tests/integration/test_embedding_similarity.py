@@ -46,15 +46,15 @@ class FakeEmbedder:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def embed(self, text_in: str) -> EmbeddingResult:
+    async def embed(self, text: str) -> EmbeddingResult:
         self.calls += 1
-        low = text_in.lower()
+        low = text.lower()
         vector = [
             1.0 if "auth" in low else 0.0,
             1.0 if "budget" in low else 0.0,
             0.2,
         ]
-        return EmbeddingResult(embedding_hash=content_hash(text_in), vector=vector)
+        return EmbeddingResult(embedding_hash=content_hash(text), vector=vector)
 
 
 @pytest.fixture(scope="module")
