@@ -104,6 +104,34 @@ async def main() -> int:
         edge_types = [n["edge_type"] for n in neighbors["neighbors"]]
         _ok("get_neighbors", f"walked the graph from card 1 → {len(edge_types)} EXTRACTED neighbor(s) {edge_types}")
 
+        # 3.5) context.expand — the keystone: from the retrieved cards, walk the graph
+        #      trust-tiered (EXTRACTED backbone first) to pull the FULL connected code
+        #      context in ONE governed call, charged against the pack budget — so the
+        #      agent reaches a symbol's file, callees and imports without reading files.
+        seeds = [c["artifact_id"] for c in cards[:3]]
+        expanded = _d(
+            await client.call_tool(
+                "context.expand",
+                {
+                    "request": {
+                        "context_pack_id": pack_id,
+                        "seed_artifact_ids": seeds,
+                        "trust_floor": "EXTRACTED",
+                        "include_inferred": False,
+                        "budget_tokens": 4000,
+                    }
+                },
+            )
+        )
+        exp = expanded["cards"]
+        _ok(
+            "context.expand",
+            f"expanded {len(seeds)} seed card(s) → {len(exp)} connected card(s) "
+            f"({expanded['tokens_used']} tok, truncated={expanded['truncated']})",
+        )
+        for c in exp[:6]:
+            print(f"        · [{c['card_type']}] {c['title']}")
+
         # 4) verify_answer — the trust boundary: every claim cites evidence ids; L0
         #    runs the mandatory deterministic provenance checks and returns a receipt.
         receipt = _d(
