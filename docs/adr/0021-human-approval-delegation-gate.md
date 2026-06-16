@@ -17,9 +17,20 @@ the plan, see each proposed hand-off, and be able to change it before work proce
 
 ## Decision
 
-**Every agent→agent delegation is gated by a human-approval checkpoint** — always-on for V1,
-no skip. The gate is **enforced by the orchestration runner, not by prompt instructions**, so
-a weak model cannot bypass it.
+**The orchestrator routes by need, and every delegation it makes is human-gated.** Not every
+request fans out to all five subagents: the orchestrator first proposes a **plan of action**
+(answer directly, or a specific chain of subagents), and the **number of gates equals the
+number of delegations** — a simple question ("explain how X works", "what calls Y") ends at
+one gate; a feature ("build X as phased PRs") gates each hand-off.
+
+- **Gate 1 (always): approve the plan of action.** Before doing anything, the orchestrator
+  surfaces *what it intends to do*; the human approves/edits/rejects that routing. A direct
+  answer therefore still has exactly one gate; a delegated workflow continues from here.
+- **Then one gate per delegation.** Each agent→agent hand-off is gated, always-on for V1, no
+  skip.
+
+The gate is **enforced by the orchestration runner, not by prompt instructions**, so a weak
+model cannot bypass it.
 
 At each gate the runner surfaces (a) the current agent's output/plan and (b) the proposed
 delegation (which subagent, with what instructions), then **blocks until the human chooses**:
