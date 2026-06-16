@@ -84,16 +84,17 @@ Copilot called our broker and **hit our governance** — the most convincing pos
 
 ```
 context.create_pack  [approved]  task=...per-agent token budgets...  cards=5
-context.expand       [approved]  seeds=3 -> 316 cards, 4990 tok, truncated
-context.open_evidence[denied]    agent token allowance exceeded: 4990 of 2500 used
+context.expand       [approved]  seeds=3 -> 30 cards (capped), truncated
+context.open_evidence[denied]    agent token allowance exceeded: ... of 2500 used
 context.read_pack    [reused]
 context.open_evidence[denied]    (over budget again)
 ```
 
-- Copilot retrieved via `create_pack`, **expanded the graph** (3 seeds → 316 connected cards),
-  then tried to open raw evidence and was **rejected by the per-agent token budget** (the
-  2,500-token agent allowance, distinct from the 8,000 run budget). It adapted via
-  `context.read_pack` and answered, **citing the real evidence IDs**.
+- Copilot retrieved via `create_pack`, **expanded the graph** (3 seeds → the closest connected
+  cards, capped at **30 / ~4,000 tokens** — BFS closest-first), then tried to open raw evidence
+  and was **rejected by the per-agent token budget** (the 2,500-token agent allowance, distinct
+  from the 8,000 run budget). It adapted via `context.read_pack` and answered, **citing the real
+  evidence IDs**.
 - Every call — including the **denied** ones — is in the ledger and renders in `replay`. The
   trust/budget/audit layer governed a real third-party agent, exactly as designed.
 

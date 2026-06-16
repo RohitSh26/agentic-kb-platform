@@ -41,6 +41,10 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
 - [09 — GitHub Copilot CLI against the broker](09-copilot-cli-end-to-end.md): wire the **real
   GitHub Copilot CLI** to our MCP broker and run a non-interactive task — a third-party agent gets
   context only through the governed broker; verified the per-agent budget + audit apply to it.
+- [10 — VS Code (Copilot agent mode) against the broker](10-vscode-against-the-broker.md): the
+  **IDE** companion to 08 — open VS Code, connect the ships-in-repo `.vscode/mcp.json` to the
+  local broker, and ask Copilot's agent questions answered through the governed KB tools (cited +
+  replayable). Distinct from the terminal multi-agent runner.
 
 Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0017), build units
 in `docs/pr-briefs/` (through PR-33), cross-service agreements in `docs/contracts/`.

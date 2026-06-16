@@ -36,10 +36,12 @@ The flow — exactly what was verified live:
    returns ~5 cards (titles + handles, not walls of text): `retrieve_cards`, `Requester`,
    `BrokerDeps`, `budgets.py`… — the actual budget-enforcement code. *No file read yet.*
 2. **Agent asks "give me everything connected" → `context.expand`** *(the keystone)*. From
-   those few cards the librarian walks the graph and returns the **whole connected
+   those few cards the librarian walks the graph and returns the **closest connected
    neighborhood** — the defining file, the functions it calls, what it imports. Live result:
-   **3 cards in → 248 connected pieces back, one request, capped at ~4,000 tokens.** The
-   agent now sees *how budgets work today* without grep'ing or reading whole files.
+   **3 cards in → 27 connected pieces back, one request, ~3,900 tokens** (the response is
+   capped — BFS closest-first — at **30 cards / ~4,000 tokens**, so it stays the immediate
+   neighborhood, not the whole frontier). The agent now sees *how budgets work today* without
+   grep'ing or reading whole files.
 3. **Agent opens the exact source it needs → `open_evidence`.** "Show me the real code of
    `retrieve_cards`." → the exact source span (scanned for prompt-injection, never rewritten).
 4. **Agent writes the code** using that precise context.
@@ -53,7 +55,7 @@ The flow — exactly what was verified live:
 | | Without MCP | With MCP (now) |
 |---|---|---|
 | How it gets context | reads/greps whole files, guesses | asks for the exact connected pieces |
-| Token cost | huge (dumps files into the prompt) | small + bounded (~4k for 248 linked pieces) |
+| Token cost | huge (dumps files into the prompt) | small + bounded (~4k for the connected neighborhood, capped at 30 cards) |
 | Did it find the right code? | maybe | follows real `defined_in` / `calls` / `imports` links |
 | Trust | claims may be invented | every claim cited + receipt-verified |
 | Audit | none | every step written to the retrieval ledger |
@@ -70,5 +72,5 @@ run builds on next.
 `docs/dev-guide/05` starts the broker against a built KB; `scripts/smoke_client.py` runs the
 worked path `create_pack → open_evidence → graph.get_neighbors → context.expand →
 verify_answer → list_retrievals`. The live run retrieved real code for a budget question,
-expanded 3 seed cards into 248 connected cards at 3,982 tokens, passed all L0 provenance
-checks, and ledgered every step.
+expanded 3 seed cards into 27 connected cards at 3,871 tokens (capped at 30 cards), passed
+all L0 provenance checks, and ledgered every step.

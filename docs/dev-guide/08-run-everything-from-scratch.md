@@ -124,6 +124,11 @@ MCP_URL=http://127.0.0.1:8765/mcp/ \
   uv run --project services/mcp-server python scripts/smoke_client.py
 ```
 
+> **Want to drive it from VS Code instead of the terminal runner below?** With the broker
+> running, jump to **dev-guide 10** — open the repo in VS Code, the ships-in-repo
+> `.vscode/mcp.json` connects Copilot's agent to this broker, and you ask questions answered
+> through the governed KB tools (cited + replayable).
+
 ---
 
 ## 4. Run the gated multi-agent system (Groq brain)
@@ -148,8 +153,9 @@ uv run --project services/mcp-server python scripts/agent_runner.py --auto-appro
 ```
 
 You'll see: a plan → gate → `create_pack` (5 cards) → a gate before each subagent →
-`context.expand` at the first build role (e.g. 3 seeds → ~245 connected cards) →
-`verify_answer: passed`. It prints the `run_id` and a replay command at the end.
+`context.expand` at the first build role (3 seeds → the closest connected cards, capped at
+**30 / ~4,000 tokens**) → `verify_answer: passed`. It prints the `run_id` and a replay command
+at the end.
 
 > The generated code is **rough** — that's the small 8B Groq model, on purpose. This tests the
 > *plumbing* (right-code retrieval, gates, trust, audit). A stronger model lifts quality with
