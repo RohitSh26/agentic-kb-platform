@@ -25,6 +25,7 @@ EXPECTED_TOOLS = {
     "context.read_pack",
     "context.request_more",
     "context.open_evidence",
+    "context.expand",
     "graph.get_neighbors",
     "ledger.list_retrievals",
     "context.verify_answer",

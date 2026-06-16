@@ -11,6 +11,8 @@ from agentic_mcp_server.mcp.tool_schemas.base import McpModel
 from agentic_mcp_server.mcp.tool_schemas.context import (
     CreatePackRequest,
     CreatePackResponse,
+    ExpandRequest,
+    ExpandResponse,
     OpenEvidenceRequest,
     OpenEvidenceResponse,
     ReadPackRequest,
@@ -42,6 +44,7 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
     "context.read_pack": ToolSchema(ReadPackRequest, ReadPackResponse),
     "context.request_more": ToolSchema(RequestMoreRequest, RequestMoreResponse),
     "context.open_evidence": ToolSchema(OpenEvidenceRequest, OpenEvidenceResponse),
+    "context.expand": ToolSchema(ExpandRequest, ExpandResponse),
     "graph.get_neighbors": ToolSchema(GetNeighborsRequest, GetNeighborsResponse),
     "ledger.list_retrievals": ToolSchema(ListRetrievalsRequest, ListRetrievalsResponse),
     "context.verify_answer": ToolSchema(VerifyAnswerRequest, VerificationReceipt),

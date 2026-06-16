@@ -9,6 +9,8 @@ from agentic_mcp_server.mcp.tool_schemas.base import MCP_SCHEMA_VERSION, McpMode
 from agentic_mcp_server.mcp.tool_schemas.context import (
     CreatePackRequest,
     CreatePackResponse,
+    ExpandRequest,
+    ExpandResponse,
     OpenEvidenceRequest,
     OpenEvidenceResponse,
     ReadPackRequest,
@@ -49,6 +51,8 @@ __all__ = [
     "CreatePackResponse",
     "EvidenceCard",
     "EvidenceLevel",
+    "ExpandRequest",
+    "ExpandResponse",
     "GetNeighborsRequest",
     "GetNeighborsResponse",
     "GraphNeighbor",

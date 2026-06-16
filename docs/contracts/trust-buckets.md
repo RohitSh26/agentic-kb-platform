@@ -32,7 +32,10 @@ free-floating number.
    The deterministic mechanisms may ONLY assign `EXTRACTED`. The LLM judge may assign any
    `INFERRED_*` / `AMBIGUOUS` / `REJECTED`, never `EXTRACTED`.
 2. **Traversal:** `graph.get_neighbors` default `trust_floor=EXTRACTED`; `AMBIGUOUS`/`REJECTED` never
-   in default results.
+   in default results. `context.expand` honors **identical** `trust_floor` / `include_inferred`
+   semantics: EXTRACTED backbone first (phase 1), INFERRED tier second only when
+   `include_inferred=true` (phase 2 starting from all phase-1 nodes). `AMBIGUOUS`/`REJECTED`
+   are never returned by either tool, whatever the floor or flag.
 3. **Verifier:** L0 rejects any cited evidence whose supporting edge is not `EXTRACTED` (or an
    `EXTRACTED`-trust fact). `INFERRED_*` edges can route an agent to evidence but cannot themselves
    be the cited support for a platform-trusted claim.

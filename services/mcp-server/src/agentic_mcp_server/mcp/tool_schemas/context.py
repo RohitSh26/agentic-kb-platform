@@ -6,6 +6,7 @@ on stub tools. extra="forbid" plus required justification fields is what
 rejects a bare {"query": "..."} at the schema layer — the broker never sees it.
 """
 
+import uuid
 from typing import Literal, Self
 
 from pydantic import Field, model_validator
@@ -111,6 +112,39 @@ class RequestMoreResponse(McpModel):
         if self.status == "denied" and not self.denial_reason:
             raise ValueError("denial_reason is required when status is 'denied'")
         return self
+
+
+TrustFloor = Literal["EXTRACTED", "INFERRED_HIGH", "INFERRED_LOW"]
+
+
+class ExpandRequest(McpModel):
+    """Trust-tiered graph expansion from seed artifact ids.
+
+    Walks the knowledge graph EXTRACTED-first (deterministic backbone), then
+    INFERRED if ``include_inferred=True``, returning new evidence cards within
+    ``budget_tokens``. If ``context_pack_id`` is given the expansion is charged
+    against that pack's run budget and new cards are registered into it so they
+    are openable by handle.
+
+    ``trust_floor`` and ``include_inferred`` behave identically to
+    ``graph.get_neighbors`` (docs/contracts/trust-buckets.md): AMBIGUOUS and
+    REJECTED are never returned; INFERRED_* only when ``include_inferred=True``.
+    """
+
+    seed_artifact_ids: list[uuid.UUID] = Field(min_length=1)
+    trust_floor: TrustFloor = "EXTRACTED"
+    include_inferred: bool = False
+    budget_tokens: int = Field(ge=1)
+    context_pack_id: str | None = None
+
+
+class ExpandResponse(McpModel):
+    """Evidence cards for the trust-tiered BFS expansion from the seeds."""
+
+    cards: list[EvidenceCard]
+    tokens_used: int = Field(ge=0)
+    truncated: bool = False
+    authorization: AuthorizationDecision
 
 
 class OpenEvidenceRequest(McpModel):

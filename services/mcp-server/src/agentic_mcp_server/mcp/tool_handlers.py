@@ -21,6 +21,9 @@ from agentic_mcp_server.context_broker import (
     request_more,
     verify,
 )
+from agentic_mcp_server.context_broker import (
+    expand as expand_mod,
+)
 from agentic_mcp_server.context_broker.dependencies import (
     BrokerDeps,
     current_client_identity,
@@ -31,6 +34,7 @@ from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
 from agentic_mcp_server.mcp.tool_schemas.context import (
     CreatePackRequest,
+    ExpandRequest,
     OpenEvidenceRequest,
     ReadPackRequest,
     RequestMoreRequest,
@@ -72,6 +76,10 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         _client("context.open_evidence")
         return await evidence.open_evidence(deps, request, current_requester())
 
+    async def expand(request: ExpandRequest) -> McpModel:
+        _client("context.expand")
+        return await expand_mod.expand(deps, request, current_requester())
+
     async def get_neighbors(request: GetNeighborsRequest) -> McpModel:
         _client("graph.get_neighbors")
         return await graph.get_neighbors(deps, request, current_requester())
@@ -100,6 +108,7 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         "context.read_pack": read_pack,
         "context.request_more": request_more_handler,
         "context.open_evidence": open_evidence,
+        "context.expand": expand,
         "graph.get_neighbors": get_neighbors,
         "ledger.list_retrievals": list_retrievals,
         "context.verify_answer": verify_answer,

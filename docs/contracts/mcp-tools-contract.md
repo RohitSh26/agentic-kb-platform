@@ -3,7 +3,7 @@
 > Versioned tool surface served by mcp-server. Schema before code: every tool
 > has a frozen pydantic request/response model (`extra="forbid"`) in
 > `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`, registered in
-> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.7.0"` (1.1.0 = PR-13:
+> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.8.0"` (1.1.0 = PR-13:
 > `authorization` decision on every retrieval response, `injection_*` markers
 > on cards and expansions; 1.2.0 = PR-18: `read_pack.role` opened from the
 > closed six-role enum to a free-form charset-guarded string — response
@@ -33,7 +33,14 @@
 > ONLY with a valid, client-matched, passing receipt; a clear STRUCTURED denial
 > otherwise; a non-opted-in client is unaffected. Client scopes ADDITIVELY gate
 > the tool surface and compose WITH (never replace) the user team ACLs. All
-> additive: a deployment that ships no client registry is unchanged).
+> additive: a deployment that ships no client registry is unchanged);
+> 1.8.0 = adds `context.expand`: trust-tiered BFS expansion from seed artifact
+> ids, returning new evidence cards within a token budget. EXTRACTED backbone
+> first, INFERRED tier second (only when `include_inferred=true`). Budget
+> enforced; `truncated=true` when the budget cap was hit. If
+> `context_pack_id` is given, the expansion is charged against that pack's run
+> budget and new cards are registered into it so they are openable by handle.
+> Writes a `retrieval_event` row per call.
 
 ## The V1 tools
 
@@ -45,6 +52,7 @@
 | `context.open_evidence` | Expand one evidence card to L2/L3 raw text, by handle |
 | `graph.get_neighbors` | Graph traversal over `knowledge_edge` (depth 1–3) |
 | `ledger.list_retrievals` | Retrieval ledger for a run |
+| `context.expand` | Trust-tiered BFS expansion from seed artifact ids; returns evidence cards |
 | `context.verify_answer` | L0 provenance verifier; returns a verification receipt |
 | `context.platform_trust` | Official-client gate: is the client's answer platform-trusted? |
 
@@ -62,6 +70,12 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   `question`, `why_needed`, `decision_needed`, `already_checked_evidence_ids`,
   `max_tokens`. A bare `{"query": ...}` fails schema validation.
 - `context.open_evidence`: `context_pack_id`, `evidence_id`, `max_tokens`.
+- `context.expand`: `seed_artifact_ids` (non-empty list of artifact UUIDs),
+  `trust_floor` (default `EXTRACTED`) ∈ `EXTRACTED | INFERRED_HIGH | INFERRED_LOW`,
+  `include_inferred` (default `false`), `budget_tokens ≥ 1`, optional
+  `context_pack_id`. AMBIGUOUS and REJECTED are never returned (same admission
+  rules as `graph.get_neighbors`). A bare `{"seed_artifact_ids": []}` fails
+  schema validation (min_length=1).
 - `graph.get_neighbors`: `artifact_id`, optional `edge_types[]`, `depth` 1–3,
   `trust_floor` (default `EXTRACTED`), `include_inferred` (default `false`).
 - `context.verify_answer`: `answer_id`, `claims[]` (each `claim_id`, `text`,
@@ -137,6 +151,16 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   never promotes a contradicting doc into claim support, and is **independent of
   the L0 `not_stale` verifier check** — a doc downranked here still passes L0 if
   its source is in the active version.
+- `context.expand` returns `{cards, tokens_used, truncated, authorization}`.
+  `truncated=true` when the budget cap was hit and not all BFS results fit. The
+  response carries an `authorization` decision. Each call writes one
+  `retrieval_event` with `tool_name="context.expand"`, `status="approved"`,
+  and the seed + expanded artifact ids. If `context_pack_id` is given, the
+  pack's run budget is charged (`pack.charge`) and new cards are inserted into
+  the pack (openable by handle via `context.open_evidence`). Seeds already in
+  the pack are de-duplicated from the returned cards. Budget clamped to
+  `max_run_budget_tokens` and, when a pack is supplied, to the pack's
+  `run_remaining_tokens`.
 - `graph.get_neighbors` is **trust-aware** (ADR-0011, `trust-buckets.md`).
   Each returned `GraphNeighbor` carries the connecting edge's `trust_class` and
   a `claim_supporting` flag (true only for `EXTRACTED`). `trust_floor` defaults
