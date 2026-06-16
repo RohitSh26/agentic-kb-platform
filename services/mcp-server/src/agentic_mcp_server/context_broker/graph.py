@@ -166,6 +166,17 @@ async def get_neighbors(
         for f in found
     ]
 
+    # Count neighbors by edge_type for the observability details.
+    neighbors_by_type: dict[str, int] = {}
+    for n in neighbors:
+        neighbors_by_type[n.edge_type] = neighbors_by_type.get(n.edge_type, 0) + 1
+    _graph_details: dict[str, object] = {
+        "artifact_id": str(request.artifact_id),
+        "depth": request.depth,
+        "trust_floor": request.trust_floor,
+        "neighbors_by_type": neighbors_by_type,
+    }
+
     async with deps.session_factory() as session:
         await insert_event(
             session,
@@ -178,6 +189,7 @@ async def get_neighbors(
                 query_text=str(request.artifact_id),
                 returned_artifact_ids=[n.artifact_id for n in neighbors],
                 latency_ms=int((time.monotonic() - started) * 1000),
+                details=_graph_details,
             ),
         )
     audit_context_access(

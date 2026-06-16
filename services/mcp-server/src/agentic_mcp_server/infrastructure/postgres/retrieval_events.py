@@ -5,9 +5,11 @@ docs/contracts/postgres-knowledge-registry.md and the contract tests keep the
 two in sync. Every broker tool call inserts exactly one row.
 """
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,14 +23,28 @@ _INSERT_EVENT_QUERY = text(
         run_id, context_pack_id, agent_name, tool_name, {RETRIEVAL_STATUS_COLUMN},
         query_text, normalized_query, retrieval_profile, kb_version,
         returned_artifact_ids, reused_evidence_ids, new_evidence_ids,
-        cache_hit, semantic_reuse, tokens_returned, latency_ms
+        cache_hit, semantic_reuse, tokens_returned, latency_ms, details
     ) VALUES (
         :run_id, CAST(:context_pack_id AS uuid), :agent_name, :tool_name, :status,
         :query_text, :normalized_query, :retrieval_profile, :kb_version,
         CAST(:returned_artifact_ids AS uuid[]), CAST(:reused_evidence_ids AS uuid[]),
         CAST(:new_evidence_ids AS uuid[]),
-        :cache_hit, :semantic_reuse, :tokens_returned, :latency_ms
+        :cache_hit, :semantic_reuse, :tokens_returned, :latency_ms,
+        CAST(:details AS jsonb)
     )
+    """
+)
+
+# Operator replay: load ALL events for a run in time order (not subject-scoped).
+# Used by the `replay` CLI (agentic_mcp_server.replay) for operator review.
+_REPLAY_EVENTS_QUERY = text(
+    f"""
+    SELECT retrieval_id, run_id, kb_version, agent_name, tool_name,
+           {RETRIEVAL_STATUS_COLUMN} AS status, cache_hit, tokens_returned,
+           reused_evidence_ids, new_evidence_ids, details, created_at, latency_ms
+    FROM {RETRIEVAL_EVENT_TABLE}
+    WHERE run_id = :run_id
+    ORDER BY created_at, retrieval_id
     """
 )
 
@@ -93,6 +109,9 @@ class RetrievalEventInsert:
     semantic_reuse: bool = False
     tokens_returned: int = 0
     latency_ms: int | None = None
+    # Per-tool observability payload (migration 0017). Never block the tool on
+    # observability — always pass best-effort; None means no structured details.
+    details: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +127,25 @@ class RetrievalEventRow:
     reused_evidence_ids: list[uuid.UUID]
     new_evidence_ids: list[uuid.UUID]
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class ReplayEventRow:
+    """All columns needed by the operator replay CLI."""
+
+    retrieval_id: uuid.UUID
+    run_id: str
+    kb_version: str
+    agent_name: str
+    tool_name: str
+    status: str
+    cache_hit: bool
+    tokens_returned: int
+    reused_evidence_ids: list[uuid.UUID]
+    new_evidence_ids: list[uuid.UUID]
+    details: dict[str, Any] | None
+    created_at: datetime
+    latency_ms: int | None
 
 
 async def insert_event(session: AsyncSession, event: RetrievalEventInsert) -> None:
@@ -130,6 +168,7 @@ async def insert_event(session: AsyncSession, event: RetrievalEventInsert) -> No
             "semantic_reuse": event.semantic_reuse,
             "tokens_returned": event.tokens_returned,
             "latency_ms": event.latency_ms,
+            "details": json.dumps(event.details) if event.details is not None else None,
         },
     )
     await session.commit()
@@ -167,6 +206,33 @@ async def list_events(
             reused_evidence_ids=list(row.reused_evidence_ids or []),
             new_evidence_ids=list(row.new_evidence_ids or []),
             created_at=row.created_at,
+        )
+        for row in result
+    ]
+
+
+async def replay_events(session: AsyncSession, run_id: str) -> list[ReplayEventRow]:
+    """All events for ``run_id`` in time order — operator-scoped (not subject-gated).
+
+    Used by the replay CLI (`python -m agentic_mcp_server.replay <run_id>`) to
+    present a full action timeline. Never called from a broker tool — operator only.
+    """
+    result = await session.execute(_REPLAY_EVENTS_QUERY, {"run_id": run_id})
+    return [
+        ReplayEventRow(
+            retrieval_id=row.retrieval_id,
+            run_id=row.run_id,
+            kb_version=row.kb_version,
+            agent_name=row.agent_name,
+            tool_name=row.tool_name,
+            status=row.status,
+            cache_hit=row.cache_hit,
+            tokens_returned=row.tokens_returned or 0,
+            reused_evidence_ids=list(row.reused_evidence_ids or []),
+            new_evidence_ids=list(row.new_evidence_ids or []),
+            details=row.details,
+            created_at=row.created_at,
+            latency_ms=row.latency_ms,
         )
         for row in result
     ]

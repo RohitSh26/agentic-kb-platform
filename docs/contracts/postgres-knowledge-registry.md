@@ -42,7 +42,7 @@ and the migrations. Summary:
 | `generation_cache` / `generation_cache_artifact` | Cache key ⇒ generated outputs ⇒ produced artifacts. | kb-builder |
 | `embedding_cache` | Embedding call gate, keyed `(artifact_id, text_hash, embedding_model)`. The vector itself is stored as a float array (`ARRAY(double precision)` — no pgvector in V1), so the Search index rebuilds without re-embedding. | kb-builder |
 | `kb_build_run` | One row per nightly build: `kb_version`, `build_seq` (monotonic BIGINT, UNIQUE — the interval-membership cutoff), `status` (`running`/`completed`/`failed`/`validation_failed`/`active`/`superseded`), counters, timestamps. | kb-builder |
-| `retrieval_event` | Ledger: one row per MCP retrieval call — `run_id`, `context_pack_id`, `agent_name`, `tool_name`, `status`, `query_text`/`normalized_query`, `retrieval_profile`, `kb_version`, `source_filters`, `returned_artifact_ids`, `reused_evidence_ids`, `new_evidence_ids`, `cache_hit`, `semantic_reuse`, `tokens_returned`, `latency_ms`, `created_at`. | **mcp-server** |
+| `retrieval_event` | Ledger: one row per MCP retrieval call — `run_id`, `context_pack_id`, `agent_name`, `tool_name`, `status`, `query_text`/`normalized_query`, `retrieval_profile`, `kb_version`, `source_filters`, `returned_artifact_ids`, `reused_evidence_ids`, `new_evidence_ids`, `cache_hit`, `semantic_reuse`, `tokens_returned`, `latency_ms`, `created_at`, `details` (nullable JSONB — per-tool observability payload; see below). | **mcp-server** |
 
 ## Columns mcp-server depends on (pinned by its contract tests)
 
@@ -81,3 +81,27 @@ resolve. Evidence ids are artifact UUIDs rendered as strings in V1, which is
 why the `*_evidence_ids` columns are UUID arrays.
 
 Renaming or retyping these requires a coordinated change in both services.
+
+## `retrieval_event.details` JSONB — per-tool observability payload (migration 0017)
+
+The `details` column is **nullable JSONB**. It is populated best-effort: a tool
+never blocks on observability. Shape is per `tool_name`:
+
+| `tool_name` | Shape |
+|---|---|
+| `context.create_pack` | `{task, candidates_considered, cards:[{artifact_id,title,score,card_type}], budget:{allowed,used,remaining}}` |
+| `context.expand` | `{seed_artifact_ids, tiers:["EXTRACTED",...], edge_types_followed:{<edge_type>:n,...}, cards_added, truncated, tokens}` |
+| `context.open_evidence` | `{evidence_id, level, injection_flagged, tokens}` |
+| `graph.get_neighbors` | `{artifact_id, depth, trust_floor, neighbors_by_type:{<edge_type>:n,...}}` |
+| `context.verify_answer` | `{answer_id, claims:[{claim_id, checks:{...}, ok}], overall}` |
+| `governance.checkpoint` | `{from_agent, to_agent, plan_summary, decision, edits}` |
+
+The `governance.checkpoint` event is written by `record_checkpoint()` in the
+mcp-server; `tool_name` is `"governance.checkpoint"` and `status` is the gate
+decision (`approved`/`edited`/`rejected`/`aborted`). It is not an MCP tool — it
+is an internal broker call made by the agent runner (ADR-0021) at each delegation
+gate. The `run_id` is the run being gated; `agent_name` is the `from_agent`.
+
+The `replay` CLI (`python -m agentic_mcp_server.replay <run_id>`) loads all
+`retrieval_event` rows for a run in `created_at` order and prints a
+human-readable action timeline for operator review.

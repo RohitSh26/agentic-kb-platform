@@ -135,6 +135,24 @@ async def create_pack(
     normalized = normalize_query(query)
     pack.history.record(normalized, [card.evidence_id for card in cards])
 
+    _details: dict[str, object] = {
+        "task": request.task,
+        "candidates_considered": len(cards),
+        "cards": [
+            {
+                "artifact_id": str(card.artifact_id),
+                "title": card.title,
+                "score": card.authority_score,
+                "card_type": card.card_type,
+            }
+            for card in cards
+        ],
+        "budget": {
+            "allowed": budget_tokens,
+            "used": used_tokens,
+            "remaining": budget_tokens - used_tokens,
+        },
+    }
     async with deps.session_factory() as session:
         await insert_event(
             session,
@@ -152,6 +170,7 @@ async def create_pack(
                 new_evidence_ids=[card.artifact_id for card in cards],
                 tokens_returned=used_tokens,
                 latency_ms=int((time.monotonic() - started) * 1000),
+                details=_details,
             ),
         )
     # store the pack only after the ledger write succeeds: no orphan packs

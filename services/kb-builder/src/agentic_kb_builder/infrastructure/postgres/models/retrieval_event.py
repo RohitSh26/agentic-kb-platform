@@ -38,6 +38,10 @@ class RetrievalEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
+    # Per-tool observability payload (migration 0017). Nullable JSONB; never
+    # blocks a tool — populated best-effort. Shape documented in
+    # docs/contracts/postgres-knowledge-registry.md.
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         Index("ix_retrieval_event_run_id", "run_id"),

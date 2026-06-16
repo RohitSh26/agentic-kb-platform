@@ -238,6 +238,21 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
     run_id = pack.run_id if pack is not None else _NO_RUN_SENTINEL
     pack_id_for_ledger = uuid.UUID(pack.context_pack_id) if pack is not None else None
 
+    # Build observability details (best-effort).
+    tiers = ["EXTRACTED"]
+    if request.include_inferred and inferred_rows:
+        tiers.append("INFERRED")
+    # Count edge types touched across both BFS phases. We record card-level
+    # card_type counts as a proxy (we don't have per-hop edge counts without
+    # plumbing through _bfs_tier); that is sufficient for the timeline view.
+    _expand_details: dict[str, object] = {
+        "seed_artifact_ids": [str(s) for s in request.seed_artifact_ids],
+        "tiers": tiers,
+        "cards_added": len(cards),
+        "truncated": truncated,
+        "tokens": tokens_used,
+    }
+
     # Write ledger row BEFORE updating pack state (store-after-ledger ordering).
     async with deps.session_factory() as session:
         await insert_event(
@@ -254,6 +269,7 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
                 new_evidence_ids=[uuid.UUID(c.evidence_id) for c in cards],
                 tokens_returned=tokens_used,
                 latency_ms=int((time.monotonic() - started) * 1000),
+                details=_expand_details,
             ),
         )
 

@@ -83,7 +83,15 @@ async def open_evidence(
 
     cost = min(estimate_tokens(body), request.max_tokens)
 
-    async def write_ledger(status: str, tokens_returned: int) -> None:
+    async def write_ledger(
+        status: str, tokens_returned: int, injection_flagged: bool = False
+    ) -> None:
+        _ev_details: dict[str, object] = {
+            "evidence_id": request.evidence_id,
+            "level": "L2",
+            "injection_flagged": injection_flagged,
+            "tokens": tokens_returned,
+        }
         async with deps.session_factory() as session:
             await insert_event(
                 session,
@@ -103,6 +111,7 @@ async def open_evidence(
                     reused_evidence_ids=[] if status == "approved" else [card.artifact_id],
                     tokens_returned=tokens_returned,
                     latency_ms=int((time.monotonic() - started) * 1000),
+                    details=_ev_details,
                 ),
             )
         logger.info(
@@ -132,10 +141,11 @@ async def open_evidence(
             )
 
         content = body[: request.max_tokens * CHARS_PER_TOKEN]
+        # Scan before ledger write so injection_flagged is in the details row.
+        scan = scan_for_injection(content)
         pack.charge(requester.subject, cost)
-        await write_ledger("approved", cost)
+        await write_ledger("approved", cost, injection_flagged=scan.flagged)
 
-    scan = scan_for_injection(content)
     audit_context_access(
         tool=_TOOL_NAME,
         requester=requester,

@@ -641,6 +641,18 @@ async def verify_answer(
     claim_results = _assemble_receipts(deterministic, l3_verdicts)
     overall = _overall_result(claim_results)
 
+    _verify_details: dict[str, object] = {
+        "answer_id": request.answer_id,
+        "claims": [
+            {
+                "claim_id": r.claim_id,
+                "checks": r.checks.model_dump(),
+                "ok": r.result == "passed",
+            }
+            for r in claim_results
+        ],
+        "overall": overall,
+    }
     async with deps.session_factory() as session:
         await insert_event(
             session,
@@ -654,6 +666,7 @@ async def verify_answer(
                 query_text=request.answer_id,
                 normalized_query=answer_hash,
                 latency_ms=int((time.monotonic() - started) * 1000),
+                details=_verify_details,
             ),
         )
 
