@@ -1,9 +1,10 @@
 """Postgres keyword implementation of the SearchClient protocol.
 
-The local/default relevance backend: scores knowledge_artifact rows by how
-many query tokens hit the title (weight 2) or body (weight 1). Deliberately
-simple — relevance is only a hint; Postgres remains the truth that hydrates
-every card. Azure AI Search slots in behind the same protocol later.
+The local/default relevance backend: scores knowledge_artifact rows by how many
+query tokens hit the title (weight 2), search_text (1.5, the curated code retrieval
+surface) or body (weight 1). Deliberately simple — relevance is only a hint; Postgres
+remains the truth that hydrates every card. Azure AI Search slots in behind the same
+protocol later.
 """
 
 from dataclasses import dataclass
@@ -23,8 +24,13 @@ def _escape_like(token: str) -> str:
 
 
 def _build_query(token_count: int) -> str:
+    # search_text (PR-34) is the deterministic retrieval surface for code symbols (split
+    # identifiers, docstring words, signatures, called names) — it carries the concept
+    # words a task names that a raw span misses, so it scores ABOVE body_text but below
+    # title. NULL search_text (non-code / span-less) simply never matches (ELSE 0.0).
     score = " + ".join(
         f"(CASE WHEN title ILIKE :tok{i} ESCAPE '\\' THEN 2.0 ELSE 0.0 END"
+        f" + CASE WHEN search_text ILIKE :tok{i} ESCAPE '\\' THEN 1.5 ELSE 0.0 END"
         f" + CASE WHEN body_text ILIKE :tok{i} ESCAPE '\\' THEN 1.0 ELSE 0.0 END)"
         for i in range(token_count)
     )

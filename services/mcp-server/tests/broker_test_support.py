@@ -81,6 +81,7 @@ async def insert_artifact(
     span_start: int | None = None,
     span_end: int | None = None,
     source_type: str = "github_doc",
+    search_text: str | None = None,
 ) -> uuid.UUID:
     source_id = uuid.uuid4()
     artifact_id = uuid.uuid4()
@@ -103,11 +104,11 @@ async def insert_artifact(
         text(
             "INSERT INTO knowledge_artifact (artifact_id, artifact_type, source_id, title,"
             " body_text, kb_version, knowledge_kind, authority_score, acl_teams,"
-            " valid_from_seq, invalidated_at_seq, span_start, span_end) VALUES"
+            " valid_from_seq, invalidated_at_seq, span_start, span_end, search_text) VALUES"
             " (CAST(:artifact_id AS uuid), :artifact_type, CAST(:source_id AS uuid), :title,"
             " :body_text, :kb_version, :knowledge_kind, :authority_score,"
             " CAST(:acl_teams AS text[]), :valid_from_seq, :invalidated_at_seq,"
-            " :span_start, :span_end)"
+            " :span_start, :span_end, :search_text)"
         ),
         {
             "artifact_id": str(artifact_id),
@@ -123,6 +124,7 @@ async def insert_artifact(
             "invalidated_at_seq": invalidated_at_seq,
             "span_start": span_start,
             "span_end": span_end,
+            "search_text": search_text,
         },
     )
     await session.commit()

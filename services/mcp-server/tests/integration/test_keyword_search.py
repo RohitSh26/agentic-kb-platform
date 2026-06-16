@@ -63,6 +63,31 @@ async def test_title_hits_outrank_body_hits(factory: async_sessionmaker[AsyncSes
     assert hits[0].score > hits[1].score
 
 
+async def test_search_text_hit_retrieves_a_symbol_and_outranks_body(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # PR-34: a concept word the agent searches ("authentication") lives in a symbol's
+    # search_text (split identifiers / docstring) but NOT its raw body — search_text must
+    # surface it, and weight 1.5 ranks it above a row that only body-matches.
+    async with factory() as session:
+        via_search = await insert_artifact(
+            session,
+            title="validate_token",
+            body_text="def validate_token(): ...",
+            search_text="authentication token validate verify session",
+        )
+        via_body = await insert_artifact(
+            session, title="notes", body_text="see the authentication doc"
+        )
+    client = PostgresKeywordSearchClient(factory)
+
+    hits = await client.search("authentication", build_seq=ACTIVE_SEQ, top=10)
+
+    ids = [hit.artifact_id for hit in hits]
+    assert via_search in ids, "a search_text-only concept hit must be retrievable"
+    assert ids[0] == via_search  # search_text (1.5) outranks a body-only (1.0) hit
+
+
 async def test_scores_are_floats_so_the_ranker_can_weight_them(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
