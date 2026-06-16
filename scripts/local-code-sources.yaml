@@ -1,0 +1,18 @@
+# Code-only LOCAL build (dev-guide 08). Builds this repo's Python source from the
+# local checkout via `--backend local` — NO GitHub/ADO tokens, NO LLM (code extraction
+# is deterministic/zero-LLM), NO Ollama. Produces code_symbols + search_text + the
+# defined_in/calls/imports graph: everything the MCP broker + agent runner need.
+version: 1
+defaults:
+  acl_teams: []          # [] = org-public (any authenticated subject)
+sources:
+  - name: platform-code
+    type: github_code
+    repo: RohitSh26/agentic-kb-platform
+    branch: main
+    include:
+      - "services/**/*.py"
+    exclude:
+      - "**/tests/**"
+    auth:
+      token_env: GITHUB_TOKEN   # ignored by --backend local (reads local files)
