@@ -42,6 +42,9 @@ from agentic_mcp_server.telemetry.audit import audit_context_access
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on cards read_pack returns, so a large pack never floods an agent's context.
+_MAX_READ_PACK_CARDS = 50
+
 
 def _trim_to_budget(
     cards: list[EvidenceCard], budget_tokens: int, *, run_id: str
@@ -221,7 +224,10 @@ async def read_pack(
         artifact.artifact_id
         for artifact in deps.authorization.filter_artifacts(requester, artifacts)
     }
-    cards = [card for card in all_cards if card.artifact_id in allowed_ids]
+    # Cap the returned cards so read_pack can never dump an unbounded pack into the agent's
+    # context (creator order: create_pack's reranked cards first, then expand's closest
+    # neighbours). A bounded handle list is enough to choose what to open_evidence/expand.
+    cards = [card for card in all_cards if card.artifact_id in allowed_ids][:_MAX_READ_PACK_CARDS]
     audit_context_access(
         tool="context.read_pack",
         requester=requester,

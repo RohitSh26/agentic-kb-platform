@@ -50,6 +50,11 @@ logger = logging.getLogger(__name__)
 
 _TOOL_NAME = "context.expand"
 _NO_RUN_SENTINEL = "-"
+# Cap the number of connected cards returned, not just the token budget. BFS order is
+# closest-first, so the top _MAX_EXPAND_CARDS are the nearest neighbours — an agent needs
+# the immediate neighbourhood, not the whole 2-hop frontier (which bloated read_pack and
+# every consumer's context). Tunes precision/cost without losing the relevant cards.
+_MAX_EXPAND_CARDS = 30
 
 
 async def _bfs_tier(
@@ -208,11 +213,15 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
         if row.artifact_id not in pack_artifact_ids:
             ordered_rows.append(row)
 
-    # Build cards in BFS order, accumulating until budget is exhausted.
+    # Build cards in BFS order (closest first), capped by BOTH the token budget AND a
+    # card-count limit so the response stays the immediate neighbourhood, not the whole frontier.
     cards: list[EvidenceCard] = []
     tokens_used = 0
     truncated = False
     for row in ordered_rows:
+        if len(cards) >= _MAX_EXPAND_CARDS:
+            truncated = True
+            break
         card = build_card(row)
         cost = card_tokens(card)
         if tokens_used + cost > effective_budget:

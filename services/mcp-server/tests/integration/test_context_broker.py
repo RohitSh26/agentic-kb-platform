@@ -664,9 +664,9 @@ async def test_create_pack_trims_cards_so_it_is_never_born_over_budget(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     # several distinct cards but a budget that only fits some ⇒ trimmed to fit.
-    # Each card text is sized so card_tokens == 8 (title "Topic A xx" + summary
-    # "Body A yy" ≈ 8 tokens); a budget of 20 fits exactly two cards (16), not
-    # three (24).
+    # card_tokens now charges the per-card serialization overhead (uuids/uri/fields),
+    # so each card costs ~60 tokens; a budget of 150 fits some but not all five. The
+    # survivor count + token sum are derived from card_tokens below, so they stay correct.
     search = FakeSearchClient()
     hits = []
     letters = ["alpha", "bravo", "charlie", "delta", "echo"]
@@ -682,10 +682,10 @@ async def test_create_pack_trims_cards_so_it_is_never_born_over_budget(
     deps = make_broker_deps(factory, search)
 
     full = card_tokens  # imported helper, used below to derive the per-card cost
-    response = await create_pack(deps, _create_pack_request(budget_tokens=20), REQUESTER)
+    response = await create_pack(deps, _create_pack_request(budget_tokens=150), REQUESTER)
 
     assert 0 < len(response.evidence_cards) < 5
-    assert response.budget_used_tokens <= 20
+    assert response.budget_used_tokens <= 150
     # the survivors are the highest-ranked prefix (best score first)
     assert [c.evidence_id for c in response.evidence_cards] == [
         str(hit.artifact_id) for hit in hits[: len(response.evidence_cards)]
@@ -855,10 +855,10 @@ async def test_open_evidence_over_run_budget_writes_denied_row_and_errors(
         artifact_id = await insert_artifact(session, title="Payment long doc", body_text="x" * 4000)
     search.seed("payment", [SearchHit(artifact_id=artifact_id, score=1.0)])
     deps = make_broker_deps(factory, search)
-    # budget is large enough that the card SURVIVES create (≈74 card tokens) but
-    # leaves too little headroom for the L2 body expansion: open_evidence must
-    # be the thing that trips the run budget, not the pack-birth trim
-    created = await create_pack(deps, _create_pack_request(budget_tokens=100), REQUESTER)
+    # budget is large enough that the card SURVIVES create (~120 card tokens incl. the
+    # serialization overhead) but leaves too little headroom for the L2 body expansion:
+    # open_evidence must be the thing that trips the run budget, not the pack-birth trim
+    created = await create_pack(deps, _create_pack_request(budget_tokens=250), REQUESTER)
     assert created.evidence_cards, "card must survive create for this run-budget test"
 
     with pytest.raises(ToolError, match="run budget exceeded"):

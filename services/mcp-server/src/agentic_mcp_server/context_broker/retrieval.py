@@ -141,8 +141,19 @@ def _collapse_near_duplicates(
     return kept, dropped
 
 
+# An evidence card serializes to more than title+summary: two UUIDs, the source_uri, and
+# ~10 fixed fields. Counting only title+summary under-charged the budget ~15x, so a 5k
+# "budget" actually returned hundreds of cards. This fixed overhead reflects the real cost.
+_CARD_OVERHEAD_TOKENS = 40
+
+
 def card_tokens(card: EvidenceCard) -> int:
-    return estimate_tokens(card.title) + estimate_tokens(card.summary)
+    return (
+        _CARD_OVERHEAD_TOKENS
+        + estimate_tokens(card.title)
+        + estimate_tokens(card.summary)
+        + estimate_tokens(card.source_uri or "")
+    )
 
 
 def authorization_decision(deps: BrokerDeps) -> AuthorizationDecision:
