@@ -84,6 +84,13 @@ _KNOWN_SUBAGENTS = [
     "test_layer",
     "code_reviewer",
 ]
+# Build roles need the DEEP connected code (defining file, callees, imports); planning roles
+# work from the high-level overview cards. So only build roles trigger context.expand — once,
+# into the SHARED pack (the broker dedupes), and later build roles reuse it. This keeps planners
+# cheap and pulls the deep code exactly once for the whole run (no per-agent re-fetch).
+_BUILD_ROLES = frozenset({"implementation", "test_layer", "code_reviewer"})
+_EXPAND_BUDGET = 4000
+_MAX_CARDS_IN_PROMPT = 40
 
 
 def _load_manifest(name: str) -> str:
@@ -342,6 +349,43 @@ async def _run_subagent(
     return await _llm(llm_client, prompt, user, label=f"{subagent}.run")
 
 
+async def _expand_into_pack(
+    broker: Client,
+    *,
+    pack_id: str,
+    seed_artifact_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Expand the seeds' connected code into the SHARED pack ONCE (broker dedupes).
+
+    Returns the new connected cards. Charged against the shared run budget, so build
+    roles get the deep context (defining file, callees, imports) without each
+    re-fetching — the second build role's expand would add ~nothing (already in pack).
+    """
+    if not seed_artifact_ids:
+        return []
+    result = _unwrap(
+        await broker.call_tool(
+            "context.expand",
+            {
+                "request": {
+                    "context_pack_id": pack_id,
+                    "seed_artifact_ids": seed_artifact_ids,
+                    "trust_floor": "EXTRACTED",
+                    "include_inferred": False,
+                    "budget_tokens": _EXPAND_BUDGET,
+                }
+            },
+        )
+    )
+    exp = result.get("cards", [])
+    print(
+        f"  context.expand: {len(seed_artifact_ids)} seeds -> {len(exp)} connected card(s) "
+        f"({result.get('tokens_used', 0)} tok, truncated={result.get('truncated')}) "
+        f"[shared pack, deduped]"
+    )
+    return exp
+
+
 # ---------------------------------------------------------------------------
 # Synthesis + verify_answer
 # ---------------------------------------------------------------------------
@@ -512,7 +556,7 @@ async def _run(task: str, auto_approve: bool) -> int:  # orchestration loop
                     },
                 )
             )
-            pack_id = pack_result["context_pack_id"]
+            pack_id = str(pack_result["context_pack_id"])
             cards = pack_result.get("evidence_cards", [])
             kb_version = pack_result.get("kb_version", "unknown")
             print(f"  pack_id={pack_id}  kb_version={kb_version}  cards={len(cards)}")
@@ -523,6 +567,9 @@ async def _run(task: str, auto_approve: bool) -> int:  # orchestration loop
             # Step 3: gate + run each subagent step
             # ----------------------------------------------------------------
             subagent_outputs: list[tuple[str, str]] = []
+            # The deep code context is expanded ONCE (lazily, when the first build role
+            # needs it) into the shared pack, then reused by later build roles.
+            expanded_cards: list[dict[str, Any]] | None = None
 
             for step_idx, step in enumerate(steps):
                 subagent = step.get("subagent", "")
@@ -564,11 +611,24 @@ async def _run(task: str, auto_approve: bool) -> int:  # orchestration loop
                 )
 
                 _print_section(f"Step 3.{step_idx + 1} — {subagent}")
+
+                # Build roles get the DEEP connected code; planners get the overview only.
+                if subagent in _BUILD_ROLES:
+                    if expanded_cards is None:  # expand once, into the shared pack
+                        seed_ids = [c["artifact_id"] for c in cards if c.get("artifact_id")][:3]
+                        expanded_cards = await _expand_into_pack(
+                            broker, pack_id=pack_id, seed_artifact_ids=seed_ids
+                        )
+                    role_cards = (cards + expanded_cards)[:_MAX_CARDS_IN_PROMPT]
+                    role_summary = _summarise_cards(role_cards)
+                else:  # planning roles: high-level overview cards only (cheap)
+                    role_summary = evidence_summary
+
                 output = await _run_subagent(
                     llm_client,
                     subagent=subagent,
                     instructions=effective_instructions,
-                    evidence_summary=evidence_summary,
+                    evidence_summary=role_summary,
                 )
                 print(textwrap.indent(output[:2000], "  "))
                 subagent_outputs.append((subagent, output))
