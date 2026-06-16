@@ -49,6 +49,10 @@ class EvidenceCard(McpModel):
     title: str = Field(min_length=1)
     summary: str = ""
     source_uri: str | None = None
+    # Human-readable citation (file:symbol) derived in CODE from artifact metadata. This is
+    # the reference a user-facing answer should show, so raw evidence_id UUIDs never need to
+    # appear in prose (ADR-0022, two-identifier rule). evidence_id stays the audit handle.
+    display_citation: str = ""
     confidence: float = Field(ge=0.0, le=1.0)
     authority_score: float = Field(ge=0.0, le=1.0)
     tokens_if_expanded: int = Field(ge=0)

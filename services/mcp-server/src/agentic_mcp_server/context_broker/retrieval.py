@@ -85,6 +85,7 @@ def build_card(artifact: ArtifactRow, temporal: TemporalWeight | None = None) ->
         title=title,
         summary=summary,
         source_uri=artifact.source_uri,
+        display_citation=display_citation(artifact),
         confidence=1.0 if artifact.knowledge_kind == "source_backed" else 0.5,
         authority_score=min(max(artifact.authority_score or 0.0, 0.0), 1.0),
         tokens_if_expanded=estimate_tokens(body),
@@ -99,6 +100,32 @@ def build_card(artifact: ArtifactRow, temporal: TemporalWeight | None = None) ->
 def _card_summary(body: str, max_chars: int = 280) -> str:
     first_line = next(iter(body.strip().splitlines()), "")
     return first_line[:max_chars]
+
+
+def _readable_path(source_uri: str) -> str:
+    """Best-effort repo-relative path from a source_uri, for a human citation.
+
+    github://owner/repo/<path> -> <path>; other schemes fall back to the part after '://'.
+    """
+    rest = source_uri.split("://", 1)[1] if "://" in source_uri else source_uri
+    if source_uri.startswith("github://"):
+        parts = rest.split("/", 2)  # owner, repo, path
+        return parts[2] if len(parts) == 3 else rest
+    return rest
+
+
+def display_citation(artifact: ArtifactRow) -> str:
+    """Human-readable citation (``file:symbol``) from artifact metadata (ADR-0022).
+
+    This is the user-facing reference; it is distinct from ``evidence_id`` (the UUID audit
+    handle) so a model never needs to surface a UUID in prose. Symbol-shaped artifacts get
+    ``path:symbol``; files/docs get the path alone.
+    """
+    path = _readable_path(artifact.source_uri)
+    title = (artifact.title or "").strip()
+    if artifact.artifact_type in ("code_symbol", "endpoint") and title:
+        return f"{path}:{title}" if path else title
+    return path or title or str(artifact.artifact_id)
 
 
 def _dedupe_text(artifact: ArtifactRow) -> str:
