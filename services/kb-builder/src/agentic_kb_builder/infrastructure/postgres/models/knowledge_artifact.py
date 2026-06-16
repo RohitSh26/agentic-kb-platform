@@ -57,6 +57,10 @@ class KnowledgeArtifact(Base):
     # source_item.path); lets L2 evidence return precise snippets at a source version.
     span_start: Mapped[int | None] = mapped_column(Integer)
     span_end: Mapped[int | None] = mapped_column(Integer)
+    # Deterministic retrieval surface for code_symbol artifacts (ADR-0018 Phase 2):
+    # split-identifier words + docstring + signature + decorator + call + import names.
+    # Populated by the AST pass (Python-only, zero-LLM). NULL for non-code artifacts.
+    search_text: Mapped[str | None] = mapped_column(Text)
     # team-based ACL: empty = org-public; non-empty = visible only to requesters
     # whose team set intersects. Enforced by the mcp-server Context Broker (PR-13).
     acl_teams: Mapped[list[str]] = mapped_column(

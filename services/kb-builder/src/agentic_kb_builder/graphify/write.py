@@ -66,6 +66,7 @@ async def write_code_artifacts(
             freshness_score=BUILD_TIME_FRESHNESS,
             span_start=draft.span_start,
             span_end=draft.span_end,
+            search_text=draft.search_text,
         )
         for draft in drafts
     ]

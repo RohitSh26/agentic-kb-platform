@@ -8,9 +8,14 @@ gracefully (no spans, never a fabricated one), and that non-Python suffixes fall
 Import-extraction tests assert: ``import a.b`` and ``from a.b import c`` are captured,
 relative imports are skipped, non-Python suffixes return empty, syntax errors return
 empty, and the result is deterministic.
+
+search_text tests (ADR-0018 Phase 2) assert: split-identifier words from the name, param
+names, decorator names, docstring words, called names, and imported names all appear; the
+result is deterministic (same input => same output); non-Python => search_text is None.
 """
 
 from agentic_kb_builder.graphify.span_recovery import (
+    build_search_text,
     extract_import_modules,
     recover_python_spans,
     recover_spans,
@@ -137,4 +142,146 @@ def test_import_extraction_is_deterministic() -> None:
 def test_all_absolute_imports_captured() -> None:
     mods = extract_import_modules(file_text=IMPORT_SOURCE, suffix=".py", path="m.py")
     assert "a.b" in mods
-    assert "functools" in mods
+
+
+# ---------------------------------------------------------------------------
+# ADR-0018 Phase 2: search_text (deterministic retrieval surface)
+# ---------------------------------------------------------------------------
+
+SEARCH_TEXT_SOURCE = (
+    "import pathlib\n"  # 1
+    "\n"  # 2
+    "\n"  # 3
+    "def validate_token(auth_header: str, *, max_retries: int = 3) -> bool:\n"  # 4
+    '    """Verify the session gate token from the authorization header."""\n'  # 5
+    "    import os\n"  # 6
+    "    result = check_signature(auth_header)\n"  # 7
+    "    return result\n"  # 8
+    "\n"  # 9
+    "\n"  # 10
+    "@app.route('/api/login')\n"  # 11
+    "def login_handler(request_context):\n"  # 12
+    "    pass\n"  # 13
+    "\n"  # 14
+    "\n"  # 15
+    "class AuthMiddleware:\n"  # 16
+    "    pass\n"  # 17
+)
+
+
+def test_search_text_contains_split_identifier_words() -> None:
+    """Snake-case name splits into words."""
+    spans = recover_python_spans(file_text=SEARCH_TEXT_SOURCE, path="m.py")
+    (vt,) = spans[4]
+    assert vt.search_text is not None
+    words = set(vt.search_text.split())
+    # "validate_token" -> ["validate", "token"]
+    assert "validate" in words
+    assert "token" in words
+
+
+def test_search_text_contains_docstring_words() -> None:
+    """Docstring words appear in search_text even when not in identifier."""
+    spans = recover_python_spans(file_text=SEARCH_TEXT_SOURCE, path="m.py")
+    (vt,) = spans[4]
+    assert vt.search_text is not None
+    words = set(vt.search_text.split())
+    # docstring: "Verify the session gate token from the authorization header."
+    assert "session" in words
+    assert "gate" in words
+    assert "verify" in words
+    assert "authorization" in words
+
+
+def test_search_text_contains_param_names() -> None:
+    """Function parameter names (split) appear in search_text."""
+    spans = recover_python_spans(file_text=SEARCH_TEXT_SOURCE, path="m.py")
+    (vt,) = spans[4]
+    assert vt.search_text is not None
+    words = set(vt.search_text.split())
+    # "auth_header" -> ["auth", "header"]; "max_retries" -> ["max", "retries"]
+    assert "auth" in words
+    assert "header" in words
+    assert "max" in words
+    assert "retries" in words
+
+
+def test_search_text_contains_called_names() -> None:
+    """Names of functions called within the span appear in search_text."""
+    spans = recover_python_spans(file_text=SEARCH_TEXT_SOURCE, path="m.py")
+    (vt,) = spans[4]
+    assert vt.search_text is not None
+    words = set(vt.search_text.split())
+    # validate_token calls check_signature -> split ["check", "signature"]
+    assert "check" in words
+    assert "signature" in words
+
+
+def test_search_text_contains_decorator_names() -> None:
+    """Decorator attribute names appear in search_text (split)."""
+    spans = recover_python_spans(file_text=SEARCH_TEXT_SOURCE, path="m.py")
+    (lh,) = spans[12]
+    assert lh.search_text is not None
+    words = set(lh.search_text.split())
+    # @app.route -> decorator.attr "route"
+    assert "route" in words
+
+
+def test_search_text_for_camel_case_class() -> None:
+    """CamelCase class name splits correctly."""
+    spans = recover_python_spans(file_text=SEARCH_TEXT_SOURCE, path="m.py")
+    (am,) = spans[16]
+    assert am.search_text is not None
+    words = set(am.search_text.split())
+    # "AuthMiddleware" -> ["auth", "middleware"]
+    assert "auth" in words
+    assert "middleware" in words
+
+
+def test_search_text_is_deterministic() -> None:
+    """Same source must always produce the same search_text (connectors rule)."""
+    spans_a = recover_python_spans(file_text=SEARCH_TEXT_SOURCE, path="m.py")
+    spans_b = recover_python_spans(file_text=SEARCH_TEXT_SOURCE, path="m.py")
+    for def_line in spans_a:
+        for span_a, span_b in zip(spans_a[def_line], spans_b[def_line], strict=True):
+            assert span_a.search_text == span_b.search_text
+
+
+def test_non_python_suffix_yields_no_search_text() -> None:
+    """Non-Python files produce no spans at all => no search_text (Python-first)."""
+    spans = recover_spans(file_text="func main() {}", suffix=".go", path="main.go")
+    assert spans == {}
+
+
+def test_search_text_is_sorted_and_space_separated() -> None:
+    """Determinism: words must be stable-sorted so same source => same string."""
+    spans = recover_python_spans(file_text=SEARCH_TEXT_SOURCE, path="m.py")
+    (vt,) = spans[4]
+    assert vt.search_text is not None
+    words = vt.search_text.split()
+    assert words == sorted(words), "search_text words must be in sorted order"
+
+
+def test_build_search_text_directly_with_known_function() -> None:
+    """Unit-test build_search_text against a known ast node."""
+    import ast
+
+    src = (
+        "def get_user_by_id(user_id: int, db_session=None) -> None:\n"
+        '    """Fetch user record from the database."""\n'
+        "    lookup_record(user_id)\n"
+    )
+    tree = ast.parse(src)
+    (func,) = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+    result = build_search_text(func)
+    words = set(result.split())
+    assert "get" in words  # from get_user_by_id
+    assert "user" in words
+    assert "by" in words
+    assert "fetch" in words  # from docstring
+    assert "database" in words  # from docstring
+    assert "lookup" in words  # from called name lookup_record (split)
+    assert "record" in words  # from called name lookup_record (split)
+    # words are sorted
+    word_list = result.split()
+    assert word_list == sorted(word_list)

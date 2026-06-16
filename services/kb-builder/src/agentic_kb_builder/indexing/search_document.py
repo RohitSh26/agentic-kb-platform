@@ -44,12 +44,17 @@ class SearchDoc(SearchModel):
     source_type: str
     source_uri: str
     title: str | None
-    body_text: str
+    body_text: str | None
     kb_version: str
     knowledge_kind: str | None
     authority_score: float | None
     freshness_score: float | None
     artifact_hash: str | None
+    # Deterministic retrieval surface for code_symbol artifacts (ADR-0018 Phase 2).
+    # None for prose artifacts. The MCP-server keyword scorer ranks on this field
+    # alongside title / body_text so concept-word queries hit even when the raw body
+    # doesn't contain the searched word.
+    search_text: str | None = None
     embedding: tuple[float, ...] | None = None
     embedding_model: str | None = None
 

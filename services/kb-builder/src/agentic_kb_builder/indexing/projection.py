@@ -3,8 +3,12 @@
 The projection is a pure read of Postgres: artifact + source pointer +
 cached embedding vector. Given the same registry state it always produces the
 same documents, which is what makes the index rebuildable and the drift check
-meaningful. Only PROJECTABLE_ARTIFACT_TYPES with body_text are projected;
-pointer-only code artifacts are reachable through graph edges, not search.
+meaningful. Only PROJECTABLE_ARTIFACT_TYPES with body_text OR search_text are
+projected; purely pointer-only code artifacts (no body_text, no search_text)
+are reachable through graph edges, not search.
+
+ADR-0018 Phase 2: code_symbol artifacts are projectable when they have either
+body_text (exact span) or search_text (deterministic retrieval surface) or both.
 """
 
 import uuid
@@ -40,7 +44,11 @@ async def load_search_docs(
         .where(
             SourceItem.is_deleted.is_(False),
             KnowledgeArtifact.artifact_type.in_(sorted(PROJECTABLE_ARTIFACT_TYPES)),
-            KnowledgeArtifact.body_text.is_not(None),
+            # An artifact is projectable when it has body_text OR search_text (ADR-0018
+            # Phase 2): a code_symbol with only search_text (e.g. a span-less symbol
+            # that still has identifier/docstring words) is keyword-findable via
+            # search_text even though its raw body is not yet recoverable.
+            (KnowledgeArtifact.body_text.is_not(None) | KnowledgeArtifact.search_text.is_not(None)),
             # Only LIVE artifacts project: a superseded row (invalidated by a later
             # build) must not stay in the index/expected set (interval membership).
             KnowledgeArtifact.invalidated_at_seq.is_(None),
@@ -54,8 +62,15 @@ async def load_search_docs(
     docs: list[SearchDoc] = []
     for artifact, source_type, source_uri in rows:
         body_text = artifact.body_text
-        assert body_text is not None  # filtered above
-        embedding_row = embeddings.get((artifact.artifact_id, content_hash(body_text)))
+        # body_text may be None when search_text is the sole retrieval surface
+        # (ADR-0018 Phase 2 code_symbol with no recovered span). The embedding key
+        # falls back to search_text so the embedding cache join still works.
+        embed_text = body_text if body_text is not None else artifact.search_text
+        embedding_row = (
+            embeddings.get((artifact.artifact_id, content_hash(embed_text)))
+            if embed_text is not None
+            else None
+        )
         vector = embedding_row.embedding if embedding_row is not None else None
         docs.append(
             SearchDoc(
@@ -71,6 +86,7 @@ async def load_search_docs(
                 authority_score=artifact.authority_score,
                 freshness_score=artifact.freshness_score,
                 artifact_hash=artifact.artifact_hash,
+                search_text=artifact.search_text,
                 embedding=tuple(vector) if vector is not None else None,
                 embedding_model=(
                     embedding_row.embedding_model if embedding_row is not None else None
@@ -100,7 +116,8 @@ async def load_doc_hashes(session: AsyncSession) -> dict[str, str | None]:
         .where(
             SourceItem.is_deleted.is_(False),
             KnowledgeArtifact.artifact_type.in_(sorted(PROJECTABLE_ARTIFACT_TYPES)),
-            KnowledgeArtifact.body_text.is_not(None),
+            # Mirror the same filter as load_search_docs: body_text OR search_text.
+            (KnowledgeArtifact.body_text.is_not(None) | KnowledgeArtifact.search_text.is_not(None)),
             # Only LIVE artifacts are expected/reconcilable: a superseded row must
             # not be in the consistency "expected" set nor be back-filled by
             # reconcile_missing (interval membership).

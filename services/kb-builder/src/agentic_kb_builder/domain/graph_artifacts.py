@@ -84,6 +84,13 @@ class CodeArtifactDraft(ArtifactModel):
     )
     span_start: int | None = Field(default=None, ge=1)
     span_end: int | None = Field(default=None, ge=1)
+    search_text: str | None = Field(
+        default=None,
+        description=(
+            "Deterministic retrieval surface (ADR-0018 Phase 2): split identifiers + "
+            "docstring + signature + decorator + call + import names. Python-only, zero-LLM."
+        ),
+    )
 
 
 class CodeEdgeDraft(ArtifactModel):

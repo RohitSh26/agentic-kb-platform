@@ -159,6 +159,7 @@ def map_extraction(
             # ADR-0018: exact deterministic source span (incl. decorators/docstring) is
             # the symbol's citable body_text — no LLM, keyword-searchable. span_start is
             # decorator-inclusive so it may precede Graphify's reported def line.
+            # Phase 2: search_text carries the deterministic retrieval surface.
             artifacts.append(
                 CodeArtifactDraft(
                     key=key,
@@ -167,6 +168,7 @@ def map_extraction(
                     body_text=span.body_text,
                     span_start=span.span_start,
                     span_end=span.span_end,
+                    search_text=span.search_text,
                 )
             )
         else:

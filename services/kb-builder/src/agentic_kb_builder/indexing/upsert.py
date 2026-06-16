@@ -98,11 +98,16 @@ class SearchDocUpserter:
         for doc in docs:
             if doc.embedding is None:
                 continue
+            # body_text may be None for search_text-only code_symbol projections;
+            # the embedding was keyed on search_text in that case (see projection.py).
+            embed_text = doc.body_text if doc.body_text is not None else doc.search_text
+            if embed_text is None:
+                continue
             await self._session.execute(
                 update(EmbeddingCache)
                 .where(
                     EmbeddingCache.artifact_id == doc.artifact_id,
-                    EmbeddingCache.text_hash == content_hash(doc.body_text),
+                    EmbeddingCache.text_hash == content_hash(embed_text),
                     EmbeddingCache.embedding_model == doc.embedding_model,
                 )
                 .values(azure_search_doc_id=doc.doc_id)

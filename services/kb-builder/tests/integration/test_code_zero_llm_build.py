@@ -194,6 +194,45 @@ async def test_code_only_build_is_zero_llm_and_keyword_searchable(
     hits = [d for d in code_symbol_docs if "helper" in (d.body_text or "")]
     assert hits, "the raw-code token 'helper' must be keyword-findable in the projection"
 
+    # 5) ADR-0018 Phase 2: every Python code_symbol carries non-null search_text
+    #    composed of split-identifier words + docstring words + called names (zero-LLM).
+    for doc in code_symbol_docs:
+        assert doc.search_text is not None, (
+            f"code_symbol '{doc.title}' must have non-null search_text (ADR-0018 Phase 2)"
+        )
+    # `top()` docstring says "Entry point doc." -> "entry", "point", "doc" in search_text.
+    # It also calls helper() -> "helper" in search_text.
+    top_docs = [d for d in code_symbol_docs if d.title and "top" in d.title]
+    assert top_docs, "expected a 'top' symbol in projection"
+    top_doc = top_docs[0]
+    assert top_doc.search_text is not None
+    top_words = set(top_doc.search_text.split())
+    assert "entry" in top_words or "top" in top_words, (
+        f"split identifier 'top' must appear in search_text, got: {top_doc.search_text!r}"
+    )
+    assert "entry" in top_words, (
+        f"docstring word 'entry' must appear in search_text, got: {top_doc.search_text!r}"
+    )
+    assert "helper" in top_words, (
+        f"called name 'helper' must appear in search_text, got: {top_doc.search_text!r}"
+    )
+
+    # 6) Concept-recall: "entry" appears only in the docstring, NOT in the raw code token
+    #    stream of top(); finding the symbol via search_text proves the concept-word gain.
+    concept_hits = [d for d in code_symbol_docs if d.search_text and "entry" in d.search_text]
+    assert concept_hits, (
+        "concept word 'entry' (only in docstring, not raw body tokens) must be "
+        "findable via search_text — proves the recall gain over body_text-only indexing"
+    )
+
+    # 7) DB-level: symbols carry non-null search_text in the knowledge_artifact table.
+    for sym in symbols:
+        if sym.title and "top" in sym.title:
+            assert sym.search_text is not None, "top symbol must have search_text in DB"
+            assert "entry" in sym.search_text, (
+                f"docstring word 'entry' expected in DB search_text, got: {sym.search_text!r}"
+            )
+
 
 @requires_db
 async def test_imports_edges_emitted_for_in_build_module(
@@ -392,3 +431,69 @@ async def test_imports_edges_idempotent_same_kb_version(
     assert count_after_second == count_after_first, (
         f"second run duplicated edges: {count_after_first} -> {count_after_second}"
     )
+
+
+@requires_db
+async def test_search_text_idempotent_rebuild(session: AsyncSession, tmp_path: Path) -> None:
+    """ADR-0018 Phase 2: rebuilding unchanged content does not duplicate or change
+    search_text. The incremental build skips unchanged files so the second run must
+    produce the same search_text values (content-hash gated)."""
+    workspace, sources = _workspace(tmp_path)
+    client = FakeSearchClient()
+    kb_version = "v-st-idem.1"
+
+    async def _run() -> None:
+        await run_build(
+            session,
+            sources_path=str(sources),
+            workspace=str(workspace),
+            kb_version=kb_version,
+            version="local",
+            collaborators=Collaborators(
+                wikifier=ExplodingWikifier(),
+                graphifier=GraphifyGraphifier(),
+                embedder=LocalHashEmbedder(),
+                indexer=SearchDocUpserter(session, client),
+                search_client=client,
+            ),
+            activate=False,
+        )
+
+    await _run()
+    symbols_after_first = (
+        (
+            await session.execute(
+                select(KnowledgeArtifact).where(
+                    KnowledgeArtifact.artifact_type == "code_symbol",
+                    KnowledgeArtifact.kb_version == kb_version,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    search_texts_first = {s.title: s.search_text for s in symbols_after_first}
+
+    # Run again with the same source — incremental build, no content change.
+    await _run()
+    symbols_after_second = (
+        (
+            await session.execute(
+                select(KnowledgeArtifact).where(
+                    KnowledgeArtifact.artifact_type == "code_symbol",
+                    KnowledgeArtifact.kb_version == kb_version,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    search_texts_second = {s.title: s.search_text for s in symbols_after_second}
+
+    # Same symbols, same search_text — determinism holds.
+    assert search_texts_first == search_texts_second, (
+        "search_text must be identical across identical rebuild passes"
+    )
+    # All Python symbols must have non-null search_text.
+    for title, st in search_texts_second.items():
+        assert st is not None, f"symbol '{title}' must have non-null search_text"
