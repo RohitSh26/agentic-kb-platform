@@ -59,7 +59,7 @@ def _doc_freq(arts: list[dict], words: set[str]) -> dict[str, int]:
     """How many artifacts each word appears in (title+path+body) — for IDF weighting."""
     df = dict.fromkeys(words, 0)
     for a in arts:
-        blob = f"{a['title']} {a['path'] or ''} {a['body']}".lower()
+        blob = f"{a['title']} {a['path'] or ''} {a['body']} {a.get('search', '')}".lower()
         for w in words:
             if w in blob:
                 df[w] += 1
@@ -76,13 +76,19 @@ def _seed(arts: list[dict], query: str, k: int, df: dict[str, int], n: int) -> l
     scored: list[tuple[float, str]] = []
     for a in arts:
         title, body, path = a["title"].lower(), a["body"].lower(), (a["path"] or "").lower()
+        search = a.get("search", "").lower()  # PR-34 deterministic retrieval surface
         basename = path.rsplit("/", 1)[-1]
         # A query word inside the file's own name is the strongest, IDF-immune signal
         # (the agent's task names the file): "budget" -> budgets.py, "ledger" -> ledger.py.
         score = 5.0 * sum(w in basename for w in qwords)
         score += sum(
             weights[w]
-            * ((3 if w in title else 0) + (2 if w in path else 0) + (1 if w in body else 0))
+            * (
+                (3 if w in title else 0)
+                + (2 if w in path else 0)
+                + (2 if w in search else 0)
+                + (1 if w in body else 0)
+            )
             for w in qwords
             if weights[w] > 0
         )
@@ -142,10 +148,13 @@ async def main() -> None:
     tasks = yaml.safe_load((Path(__file__).parent / "task_context_tasks.yaml").read_text())["tasks"]
     conn = await asyncpg.connect(DSN)
     try:
+        # search_text (PR-34) is the deterministic retrieval surface for code; COALESCE so
+        # this still runs against an older KB where the column is absent is handled by the
+        # caller (the column exists after the PR-34 migration runs).
         rows = await conn.fetch(
             "SELECT a.artifact_id::text aid, a.artifact_type atype, coalesce(a.title,'') title, "
-            "coalesce(a.body_text,'') body, s.path FROM knowledge_artifact a "
-            "JOIN source_item s ON s.source_id=a.source_id "
+            "coalesce(a.body_text,'') body, coalesce(a.search_text,'') search, s.path "
+            "FROM knowledge_artifact a JOIN source_item s ON s.source_id=a.source_id "
             "WHERE a.invalidated_at_seq IS NULL AND s.is_deleted IS FALSE"
         )
         edges = await conn.fetch(
