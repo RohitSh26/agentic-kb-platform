@@ -228,15 +228,17 @@ async def _main(args: argparse.Namespace) -> int:
     )
     engine = create_engine()
     factory = create_session_factory(engine)
+    collaborators: Collaborators | None = None
     try:
         async with factory() as session:
+            collaborators = default_collaborators(session, index_path=index_path)
             run = await run_build(
                 session,
                 sources_path=args.sources,
                 workspace=args.workspace,
                 kb_version=args.kb_version,
                 version=args.version,
-                collaborators=default_collaborators(session, index_path=index_path),
+                collaborators=collaborators,
                 activate=not args.no_activate,
                 allow_large_delta=args.allow_large_delta,
                 git_metadata=not args.no_git_metadata,
@@ -244,6 +246,10 @@ async def _main(args: argparse.Namespace) -> int:
             )
             active = await get_active_kb_version(session)
     finally:
+        if collaborators is not None and isinstance(
+            collaborators.similarity, EmbeddingSimilarityProvider
+        ):
+            await collaborators.similarity.aclose()
         await engine.dispose()
     # Structured log on the build path (rule: no silent build paths); the prints
     # below are the CLI's human-readable summary to stdout, not the audit record.

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agentic_kb_builder.application.build_runner import Embedder, EmbeddingResult
 from agentic_kb_builder.application.cache_gates import EmbeddingCacheGate
 from agentic_kb_builder.domain.content_hasher import content_hash
+from agentic_kb_builder.embeddings.ollama_embedder import OllamaEmbedder
 from agentic_kb_builder.infrastructure.postgres.models import KnowledgeArtifact
 from agentic_kb_builder.linker.semantic import ScoredArtifact
 from agentic_kb_builder.structured_logging import get_logger
@@ -109,6 +110,11 @@ class EmbeddingSimilarityProvider:
             len(self._symbol_ids),
             self._embedder.embedding_model,
         )
+
+    async def aclose(self) -> None:
+        """Release the embedder's HTTP client (the build closes the provider when done)."""
+        if isinstance(self._embedder, OllamaEmbedder):
+            await self._embedder.aclose()
 
     async def similar_code_symbols(
         self, *, artifact_id: uuid.UUID, top_k: int

@@ -14,6 +14,7 @@ from agentic_kb_builder.domain import Chunk
 from agentic_kb_builder.infrastructure.azure_openai.chat_model_client import (
     ChatModelClient,
     _parse_generation,
+    _unwrap_list,
 )
 
 
@@ -37,17 +38,24 @@ def test_strips_markdown_fences_and_surrounding_prose() -> None:
     assert generation.facts == ()
 
 
-def test_unwraps_single_element_array_object() -> None:
-    # Some models wrap the result object in a one-element array ([{...}]); the parser
-    # must unwrap it rather than failing an otherwise-valid generation (real Groq output).
-    raw = (
-        '[{"summary": "A doc about X.",'
-        ' "concepts": [{"name": "X", "description": "the thing"}],'
-        ' "facts": []}]'
-    )
-    generation = _parse_generation(raw)
-    assert generation.summary == "A doc about X."
-    assert generation.concepts[0].name == "X"
+def test_unwrap_list_picks_first_object() -> None:
+    # Deterministic unit of the list-unwrap branch: first dict wins, non-dicts skipped,
+    # non-list / no-dict inputs returned unchanged.
+    assert _unwrap_list([{"a": "1"}, {"b": "2"}]) == {"a": "1"}
+    assert _unwrap_list(["junk", {"a": "1"}]) == {"a": "1"}
+    assert _unwrap_list({"a": "1"}) == {"a": "1"}
+    assert _unwrap_list([]) == []
+
+
+def test_parse_generation_unwraps_array_response(caplog: pytest.LogCaptureFixture) -> None:
+    # A model that returns an ARRAY of objects (multi-element, so _extract_json cannot
+    # strip it to a single {...}) is recovered via the list branch — asserted by the
+    # unwrap warning firing, not just a recovered value (real Groq array-wrap failure).
+    raw = '[{"summary": "first", "concepts": [], "facts": []}, {"summary": "second"}]'
+    with caplog.at_level(logging.WARNING):
+        generation = _parse_generation(raw)
+    assert generation.summary == "first"
+    assert "model_json_unwrapped_array" in caplog.text
 
 
 def test_drops_malformed_concepts_and_facts() -> None:
