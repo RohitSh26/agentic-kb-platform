@@ -5,9 +5,11 @@
       "url": "https://<your-broker-host>/mcp/",
       "tools": [
         "context.create_pack",
+        "context.expand",
+        "context.open_evidence",
         "context.read_pack",
         "context.request_more",
-        "context.open_evidence",
+        "context.verify_answer",
         "ledger.list_retrievals"
       ],
       "headers": {
