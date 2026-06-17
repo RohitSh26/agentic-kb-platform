@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
 from anthropic import AsyncAnthropicFoundry
 from fastmcp import Client
 from openai import AsyncOpenAI
@@ -1134,11 +1135,20 @@ async def _run(task: str, auto_approve: bool, workspace: Path) -> int:  # orches
     # --- shared infrastructure -----------------------------------------------
     # Claude on Azure AI Foundry uses the Anthropic SDK + Messages API (a DIFFERENT SDK to the
     # OpenAI-compatible lanes); both flow through the `_chat` seam below so the lanes are agnostic.
+    # LLM_SSL_VERIFY=false disables TLS verification (insecure; for a corporate TLS-inspecting
+    # proxy where the provider cert can't be verified). Default = None = the SDK's secure default.
+    _http = (
+        httpx.AsyncClient(verify=False)
+        if os.environ.get("LLM_SSL_VERIFY", "true").strip().lower() in ("0", "false", "no", "off")
+        else None
+    )
     llm_client: LLMClient
     if _IS_ANTHROPIC:
-        llm_client = AsyncAnthropicFoundry(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+        llm_client = AsyncAnthropicFoundry(
+            base_url=LLM_BASE_URL, api_key=LLM_API_KEY, http_client=_http
+        )
     else:
-        llm_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+        llm_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, http_client=_http)
 
     engine = create_async_engine(DATABASE_URL)
     session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(

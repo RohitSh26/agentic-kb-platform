@@ -29,6 +29,7 @@ import re
 import time
 from typing import Any, cast
 
+import httpx
 from anthropic import AsyncAnthropicFoundry
 from json_repair import repair_json
 from openai import AsyncAzureOpenAI, AsyncOpenAI, BadRequestError
@@ -155,6 +156,21 @@ def _parse_judgment(raw: str) -> RelationshipJudgment:
         raise ValueError(f"judge JSON did not match the judgment schema: {error}") from error
 
 
+def _llm_http_client() -> httpx.AsyncClient | None:
+    """The httpx client the LLM SDKs should use, or None for the SDK's secure default.
+
+    Behind a corporate TLS-inspecting proxy the provider cert can't be verified
+    (``CERTIFICATE_VERIFY_FAILED``). Setting ``LLM_SSL_VERIFY=false`` returns a client with
+    verification DISABLED so the call goes through. This is INSECURE and dev/proxy-only —
+    prefer ``SSL_CERT_FILE`` pointing at the corporate CA. Default (unset/true) returns None,
+    so TLS verification is never weakened unless explicitly opted in.
+    """
+    if os.environ.get("LLM_SSL_VERIFY", "true").strip().lower() in ("0", "false", "no", "off"):
+        logger.warning("event=llm_ssl_verify_disabled msg=TLS-verification-OFF-insecure")
+        return httpx.AsyncClient(verify=False)
+    return None
+
+
 class ChatModelClient:
     """ModelClient over an OpenAI-compatible (or Azure OpenAI) chat endpoint."""
 
@@ -190,21 +206,29 @@ class ChatModelClient:
         # resolved azure fields; every other provider builds AsyncOpenAI(base_url=..., api_key=...).
         endpoint = resolve_endpoint_from_env(max_tokens_default=_JUDGE_MAX_TOKENS_DEFAULT)
         temperature = float(os.environ.get("LLM_TEMPERATURE", "0"))
+        # Shared httpx client (None = SDK default). LLM_SSL_VERIFY=false disables TLS
+        # verification for a corporate-proxy environment (insecure, opt-in).
+        http_client = _llm_http_client()
         client: AsyncOpenAI | AsyncAzureOpenAI | AsyncAnthropicFoundry
         if endpoint.is_azure:
             client = AsyncAzureOpenAI(
                 azure_endpoint=endpoint.azure_endpoint,
                 api_key=endpoint.api_key,
                 api_version=endpoint.azure_api_version,
+                http_client=http_client,
             )
         elif endpoint.is_anthropic_foundry:
             # Claude on Azure AI Foundry: a DIFFERENT SDK (Anthropic) + the Messages API.
             # base_url is the .../anthropic endpoint; api_key is API-key auth.
             client = AsyncAnthropicFoundry(
-                base_url=endpoint.base_url, api_key=endpoint.api_key
+                base_url=endpoint.base_url,
+                api_key=endpoint.api_key,
+                http_client=http_client,
             )
         else:
-            client = AsyncOpenAI(base_url=endpoint.base_url, api_key=endpoint.api_key)
+            client = AsyncOpenAI(
+                base_url=endpoint.base_url, api_key=endpoint.api_key, http_client=http_client
+            )
         # The api_key is NEVER logged (rule python.md) — only provider + model.
         logger.info(
             "event=model_client_configured provider=%s model=%s",
