@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 _TOOL_NAME = "context.create_change_pack"
 _MAX_DEPENDENCY_FILES = 2  # full dependency files (cap so we don't lose the token win)
+_MAX_TEST_FILES = 3  # cap test candidates so a widely-referenced symbol can't flood the pack
 _SEARCH_TOP = 12
 _CODE_TYPES = ("code_symbol", "code_file", "endpoint", "test")
 _CAPWORDS = re.compile(r"\b([A-Z][A-Za-z0-9]+(?:[A-Z][A-Za-z0-9]*)*)\b")  # ClassNames
@@ -206,19 +207,20 @@ async def create_change_pack(
             t = neighbours.get(e.from_artifact_id)
             if t:
                 _add_test(_file_of(t), f"`tests` edge → a target symbol ({t.title})", 0.9)
-    for a in allowed:  # KB test artifacts referencing the target symbol/module
+    # A test must reference an actual TARGET SYMBOL (not a generic CapWord like "GET"/"True"
+    # from the task) — otherwise nearly every test body matches and the list fills with noise.
+    target_stems = {p.rsplit("/", 1)[-1].removesuffix(".py") for p in target_paths}
+    symbols_lc = [s.lower() for s in relevant_symbols]
+    for a in allowed:  # KB test artifacts referencing a resolved target symbol
         p = _file_of(a)
-        if _is_test_path(p) and (
-            a.title in relevant_symbols
-            or any(h.lower() in (a.body_text or "").lower() for h in class_hints)
-        ):
+        body_lc = (a.body_text or "").lower()
+        if _is_test_path(p) and any(s in body_lc for s in symbols_lc):
             _add_test(p, "test file in the KB references the target symbol", 0.8)
     if not test_files:
         # No `tests` edge and no test among the task's own hits — run a FOCUSED search for the
         # target's test file. This finds a real test like ``test_github_rest_backend.py`` whenever
         # tests are in the KB, without guessing the filename (works regardless of `tests` edges).
-        stems = [p.rsplit("/", 1)[-1].removesuffix(".py") for p in target_paths]
-        test_query = "test " + " ".join(list(relevant_symbols)[:2] + stems)
+        test_query = "test " + " ".join(list(relevant_symbols)[:2] + list(target_stems))
         test_hits = await deps.search_client.search(test_query, build_seq=build_seq, top=8)
         async with deps.session_factory() as session:
             test_rows = await fetch_artifacts(
@@ -237,6 +239,16 @@ async def create_change_pack(
             notes.append(
                 "test file proposed by naming convention — the runtime must verify it exists"
             )
+    # Rank so the runtime's primary pick is the test whose FILENAME matches the target (e.g.
+    # github_rest.py → test_github_rest_backend.py) before tests that merely mention the symbol;
+    # cap the list so a widely-referenced symbol doesn't return a dozen tangential tests.
+    test_files.sort(
+        key=lambda f: (
+            0 if any(stem in f.path.rsplit("/", 1)[-1] for stem in target_stems) else 1,
+            -f.confidence,
+        )
+    )
+    test_files = test_files[:_MAX_TEST_FILES]
 
     # --- stage 4: dependency files (imports/calls, capped) ---------------------------------
     dependency_files: list[FileRef] = []

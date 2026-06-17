@@ -97,6 +97,29 @@ def test_all_files_caps_total_reads(tmp_path: Path) -> None:
     assert resolved.all_files[1] == "src/f1.py"
 
 
+def test_rel_to_workspace_handles_absolute_and_relative(tmp_path: Path) -> None:
+    # a local-FS KB returns file:///abs/path -> absolute; it must be relativised so diffs apply
+    abs_inside = str(tmp_path / "src" / "a.py")
+    assert runner._rel_to_workspace(abs_inside, tmp_path) == "src/a.py"
+    # already-relative (github-sourced KB) passes through unchanged
+    assert runner._rel_to_workspace("src/a.py", tmp_path) == "src/a.py"
+    # absolute path OUTSIDE the workspace is rejected (never edit outside the repo)
+    assert runner._rel_to_workspace("/etc/passwd", tmp_path) is None
+
+
+def test_resolve_relativises_absolute_kb_paths(tmp_path: Path) -> None:
+    _touch(tmp_path, "src/a.py")
+    _touch(tmp_path, "tests/test_a.py")
+    pack = _pack(
+        targets=[str(tmp_path / "src" / "a.py")],  # absolute, as a local-FS KB returns
+        tests=[str(tmp_path / "tests" / "test_a.py")],
+    )
+    resolved = runner._resolve_build_files(pack, tmp_path)
+    assert resolved.target == ["src/a.py"]
+    assert resolved.test == ["tests/test_a.py"]
+    assert not resolved.missing_target and not resolved.missing_test
+
+
 def test_parse_diff_plain_unified() -> None:
     diff = "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
     out = runner._parse_diff(diff)

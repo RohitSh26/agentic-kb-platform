@@ -69,6 +69,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agent_runner")
 
+
+def _load_dotenv() -> None:
+    """Load repo-root .env into os.environ BEFORE the config constants below are bound.
+
+    Must run at import time, not in main(): the LLM_*/DATABASE_URL globals read os.environ
+    once, at module load — loading .env later would leave them unset. Existing shell env wins
+    (we never overwrite a key already present), and inline `# comments` and quotes are stripped.
+    """
+    env_path = Path(__file__).parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        # strip surrounding quotes; an UNquoted value may carry a trailing ` # comment`
+        val = val.strip()
+        if val[:1] in ("'", '"') and val[-1:] == val[:1]:
+            val = val[1:-1]
+        elif " #" in val:
+            val = val.split(" #", 1)[0].strip()
+        os.environ[key] = val
+
+
+_load_dotenv()
+
 # ---------------------------------------------------------------------------
 # Configuration from environment
 # ---------------------------------------------------------------------------
@@ -576,8 +606,9 @@ class _ResolvedBuildFiles:
 
     @property
     def all_files(self) -> list[str]:
-        # target first, then test, then deps — capped (M1: never read more than the cap)
-        ordered = self.target + self.test + self.dependency
+        # target, then the ONE primary test (other test candidates are resolution alternatives,
+        # not context), then deps — capped (M1: never read more than the cap, beat grep on tokens)
+        ordered = self.target + self.test[:1] + self.dependency
         return ordered[:_MAX_FULL_FILES]
 
     @property
@@ -596,6 +627,22 @@ def _git_toplevel(start: Path) -> Path:
     return Path(out.stdout.strip())
 
 
+def _rel_to_workspace(path: str, workspace: Path) -> str | None:
+    """Make a change_pack path workspace-RELATIVE so diffs apply with `git apply -p1`.
+
+    A KB built from the local-FS backend stores ``file:///abs/path`` URIs, so the broker (which
+    has no filesystem) returns absolute paths; a github-sourced KB returns repo-relative ones.
+    Relative paths pass through; an absolute path under the workspace is relativised; an absolute
+    path outside the workspace is rejected (None)."""
+    p = Path(path)
+    if not p.is_absolute():
+        return path
+    try:
+        return str(p.relative_to(workspace))
+    except ValueError:
+        return None
+
+
 def _resolve_build_files(change_pack: dict[str, Any], workspace: Path) -> _ResolvedBuildFiles:
     """Keep only change_pack paths that EXIST in the workspace; the broker may propose
     conventional test paths it cannot verify (it has no filesystem), so the runtime is the
@@ -605,9 +652,9 @@ def _resolve_build_files(change_pack: dict[str, Any], workspace: Path) -> _Resol
     def _existing(refs: list[dict[str, Any]]) -> list[str]:
         seen: list[str] = []
         for ref in refs:
-            path = str(ref.get("path", ""))
-            if path and path not in seen and (workspace / path).is_file():
-                seen.append(path)
+            rel = _rel_to_workspace(str(ref.get("path", "")), workspace)
+            if rel and rel not in seen and (workspace / rel).is_file():
+                seen.append(rel)
         return seen
 
     resolved.target = _existing(change_pack.get("target_files", []))
@@ -626,6 +673,73 @@ def _read_files(workspace: Path, paths: list[str]) -> tuple[str, int]:
         blocks.append(f"### FILE: {path}\n```\n{body}\n```")
     text = "\n\n".join(blocks)
     return text, estimate_tokens(text)
+
+
+_FILE_HEADER_RE = re.compile(r"^\+\+\+ b/(.+)$")
+
+
+def _locate(haystack: list[str], needle: list[str]) -> int:
+    """Index where `needle` matches `haystack` (rstrip-tolerant); -1 if not found."""
+    if not needle:
+        return -1
+    stripped = [h.rstrip() for h in haystack]
+    target = [n.rstrip() for n in needle]
+    for i in range(len(stripped) - len(target) + 1):
+        if stripped[i : i + len(target)] == target:
+            return i
+    return -1
+
+
+def _recompute_hunk_headers(diff: str, workspace: Path) -> str | None:
+    """Rebuild every ``@@`` header from the ACTUAL file, so the diff applies exactly.
+
+    LLMs reliably emit correct ``-``/``+``/context BODY lines but botch the ``@@`` header
+    (abbreviated, or wrong line numbers/counts) — which `git apply` rejects. We locate each
+    hunk's old lines (context + removed) in the real file and emit a correct header. Deterministic
+    and model-agnostic: it repairs ANY model's diff, never tailors behaviour to one. Returns None
+    if a hunk's context cannot be found (the change does not match the file → a real failure)."""
+    lines = diff.splitlines()
+    # split into a preamble + per-file sections keyed by the +++ b/<path> header
+    out: list[str] = []
+    i = 0
+    current_file: list[str] | None = None
+    while i < len(lines):
+        line = lines[i]
+        m = _FILE_HEADER_RE.match(line)
+        if m:
+            path = m.group(1)
+            fp = workspace / path
+            current_file = fp.read_text().splitlines() if fp.is_file() else None
+            out.append(line)
+            i += 1
+            continue
+        if line.startswith("@@"):
+            # gather this hunk's body (until the next @@ or file header or EOF), keeping ONLY
+            # valid unified-diff lines — models sometimes inject stray markers like
+            # "*** End of File ***" that corrupt the patch; an empty line is real context (" ").
+            j = i + 1
+            body: list[str] = []
+            while j < len(lines) and not lines[j].startswith(("@@", "--- ", "+++ ", "diff ")):
+                bl = lines[j]
+                if bl == "":
+                    body.append(" ")
+                elif bl[:1] in (" ", "+", "-", "\\"):
+                    body.append(bl)
+                j += 1
+            old = [b[1:] for b in body if b[:1] in (" ", "-")]
+            new_len = sum(1 for b in body if b[:1] in (" ", "+"))
+            if current_file is None:
+                return None
+            start = _locate(current_file, old)
+            if start == -1:
+                return None
+            out.append(f"@@ -{start + 1},{len(old)} +{start + 1},{new_len} @@")
+            out.extend(body)
+            i = j
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out) + "\n"
 
 
 def _parse_diff(raw: str) -> str | None:
@@ -651,19 +765,56 @@ def _git(wt: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+# LLM-generated diffs routinely carry wrong @@ hunk line-counts and stray whitespace, which
+# `git apply` rejects as "corrupt patch". --recount recomputes the counts from the hunk body and
+# --ignore-whitespace tolerates indentation drift, so a semantically-correct diff still applies.
+_APPLY_FLAGS = ("--recount", "--ignore-whitespace", "--whitespace=nowarn")
+
+
+def _patch_fallback(wt: Path, patch_file: Path, *, dry_run: bool) -> tuple[bool, str]:
+    """GNU `patch -p1 --fuzz` fallback for when `git apply` is too strict about context.
+
+    LLMs approximate the surrounding lines; `patch` tolerates up to --fuzz mismatched context
+    lines, so a semantically-correct change still lands. git apply is tried first (stricter, so
+    a clean diff stays exact); this only runs when that fails."""
+    args = [
+        "patch",
+        "-p1",
+        "--fuzz=3",
+        "--forward",
+        "--no-backup-if-mismatch",
+        "-i",
+        str(patch_file),
+    ]
+    if dry_run:
+        args.append("--dry-run")
+    proc = subprocess.run(args, cwd=str(wt), capture_output=True, text=True, check=False)
+    return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+
+
+def _prepare_diff(wt: Path, diff: str) -> str:
+    """Recompute hunk headers against the worktree files; fall back to the raw diff."""
+    return _recompute_hunk_headers(diff, wt) or diff
+
+
 def _apply_check(wt: Path, diff: str) -> tuple[bool, str]:
-    """`git apply --check` the diff against the worktree; (ok, stderr)."""
+    """Check the diff applies (recomputed headers via git apply, then a `patch` fuzz fallback)."""
     patch = wt / ".runner_patch.diff"
-    patch.write_text(diff)
-    proc = _git(wt, "apply", "--check", "--whitespace=nowarn", str(patch))
-    return proc.returncode == 0, proc.stderr.strip()
+    patch.write_text(_prepare_diff(wt, diff))
+    proc = _git(wt, "apply", "--check", *_APPLY_FLAGS, str(patch))
+    if proc.returncode == 0:
+        return True, ""
+    ok, _ = _patch_fallback(wt, patch, dry_run=True)
+    return ok, (proc.stderr.strip() if not ok else "")
 
 
 def _apply(wt: Path, diff: str) -> tuple[bool, str]:
     patch = wt / ".runner_patch.diff"
-    patch.write_text(diff)
-    proc = _git(wt, "apply", "--whitespace=nowarn", str(patch))
-    return proc.returncode == 0, proc.stderr.strip()
+    patch.write_text(_prepare_diff(wt, diff))
+    proc = _git(wt, "apply", *_APPLY_FLAGS, str(patch))
+    if proc.returncode == 0:
+        return True, ""
+    return _patch_fallback(wt, patch, dry_run=False)
 
 
 def _reset_worktree(wt: Path) -> None:
@@ -741,13 +892,15 @@ async def _build(
     raw, p, c = await _llm_usage(llm_client, impl_system, impl_user, label="implementer.diff")
     prompt_tokens += p
     completion_tokens += c
-    if _PASTE_REQUEST_RE.search(raw):
-        print("\n  FAILURE: the model asked for file contents — context supply is the broker's")
-        print("  job, so a request to paste a file means M1 did not hold. Aborting.")
-        return 1
     diff = _parse_diff(raw)
     if diff is None:
-        print("\n  FAILURE: the implementer did not return a unified diff.")
+        # Only when there's NO diff do we interpret the output: a request for files is the M1
+        # failure we care about; anything else is just a malformed response.
+        if _PASTE_REQUEST_RE.search(raw):
+            print("\n  FAILURE: the model asked for file contents instead of producing a diff —")
+            print("  context supply is the broker's job, so M1 did not hold. Aborting.")
+        else:
+            print("\n  FAILURE: the implementer did not return a unified diff.")
         return 1
 
     # --- 4. governance gate before touching even the sandbox worktree (ADR-0021) ---------
@@ -823,12 +976,12 @@ async def _build(
                 )
                 prompt_tokens += p
                 completion_tokens += c
-                if _PASTE_REQUEST_RE.search(raw):
-                    print("\n  FAILURE: the model asked for file contents during the fix loop.")
-                    return 1
                 nxt = _parse_diff(raw)
                 if nxt is None:
-                    print("  FAILURE: TestFixer did not return a unified diff.")
+                    if _PASTE_REQUEST_RE.search(raw):
+                        print("\n  FAILURE: the model asked for file contents in the fix loop.")
+                    else:
+                        print("  FAILURE: TestFixer did not return a unified diff.")
                     break
                 final_diff = nxt
     finally:
@@ -917,16 +1070,7 @@ async def _run(task: str, auto_approve: bool, workspace: Path) -> int:  # orches
 def main() -> None:
     import argparse
 
-    # Load repo-root .env if present (best-effort, no dependency on dotenv).
-    env_path = Path(__file__).parent.parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, val = line.partition("=")
-                if key and key not in os.environ:
-                    os.environ[key] = val.strip().strip('"').strip("'")
-
+    # .env is already loaded at import time (_load_dotenv) so the config constants saw it.
     parser = argparse.ArgumentParser(
         description="Drive the Agentic KB Platform agents against the MCP Context Broker."
     )
@@ -947,7 +1091,10 @@ def main() -> None:
     try:
         workspace = _git_toplevel(Path(args.workspace))
     except subprocess.CalledProcessError:
-        print(f"ERROR: --workspace {args.workspace!r} is not inside a git repo", file=sys.stderr)
+        print(
+            f"ERROR: --workspace {args.workspace!r} is not inside a git repo",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
     sys.exit(asyncio.run(_run(args.task, args.auto_approve, workspace)))
