@@ -1,0 +1,32 @@
+version: 1
+defaults:
+  acl_teams: []
+sources:
+  - name: platform-code
+    type: github_code
+    repo: RohitSh26/agentic-kb-platform
+    branch: main
+    include: ["services/**/*.py"]
+    exclude: ["**/tests/**"]
+    auth: {token_env: GITHUB_TOKEN}
+
+  - name: platform-docs
+    type: github_doc
+    repo: RohitSh26/agentic-kb-platform
+    branch: main
+    include: ["docs/**/*.md", "README.md"]
+    auth: {token_env: GITHUB_TOKEN}
+
+  - name: platform-wiki
+    type: azure_wiki
+    organization: docodex-testing          # ← your org (was contoso)
+    project: agentic-kb-platform            # ← your project (was platform)
+    wiki: agentic-kb-platform.wiki          # ← your wiki (was platform.wiki)
+    include: ["**"]                         # ← your pages aren't under Architecture/Runbooks
+    auth: {token_env: ADO_PAT}
+
+  - name: roadmap-cards
+    type: ado_card
+    organization: docodex-testing           # ← your org
+    project: agentic-kb-platform            # ← your project
+    auth: {token_env: ADO_PAT}              # ← area_path removed (the bogus "Platform\KB" caused the 400)
