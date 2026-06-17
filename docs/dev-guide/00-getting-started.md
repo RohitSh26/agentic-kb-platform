@@ -291,6 +291,18 @@ Other good first questions:
 > code, not a prompt, guarantees a question can never trigger a build — is the **terminal runner**
 > (Part 10), which routes deterministically.
 
+> **Recommended model.** Pick a strong model in the chat's model picker — **Claude (Haiku/Sonnet)
+> or GPT‑5**. A small model like **GPT‑5‑mini is too weak to be the front door**: it ignores the
+> triage and over‑plans questions into build runs. The broker governs *what* the agent can do; the
+> model decides *how well* it follows the lane.
+
+> **Optional — semantic verification (L3).** By default `verify_answer` checks *provenance* (the
+> citations exist, are in the active version, ACL‑visible…), not whether the evidence actually
+> *supports* the claim. To turn on the LLM **entailment** check, start the server (Part 5) with
+> `MCP_ENABLE_ENTAILMENT=1` plus `ENTAIL_LLM_PROVIDER` / `ENTAIL_LLM_API_KEY` / `ENTAIL_LLM_MODEL`
+> (Ollama/Groq/OpenAI/Azure). Then an answer citing real‑but‑irrelevant evidence *fails*
+> verification instead of passing.
+
 > **Troubleshooting**
 > | Symptom | Fix |
 > |---|---|
