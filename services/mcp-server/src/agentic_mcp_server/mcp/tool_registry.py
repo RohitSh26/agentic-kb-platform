@@ -8,6 +8,10 @@ docs/contracts/mcp-tools-contract.md).
 from dataclasses import dataclass
 
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
+from agentic_mcp_server.mcp.tool_schemas.change import (
+    ChangeContextRequest,
+    ChangeContextResponse,
+)
 from agentic_mcp_server.mcp.tool_schemas.context import (
     CreatePackRequest,
     CreatePackResponse,
@@ -98,5 +102,12 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
         PlatformTrustDecision,
         "Return the platform trust decision for an answer (whether it carries a valid "
         "verification receipt).",
+    ),
+    "context.create_change_pack": ToolSchema(
+        ChangeContextRequest,
+        ChangeContextResponse,
+        "For a code-change task, return the small set of files to edit: the target file(s), "
+        "the test file(s), and the top dependency file(s) — each with a reason, numeric "
+        "confidence, and token estimate. Use this to gather BUILD context instead of grep.",
     ),
 }

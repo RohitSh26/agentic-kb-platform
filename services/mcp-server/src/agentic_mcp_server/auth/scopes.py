@@ -33,6 +33,7 @@ TOOL_REQUIRED_SCOPES: dict[str, str] = {
     "context.read_pack": SCOPE_CONTEXT_READ,
     "context.request_more": SCOPE_CONTEXT_READ,
     "context.open_evidence": SCOPE_CONTEXT_READ,
+    "context.create_change_pack": SCOPE_CONTEXT_READ,
     "graph.get_neighbors": SCOPE_GRAPH_READ,
     "ledger.list_retrievals": SCOPE_LEDGER_READ,
     "context.verify_answer": SCOPE_VERIFY,

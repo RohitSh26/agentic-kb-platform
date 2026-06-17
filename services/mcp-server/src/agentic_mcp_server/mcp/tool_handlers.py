@@ -14,6 +14,7 @@ from fastmcp.exceptions import ToolError
 from agentic_mcp_server.auth.client_identity import ClientIdentity
 from agentic_mcp_server.auth.scopes import client_may_call
 from agentic_mcp_server.context_broker import (
+    change_context,
     evidence,
     graph,
     ledger,
@@ -32,6 +33,7 @@ from agentic_mcp_server.context_broker.dependencies import (
 from agentic_mcp_server.context_broker.platform_trust import evaluate_platform_trust
 from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
+from agentic_mcp_server.mcp.tool_schemas.change import ChangeContextRequest
 from agentic_mcp_server.mcp.tool_schemas.context import (
     CreatePackRequest,
     ExpandRequest,
@@ -93,6 +95,10 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         # Stamp the validated client into the receipt (binds + scopes it).
         return await verify.verify_answer(deps, request, current_requester(), client)
 
+    async def create_change_pack(request: ChangeContextRequest) -> McpModel:
+        _client("context.create_change_pack")
+        return await change_context.create_change_pack(deps, request, current_requester())
+
     async def platform_trust(request: PlatformTrustRequest) -> McpModel:
         # Official-client gate: trusted ONLY for a verification_required client with a
         # valid, client-matched, passing receipt; structured denial otherwise; a
@@ -113,6 +119,7 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         "ledger.list_retrievals": list_retrievals,
         "context.verify_answer": verify_answer,
         "context.platform_trust": platform_trust,
+        "context.create_change_pack": create_change_pack,
     }
     for tool_name, handler in handlers.items():
         schema = TOOL_SCHEMAS[tool_name]

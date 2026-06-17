@@ -30,6 +30,7 @@ EXPECTED_TOOLS = {
     "ledger.list_retrievals",
     "context.verify_answer",
     "context.platform_trust",
+    "context.create_change_pack",
 }
 
 

@@ -55,6 +55,7 @@
 | `context.expand` | Trust-tiered BFS expansion from seed artifact ids; returns evidence cards |
 | `context.verify_answer` | L0 provenance verifier; returns a verification receipt |
 | `context.platform_trust` | Official-client gate: is the client's answer platform-trusted? |
+| `context.create_change_pack` | BUILD-lane selector: the small file set (target/test/dependency) to edit for a code-change task |
 
 There is **no** generic unrestricted `kb.search` tool in V1.
 
@@ -76,6 +77,12 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   `context_pack_id`. AMBIGUOUS and REJECTED are never returned (same admission
   rules as `graph.get_neighbors`). A bare `{"seed_artifact_ids": []}` fails
   schema validation (min_length=1).
+- `context.create_change_pack`: `task` (non-empty), optional `target_hint`,
+  `budget_tokens ≥ 1` (default 25000). Returns the curated file set to edit; it
+  is a **file list, not bytes** (Postgres stays pointer-first — the runtime reads
+  the files from its workspace). Resolution is deterministic and ranked: TARGET by
+  exact symbol hint > exact file hint > lexical; TEST via `tests` edges / KB test
+  artifacts / naming convention; DEPENDENCY via `imports`/`calls` edges, capped.
 - `graph.get_neighbors`: `artifact_id`, optional `edge_types[]`, `depth` 1–3,
   `trust_floor` (default `EXTRACTED`), `include_inferred` (default `false`).
 - `context.verify_answer`: `answer_id`, `claims[]` (each `claim_id`, `text`,
@@ -124,6 +131,12 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   keys, non-integer values) fails the boot — it never silently defaults.
 - `context.open_evidence` returns the raw text in `untrusted_content` plus
   `tokens_used`, `budget_remaining_tokens`, `source_uri`.
+- `context.create_change_pack` returns `target_files`, `test_files`,
+  `dependency_files` (each a `FileRef`: `path`, human `reason`, **numeric**
+  `confidence` 0.0–1.0, `est_tokens`), `relevant_symbols[]`, and non-fatal
+  `notes[]` (e.g. a test path proposed by naming convention for the runtime to
+  verify). Writes one `retrieval_event` (`tool_name="context.create_change_pack"`,
+  `status="approved"`, `run_id="-"` — selection is not run-scoped).
 - Evidence card `title` and `summary` fields are derived from retrieved
   content: treat them as untrusted text, the same as `untrusted_content`.
 - Every retrieval response (`create_pack`, `read_pack`, `request_more`,
