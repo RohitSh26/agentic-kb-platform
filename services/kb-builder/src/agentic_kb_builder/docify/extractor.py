@@ -62,17 +62,11 @@ class DocExtractor:
         Resolves the OpenAI-compatible endpoint (LLM_PROVIDER / LLM_API_KEY / LLM_MODEL),
         registers the Graphify backend, and derives a deterministic model identity for the
         generation-cache key. The API key is never stored on the instance or logged."""
-        provider, base_url, api_key, model, max_tokens = resolve_endpoint()
-        extract_fn = make_graphify_doc_extract(
-            provider=provider,
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            max_tokens=max_tokens,
-        )
-        model_name = f"{provider}:{model}"
+        endpoint = resolve_endpoint()
+        extract_fn = make_graphify_doc_extract(endpoint)
+        model_name = f"{endpoint.provider}:{endpoint.model}"
         model_params_hash = hashlib.sha256(
-            f"{model_name}|temp=0|max_tokens={max_tokens}|backend=graphify_doc".encode()
+            f"{model_name}|temp=0|max_tokens={endpoint.max_tokens}|backend=graphify_doc".encode()
         ).hexdigest()[:16]
         return cls(extract_fn, model_name=model_name, model_params_hash=model_params_hash)
 

@@ -1,16 +1,20 @@
 """The live Graphify doc-extraction call, behind an injectable function (ADR-0023 §5).
 
-This is the single seam between our adapter and Graphify's LLM doc pipeline. It materializes
-the document to a temp file under ``root`` (Graphify reads from disk) and calls
-``extract_files_direct`` against a backend chosen by ``LLM_PROVIDER``:
+This is the single seam between our adapter and Graphify's LLM doc pipeline. It reads the
+SAME model endpoint as every other build-plane LLM call (the shared
+``llm_endpoint.resolve_endpoint_from_env``), picks the Graphify backend for that endpoint
+(the one isolated seam below), then materializes the document to a temp file under ``root``
+(Graphify reads from disk) and calls ``extract_files_direct``.
 
-- OpenAI-compatible providers (ollama / groq / openai, or any ``LLM_BASE_URL``): we register
-  an in-process Graphify backend pointed at that endpoint (Graphify's built-in "openai"
-  backend hardcodes api.openai.com, so we never reuse it).
-- ``azure`` (Azure OpenAI deployment): we use Graphify's BUILT-IN ``azure`` backend, which
-  drives the AzureOpenAI SDK and reads ``AZURE_OPENAI_ENDPOINT`` / ``AZURE_OPENAI_API_VERSION``
-  from the env (the deployment name is the model). The Azure SDK call path differs from the
-  OpenAI-compatible one, so we do NOT fake it with a base_url.
+Backend choice by provider:
+- OpenAI-compatible (ollama / groq / openai, or any ``LLM_BASE_URL``): Graphify's built-in
+  "openai" backend hardcodes api.openai.com, so we register an in-process backend pointed at
+  our endpoint instead (see ``_graphify_backend_name`` — the ONLY place we touch Graphify's
+  internal registry).
+- ``azure`` (Azure OpenAI deployment): Graphify's BUILT-IN ``azure`` backend drives the
+  AzureOpenAI SDK and reads ``AZURE_OPENAI_ENDPOINT`` / ``AZURE_OPENAI_API_VERSION`` from the
+  env (the deployment IS the model). Its call path differs from the OpenAI-compatible one, so
+  we do NOT fake it with a base_url.
 
 It returns Graphify's raw extraction dict — the trust-sensitive normalization lives in the
 pure ``map_doc_extraction``. Unit tests inject a captured-fixture function instead of this one,
@@ -18,22 +22,28 @@ so the live LLM is never required by the test suite (the hermetic-test requireme
 """
 
 import asyncio
-import os
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from agentic_kb_builder.infrastructure.azure_openai.chat_model_client import _PROVIDER_DEFAULTS
+from agentic_kb_builder.infrastructure.azure_openai.llm_endpoint import (
+    AZURE_PROVIDER,
+    ModelEndpoint,
+    resolve_endpoint_from_env,
+)
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
 
 # The in-process Graphify backend name we register an OpenAI-compatible endpoint under.
 # Distinct from Graphify's built-in "openai" (which hardcodes api.openai.com) so we never
-# collide. ``azure`` instead uses Graphify's own built-in backend name.
+# collide. ``azure`` instead uses Graphify's own built-in backend name (``AZURE_PROVIDER``).
 BACKEND_NAME = "kb_docify"
-_AZURE_BACKEND = "azure"
+
+# Docify's historical LLM_MAX_TOKENS fallback (larger than the judge's) — kept so the
+# generation-cache key / model identity stays stable.
+_DOCIFY_MAX_TOKENS_DEFAULT = 8192
 
 
 class DocExtractFn(Protocol):
@@ -45,33 +55,50 @@ class DocExtractFn(Protocol):
     async def __call__(self, *, text: str, doc_path: str) -> Mapping[str, Any]: ...
 
 
-def _register_openai_compat_backend(
-    *, provider: str, base_url: str, model: str, max_tokens: int
-) -> None:
-    """Register an OpenAI-compatible endpoint as a Graphify backend in-process (idempotent).
+def resolve_endpoint() -> ModelEndpoint:
+    """Resolve the docify model endpoint from the build env (thin shared pass-through).
 
-    Reuses the provider->base_url map from ChatModelClient so the doc LLM call uses the SAME
-    endpoint resolution as every other model call. The API key is read by Graphify from the
-    env var named here (LLM_API_KEY) — never put in the dict and never logged.
+    Doc extraction REQUIRES a key/deployment (unlike code extraction); the shared resolver
+    fails loudly on a missing one, so docs are never silently dropped.
     """
+    return resolve_endpoint_from_env(max_tokens_default=_DOCIFY_MAX_TOKENS_DEFAULT)
+
+
+def _graphify_backend_name(endpoint: ModelEndpoint) -> str:
+    """Return the Graphify backend name to drive ``endpoint``, registering one if needed.
+
+    This is the ONLY place we touch Graphify's internal backend registry. Graphify exposes no
+    public API to point a backend at a custom endpoint, so we register one in-process here; if
+    a public API appears, change ONLY this function.
+
+    - ``azure``: use Graphify's BUILT-IN ``azure`` backend (SDK-based; reads AZURE_OPENAI_* from
+      the env, deployment IS the model). Nothing to register.
+    - otherwise: register an in-process OpenAI-compatible backend pointed at our base_url. The
+      API key is read by Graphify from the env var named here (``LLM_API_KEY``) — never placed
+      in the dict and never logged.
+    """
+    if endpoint.provider == AZURE_PROVIDER:
+        return AZURE_PROVIDER
+
     from graphify import llm  # declared dependency (ADR-0012 / ADR-0023)
 
     llm.BACKENDS[BACKEND_NAME] = {
-        "base_url": base_url,
-        "default_model": model,
+        "base_url": endpoint.base_url,
+        "default_model": endpoint.model,
         "env_key": "LLM_API_KEY",
         "model_env_key": "LLM_MODEL",
         "pricing": {"input": 0.0, "output": 0.0},
         "temperature": 0,
-        "max_tokens": max_tokens,
+        "max_tokens": endpoint.max_tokens,
     }
+    return BACKEND_NAME
 
 
 def _extract_sync(
     *, backend: str, api_key: str, model: str, text: str, doc_path: str
 ) -> Mapping[str, Any]:
     """Write one document to a temp tree and run Graphify's LLM extractor over it (sync)."""
-    from graphify import llm  # declared dependency
+    from graphify import llm  # declared dependency (the call seam; see _graphify_backend_name)
 
     with tempfile.TemporaryDirectory(prefix="kb-docify-") as tmp:
         root = Path(tmp).resolve()
@@ -92,34 +119,20 @@ def _extract_sync(
         return result
 
 
-def make_graphify_doc_extract(
-    *,
-    provider: str,
-    base_url: str,
-    api_key: str,
-    model: str,
-    max_tokens: int,
-) -> DocExtractFn:
-    """Build the live doc-extraction function bound to the configured provider.
+def make_graphify_doc_extract(endpoint: ModelEndpoint) -> DocExtractFn:
+    """Build the live doc-extraction function bound to the resolved ``endpoint``.
 
-    Selects the Graphify backend by provider (Azure OpenAI SDK for ``azure``, else an
-    in-process OpenAI-compatible backend), then returns a function that extracts one document.
+    Picks the Graphify backend (the isolated seam), then returns a function that extracts one
+    document. The API key is captured in the closure and NEVER logged (rule python.md).
     """
-    if provider == _AZURE_BACKEND:
-        # Graphify's built-in azure backend uses the AzureOpenAI SDK and reads
-        # AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_VERSION from the env; the deployment is
-        # the model. Nothing to register — the call path is SDK-based, not base_url-based.
-        backend = _AZURE_BACKEND
-    else:
-        _register_openai_compat_backend(
-            provider=provider, base_url=base_url, model=model, max_tokens=max_tokens
-        )
-        backend = BACKEND_NAME
+    backend = _graphify_backend_name(endpoint)
+    api_key = endpoint.api_key
+    model = endpoint.model
     # provider is logged for traceability; the key is NEVER logged (rule python.md).
     logger.info(
         "event=docify_backend_registered backend=%s provider=%s model=%s",
         backend,
-        provider,
+        endpoint.provider,
         model,
     )
 
@@ -135,51 +148,6 @@ def make_graphify_doc_extract(
         )
 
     return graphify_doc_extract
-
-
-def resolve_endpoint() -> tuple[str, str, str, str, int]:
-    """Resolve (provider, endpoint, api_key, model, max_tokens) from the build env.
-
-    Mirrors ChatModelClient.from_env so docify uses the SAME model configuration as every
-    other model call. Doc extraction REQUIRES a key/deployment (unlike code extraction); a
-    missing one fails loudly here, never silently drops docs.
-
-    - ``azure``: AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_DEPLOYMENT (the
-      model); AZURE_OPENAI_API_VERSION is read by Graphify's azure backend from the env.
-    - OpenAI-compatible (ollama / groq / openai / custom): LLM_PROVIDER, LLM_BASE_URL,
-      LLM_API_KEY, LLM_MODEL.
-    """
-    provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
-    max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "8192"))
-
-    if provider == _AZURE_BACKEND:
-        endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
-        api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
-        model = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "")
-        missing = [
-            name
-            for name, value in (
-                ("AZURE_OPENAI_ENDPOINT", endpoint),
-                ("AZURE_OPENAI_API_KEY", api_key),
-                ("AZURE_OPENAI_DEPLOYMENT", model),
-            )
-            if not value
-        ]
-        if missing:
-            raise RuntimeError(
-                f"docify azure provider requires {', '.join(missing)} to be set"
-            )
-        return provider, endpoint, api_key, model, max_tokens
-
-    default_base, default_key, default_model = _PROVIDER_DEFAULTS.get(
-        provider, _PROVIDER_DEFAULTS["ollama"]
-    )
-    base_url = os.environ.get("LLM_BASE_URL", default_base)
-    api_key = os.environ.get("LLM_API_KEY", default_key)
-    if not api_key:
-        raise RuntimeError(f"LLM_API_KEY is required for docify provider {provider!r}")
-    model = os.environ.get("LLM_MODEL", default_model)
-    return provider, base_url, api_key, model, max_tokens
 
 
 __all__ = [

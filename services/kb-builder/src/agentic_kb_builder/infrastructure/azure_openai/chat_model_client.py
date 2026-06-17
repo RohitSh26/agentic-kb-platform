@@ -4,8 +4,9 @@ Backs the phase-3B relationship judge: it defaults to a local **Ollama** server 
 cloud, no spend) and repoints to **Groq**, **OpenAI**, or **Azure OpenAI** by
 environment variables alone. The `openai` SDK is confined to this module — the rest of
 the build plane depends only on the `ModelClient` protocol (rule python.md), so the
-model backend stays swappable. ``_PROVIDER_DEFAULTS`` (provider -> base_url) is also
-reused by the ``docify`` adapter to register Graphify's doc-extraction backend (ADR-0023).
+model backend stays swappable. The provider->endpoint resolution is shared with the
+``docify`` adapter through the public ``llm_endpoint.resolve_endpoint_from_env`` (ADR-0023);
+this module just builds the OpenAI/Azure SDK client from the resolved ``ModelEndpoint``.
 
 Configure via env (see the wiki "Run locally"):
 - `LLM_PROVIDER`: `ollama` (default) | `groq` | `openai` | `azure`
@@ -37,6 +38,7 @@ from agentic_kb_builder.domain.judge_records import (
     JUDGE_TRUST_BUCKETS,
     guard_quote,
 )
+from agentic_kb_builder.infrastructure.azure_openai.llm_endpoint import resolve_endpoint_from_env
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
@@ -44,12 +46,9 @@ logger = get_logger(__name__)
 # Small local models occasionally emit malformed JSON; resample a few times before failing.
 _MAX_PARSE_ATTEMPTS = 3
 
-# provider -> (default base_url, default api_key, default model)
-_PROVIDER_DEFAULTS: dict[str, tuple[str, str, str]] = {
-    "ollama": ("http://localhost:11434/v1", "ollama", "llama3.1"),
-    "groq": ("https://api.groq.com/openai/v1", "", "llama-3.1-8b-instant"),
-    "openai": ("https://api.openai.com/v1", "", "gpt-4o-mini"),
-}
+# Historical LLM_MAX_TOKENS fallback for the judge (docify uses a larger one) — kept so the
+# generation-cache key / model identity stays stable.
+_JUDGE_MAX_TOKENS_DEFAULT = 4000
 
 _JUDGE_SYSTEM_PROMPT = (
     "You judge whether TWO knowledge artifacts from different domains (e.g. a doc and "
@@ -70,13 +69,6 @@ _JUDGE_SYSTEM_PROMPT = (
     "and the judgment is downgraded to AMBIGUOUS.\n"
     "- You judge ONLY these two artifacts; never reference anything else."
 )
-
-
-def _require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(f"{name} is required for this LLM provider but is unset")
-    return value
 
 
 def _extract_json(raw: str) -> str:
@@ -183,29 +175,31 @@ class ChatModelClient:
 
     @classmethod
     def from_env(cls) -> ChatModelClient:
-        provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
+        # ONE shared provider resolution (no duplicated provider->endpoint map); temperature is
+        # judge-specific so it stays here. The azure branch builds AsyncAzureOpenAI from the
+        # resolved azure fields; every other provider builds AsyncOpenAI(base_url=..., api_key=...).
+        endpoint = resolve_endpoint_from_env(max_tokens_default=_JUDGE_MAX_TOKENS_DEFAULT)
         temperature = float(os.environ.get("LLM_TEMPERATURE", "0"))
-        max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "4000"))
         client: AsyncOpenAI | AsyncAzureOpenAI
-        if provider == "azure":
+        if endpoint.is_azure:
             client = AsyncAzureOpenAI(
-                azure_endpoint=_require_env("AZURE_OPENAI_ENDPOINT"),
-                api_key=_require_env("AZURE_OPENAI_API_KEY"),
-                api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-06-01"),
+                azure_endpoint=endpoint.azure_endpoint,
+                api_key=endpoint.api_key,
+                api_version=endpoint.azure_api_version,
             )
-            model = _require_env("AZURE_OPENAI_DEPLOYMENT")
         else:
-            base_url, default_key, default_model = _PROVIDER_DEFAULTS.get(
-                provider, _PROVIDER_DEFAULTS["ollama"]
-            )
-            api_key = os.environ.get("LLM_API_KEY", default_key)
-            if not api_key:
-                raise RuntimeError(f"LLM_API_KEY is required for provider {provider!r}")
-            client = AsyncOpenAI(base_url=os.environ.get("LLM_BASE_URL", base_url), api_key=api_key)
-            model = os.environ.get("LLM_MODEL", default_model)
-        logger.info("event=model_client_configured provider=%s model=%s", provider, model)
+            client = AsyncOpenAI(base_url=endpoint.base_url, api_key=endpoint.api_key)
+        logger.info(
+            "event=model_client_configured provider=%s model=%s",
+            endpoint.provider,
+            endpoint.model,
+        )
         return cls(
-            client, model=model, provider=provider, temperature=temperature, max_tokens=max_tokens
+            client,
+            model=endpoint.model,
+            provider=endpoint.provider,
+            temperature=temperature,
+            max_tokens=endpoint.max_tokens,
         )
 
     async def generate_relationship_judgment(

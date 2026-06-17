@@ -31,12 +31,13 @@ def test_azure_provider_reads_azure_vars(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://my-aoai.openai.azure.com")
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "secret-key")
     monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini-deploy")
-    provider, endpoint, api_key, model, max_tokens = resolve_endpoint()
-    assert provider == "azure"
-    assert endpoint == "https://my-aoai.openai.azure.com"
-    assert api_key == "secret-key"
-    assert model == "gpt-4o-mini-deploy"  # the deployment IS the model
-    assert max_tokens == 8192
+    endpoint = resolve_endpoint()
+    assert endpoint.provider == "azure"
+    assert endpoint.is_azure
+    assert endpoint.azure_endpoint == "https://my-aoai.openai.azure.com"
+    assert endpoint.api_key == "secret-key"
+    assert endpoint.model == "gpt-4o-mini-deploy"  # the deployment IS the model
+    assert endpoint.max_tokens == 8192
 
 
 def test_azure_provider_missing_vars_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,11 +52,12 @@ def test_openai_compatible_provider_uses_llm_vars(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("LLM_PROVIDER", "groq")
     monkeypatch.setenv("LLM_API_KEY", "gsk_test")
     monkeypatch.setenv("LLM_MODEL", "llama-3.3-70b-versatile")
-    provider, base_url, api_key, model, _ = resolve_endpoint()
-    assert provider == "groq"
-    assert base_url == "https://api.groq.com/openai/v1"  # provider default
-    assert api_key == "gsk_test"
-    assert model == "llama-3.3-70b-versatile"
+    endpoint = resolve_endpoint()
+    assert endpoint.provider == "groq"
+    assert not endpoint.is_azure
+    assert endpoint.base_url == "https://api.groq.com/openai/v1"  # provider default
+    assert endpoint.api_key == "gsk_test"
+    assert endpoint.model == "llama-3.3-70b-versatile"
 
 
 def test_openai_compatible_missing_key_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
