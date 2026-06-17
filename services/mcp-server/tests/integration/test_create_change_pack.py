@@ -15,6 +15,7 @@ from broker_test_support import (
     fetch_ledger_rows,
     insert_artifact,
     insert_build_run,
+    insert_code_unit,
     insert_edge,
     make_broker_deps,
     require_registry_schema,
@@ -64,21 +65,26 @@ async def test_change_pack_resolves_target_test_and_deps_from_the_graph(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with factory() as session:
-        target_sym = await insert_artifact(
+        # target file + its symbol; the symbol body USES the imported HttpFetchError/AsyncHttpClient
+        target_file, target_syms = await insert_code_unit(
             session,
-            title="GithubRestBackend",
-            body_text="class GithubRestBackend:\n    def fetch(self): ...",
-            artifact_type="code_symbol",
-            source_type="github_code",
             source_uri=_TARGET_URI,
+            symbols={
+                "GithubRestBackend": (
+                    "class GithubRestBackend:\n"
+                    "    def fetch(self, client: AsyncHttpClient):\n"
+                    "        raise HttpFetchError('boom')"
+                )
+            },
         )
-        dep_sym = await insert_artifact(
+        # the imported dependency file defines the exception + client contract
+        dep_file, _ = await insert_code_unit(
             session,
-            title="HttpClient",
-            body_text="class HttpClient:\n    def get(self): ...",
-            artifact_type="code_symbol",
-            source_type="github_code",
             source_uri=_DEP_URI,
+            symbols={
+                "HttpFetchError": "class HttpFetchError(Exception): ...",
+                "AsyncHttpClient": "class AsyncHttpClient: ...",
+            },
         )
         test_sym = await insert_artifact(
             session,
@@ -96,30 +102,28 @@ async def test_change_pack_resolves_target_test_and_deps_from_the_graph(
             source_type="github_code",
             source_uri=_NOISE_URI,
         )
-        # target --calls--> dependency ; test --tests--> target
+        # target file --imports--> dependency file ; test --tests--> target symbol
         await insert_edge(
             session,
-            from_artifact_id=target_sym,
-            to_artifact_id=dep_sym,
-            edge_type="calls",
-            confidence=0.9,
+            from_artifact_id=target_file,
+            to_artifact_id=dep_file,
+            edge_type="imports",
+            confidence=1.0,
         )
         await insert_edge(
             session,
             from_artifact_id=test_sym,
-            to_artifact_id=target_sym,
+            to_artifact_id=target_syms["GithubRestBackend"],
             edge_type="tests",
             confidence=0.9,
         )
 
-    # Search returns the whole candidate set; the resolver — not search — must pick.
+    # Search returns the target symbol + noise; the resolver — not search — must pick.
     search = FakeSearchClient()
     search.seed(
         "retry",
         [
-            SearchHit(artifact_id=target_sym, score=0.9),
-            SearchHit(artifact_id=dep_sym, score=0.7),
-            SearchHit(artifact_id=test_sym, score=0.6),
+            SearchHit(artifact_id=target_syms["GithubRestBackend"], score=0.9),
             SearchHit(artifact_id=noise, score=0.5),
         ],
     )
@@ -141,11 +145,11 @@ async def test_change_pack_resolves_target_test_and_deps_from_the_graph(
     assert _TEST_PATH in test_paths
     assert _TEST_PATH not in request.task
 
-    # dependency: only the graph-connected file, capped, with a calls/imports reason
+    # dependency: the imported file defining the contract the change uses, named in the reason
     dep_paths = [f.path for f in resp.dependency_files]
     assert dep_paths == [_DEP_PATH]
     assert len(resp.dependency_files) <= 2
-    assert "calls" in resp.dependency_files[0].reason
+    assert "HttpFetchError" in resp.dependency_files[0].reason
 
     # the unrelated runtime file is never selected anywhere
     all_paths = {f.path for f in resp.target_files + resp.test_files + resp.dependency_files}
@@ -165,38 +169,26 @@ async def test_change_pack_caps_dependency_files(
     """Three+ connected dependency files must be capped to the top _MAX_DEPENDENCY_FILES, so the
     token win is not lost to a large fan-out of imported modules."""
     async with factory() as session:
-        target_sym = await insert_artifact(
+        target_file, target_syms = await insert_code_unit(
             session,
-            title="GithubRestBackend",
-            body_text="class GithubRestBackend: ...",
-            artifact_type="code_symbol",
-            source_type="github_code",
             source_uri=_TARGET_URI,
+            symbols={"GithubRestBackend": "class GithubRestBackend: ..."},
         )
-        dep_ids = []
-        for i in range(4):
-            dep = await insert_artifact(
+        for i in range(4):  # each imported file defines a contract type (Error) -> scores > 0
+            dep_file, _ = await insert_code_unit(
                 session,
-                title=f"Dep{i}",
-                body_text=f"class Dep{i}: ...",
-                artifact_type="code_symbol",
-                source_type="github_code",
                 source_uri=f"github://acme/repo/src/pkg/dep{i}.py",
+                symbols={f"Dep{i}Error": f"class Dep{i}Error(Exception): ..."},
             )
-            dep_ids.append(dep)
             await insert_edge(
                 session,
-                from_artifact_id=target_sym,
-                to_artifact_id=dep,
+                from_artifact_id=target_file,
+                to_artifact_id=dep_file,
                 edge_type="imports",
                 confidence=1.0,
             )
     search = FakeSearchClient()
-    search.seed(
-        "retry",
-        [SearchHit(artifact_id=target_sym, score=0.9)]
-        + [SearchHit(artifact_id=d, score=0.5) for d in dep_ids],
-    )
+    search.seed("retry", [SearchHit(artifact_id=target_syms["GithubRestBackend"], score=0.9)])
     deps = make_broker_deps(factory, search)
 
     request = ChangeContextRequest(task="Add a retry path to GithubRestBackend in github_rest.py")
@@ -210,36 +202,27 @@ async def test_change_pack_enforces_budget_server_side(
 ) -> None:
     """The BROKER caps selected tokens (invariant 3): a tiny budget keeps the essential
     target but drops dependency files and records why in notes."""
-    big_body = "x" * 8000  # ~2000 est tokens per dependency file
+    big_body = "x" * 8000  # ~2000 est tokens of symbol spans for the dependency file
     async with factory() as session:
-        target_sym = await insert_artifact(
+        target_file, target_syms = await insert_code_unit(
             session,
-            title="GithubRestBackend",
-            body_text="class GithubRestBackend: ...",
-            artifact_type="code_symbol",
-            source_type="github_code",
             source_uri=_TARGET_URI,
+            symbols={"GithubRestBackend": "class GithubRestBackend: ..."},
         )
-        dep = await insert_artifact(
+        dep_file, _ = await insert_code_unit(
             session,
-            title="HttpClient",
-            body_text=big_body,
-            artifact_type="code_symbol",
-            source_type="github_code",
             source_uri=_DEP_URI,
+            symbols={"HttpFetchError": "class HttpFetchError(Exception): ...\n" + big_body},
         )
         await insert_edge(
             session,
-            from_artifact_id=target_sym,
-            to_artifact_id=dep,
+            from_artifact_id=target_file,
+            to_artifact_id=dep_file,
             edge_type="imports",
             confidence=1.0,
         )
     search = FakeSearchClient()
-    search.seed(
-        "retry",
-        [SearchHit(artifact_id=target_sym, score=0.9), SearchHit(artifact_id=dep, score=0.5)],
-    )
+    search.seed("retry", [SearchHit(artifact_id=target_syms["GithubRestBackend"], score=0.9)])
     deps = make_broker_deps(factory, search)
 
     request = ChangeContextRequest(

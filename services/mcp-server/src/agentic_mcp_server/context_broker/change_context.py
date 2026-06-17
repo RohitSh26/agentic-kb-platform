@@ -45,6 +45,11 @@ _SEARCH_TOP = 12
 _CODE_TYPES = ("code_symbol", "code_file", "endpoint", "test")
 _CAPWORDS = re.compile(r"\b([A-Z][A-Za-z0-9]+(?:[A-Z][A-Za-z0-9]*)*)\b")  # ClassNames
 _PYFILE = re.compile(r"\b([A-Za-z0-9_./-]+\.py)\b")
+# Imported names whose DEFINING file is contract-critical to a change: exceptions, clients,
+# responses, configs, protocols, base classes. Writing correct code needs their real shape.
+_CONTRACT_RE = re.compile(
+    r"(Error|Exception|Client|Response|Request|Config|Protocol|Backend|Base|Spec)$"
+)
 
 
 def _is_test_path(path: str) -> bool:
@@ -84,6 +89,28 @@ def _conventional_test_paths(target_path: str) -> list[str]:
     # de-dupe preserving order
     seen: set[str] = set()
     return [p for p in out if not (p in seen or seen.add(p))]
+
+
+def _score_imported_file(
+    symbol_titles: list[str], target_body_lc: str, query_lc: str
+) -> tuple[float, list[str]]:
+    """Rank an imported file by how contract-critical it is to the change (judge rubric).
+
+    +0.40 a defined name appears in the TASK; +0.30 it appears in the target's own body
+    (it is actually used); +0.25 it is a contract-critical kind (Error/Client/Config/...).
+    Returns (score, names actually used by the target) — names drive the human reason."""
+    score = 0.0
+    used: list[str] = []
+    for t in symbol_titles:
+        tl = t.lower()
+        if tl and tl in query_lc:
+            score += 0.40
+        if tl and tl in target_body_lc:
+            score += 0.30
+            used.append(t)
+        if _CONTRACT_RE.search(t):
+            score += 0.25
+    return score, list(dict.fromkeys(used))
 
 
 async def create_change_pack(
@@ -250,33 +277,81 @@ async def create_change_pack(
     )
     test_files = test_files[:_MAX_TEST_FILES]
 
-    # --- stage 4: dependency files (imports/calls, capped) ---------------------------------
+    # --- stage 4: dependency files — the imported INTERFACE/exception/client the change needs.
+    # `imports` edges are file→file, so we seed from the target FILE artifact (reached via
+    # `defined_in` from the target symbol, or a code_file on the target path), follow imports,
+    # and RANK the imported files by contract-relevance so we pull `http_client.py` (defines the
+    # HttpFetchError/AsyncHttpClient the target uses) — not every imported module (token bloat).
+    target_file_ids = {
+        e.to_artifact_id
+        for e in edges
+        if e.edge_type == "defined_in" and e.from_artifact_id in target_symbol_set
+    } | {
+        a.artifact_id
+        for a in code
+        if a.artifact_type == "code_file" and _file_of(a) in target_paths
+    }
+
     dependency_files: list[FileRef] = []
-    dep_paths: set[str] = set()
-    for e in edges:
-        if e.edge_type not in ("imports", "calls"):
-            continue
-        other = e.to_artifact_id if e.from_artifact_id in seed_set else e.from_artifact_id
-        a = neighbours.get(other)
-        if a is None:
-            continue
-        path = _file_of(a)
-        if path in target_paths or path in dep_paths or _is_test_path(path):
-            continue
-        if len(dependency_files) >= _MAX_DEPENDENCY_FILES:
-            break
-        dep_paths.add(path)
-        kind = "imported by" if e.edge_type == "imports" else "called from"
-        dependency_files.append(
-            FileRef(
-                path=path,
-                reason=f"{kind} a target file ({e.edge_type})",
-                confidence=0.6,
-                est_tokens=_est_tokens_for_file(path, by_file_chars),
+    if target_file_ids:
+        async with deps.session_factory() as session:
+            import_edges = await fetch_edges_touching(
+                session, list(target_file_ids), build_seq, ["imports"]
             )
-        )
-        if a.artifact_type == "code_symbol" and a.title:
-            relevant_symbols.append(a.title)
+        imported_ids = {
+            (e.to_artifact_id if e.from_artifact_id in target_file_ids else e.from_artifact_id)
+            for e in import_edges
+        } - target_file_ids
+        # the symbols each imported file defines (for name-match scoring) via defined_in
+        async with deps.session_factory() as session:
+            def_edges = (
+                await fetch_edges_touching(session, list(imported_ids), build_seq, ["defined_in"])
+                if imported_ids
+                else []
+            )
+            sym_ids = [e.from_artifact_id for e in def_edges if e.to_artifact_id in imported_ids]
+            imported_rows = await fetch_artifacts(session, list(imported_ids), build_seq)
+            sym_rows = await fetch_artifacts(session, sym_ids, build_seq) if sym_ids else []
+        imported = {
+            a.artifact_id: a for a in deps.authorization.filter_artifacts(requester, imported_rows)
+        }
+        file_by_sym = {e.from_artifact_id: e.to_artifact_id for e in def_edges}
+        symbols_by_file: dict[uuid.UUID, list[str]] = {}
+        for s in sym_rows:
+            fid = file_by_sym.get(s.artifact_id)
+            if fid is not None and s.title:
+                symbols_by_file.setdefault(fid, []).append(s.title)
+                # token estimate for a pointer-only code_file = sum of its symbol spans
+                p = _file_of(s)
+                by_file_chars[p] = by_file_chars.get(p, 0) + len(s.body_text or "")
+
+        target_body_lc = " ".join(
+            (a.body_text or "") for a in code if a.artifact_id in target_symbol_set
+        ).lower()
+        query_lc = query.lower()
+
+        scored: list[tuple[float, str, str]] = []  # (score, path, reason)
+        for fid, art in imported.items():
+            path = _file_of(art)
+            if path in target_paths or _is_test_path(path):
+                continue
+            score, name_hits = _score_imported_file(
+                symbols_by_file.get(fid, []), target_body_lc, query_lc
+            )
+            if score <= 0:
+                continue
+            used = ", ".join(name_hits) or "imported by the target"
+            scored.append((score, path, f"defines {used} used by the target file"))
+        scored.sort(key=lambda s: -s[0])
+        for score, path, reason in scored[:_MAX_DEPENDENCY_FILES]:
+            dependency_files.append(
+                FileRef(
+                    path=path,
+                    reason=reason,
+                    confidence=min(0.95, 0.55 + score / 2),
+                    est_tokens=_est_tokens_for_file(path, by_file_chars),
+                )
+            )
 
     # --- budget enforcement (invariant 3: the BROKER caps tokens, not the caller) ----------
     # Target + test are essential and always kept; dependency files are trimmed (lowest

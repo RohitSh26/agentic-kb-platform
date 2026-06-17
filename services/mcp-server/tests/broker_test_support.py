@@ -166,6 +166,73 @@ async def insert_edge(
     await session.commit()
 
 
+async def insert_code_unit(
+    session: AsyncSession,
+    *,
+    source_uri: str,
+    symbols: dict[str, str],
+    kb_version: str = KB_VERSION,
+    acl_teams: list[str] | None = None,
+) -> tuple[uuid.UUID, dict[str, uuid.UUID]]:
+    """Insert a realistic code unit: ONE source_item, a code_file artifact, and its code_symbol
+    artifacts (``symbols`` = {title: body_text}), wired with `defined_in` symbol→file edges.
+
+    Mirrors how graphify stores a file and its symbols under a single source_item, which the
+    per-artifact ``insert_artifact`` helper cannot do (it mints a new source_item each call and
+    a unique (source_type, source_uri) constraint forbids sharing). Returns (file_id, {title: id})."""
+    source_id = uuid.uuid4()
+    await session.execute(
+        text(
+            "INSERT INTO source_item (source_id, source_type, source_uri, source_version,"
+            " path, content_hash, is_deleted) VALUES (CAST(:source_id AS uuid), 'github_code',"
+            " :source_uri, 'rev-1', :path, :content_hash, false)"
+        ),
+        {
+            "source_id": str(source_id),
+            "source_uri": source_uri,
+            "path": source_uri.rsplit("/", 1)[-1],
+            "content_hash": f"hash-{source_id}",
+        },
+    )
+
+    async def _artifact(artifact_type: str, title: str, body: str | None) -> uuid.UUID:
+        aid = uuid.uuid4()
+        await session.execute(
+            text(
+                "INSERT INTO knowledge_artifact (artifact_id, artifact_type, source_id, title,"
+                " body_text, kb_version, knowledge_kind, authority_score, acl_teams,"
+                " valid_from_seq) VALUES (CAST(:aid AS uuid), :atype, CAST(:sid AS uuid), :title,"
+                " :body, :kbv, 'source_backed', 0.8, CAST(:acl AS text[]), 0)"
+            ),
+            {
+                "aid": str(aid),
+                "atype": artifact_type,
+                "sid": str(source_id),
+                "title": title,
+                "body": body,
+                "kbv": kb_version,
+                "acl": acl_teams or [],
+            },
+        )
+        return aid
+
+    file_id = await _artifact("code_file", source_uri.rsplit("/", 1)[-1], None)
+    symbol_ids: dict[str, uuid.UUID] = {}
+    for title, body in symbols.items():
+        sid = await _artifact("code_symbol", title, body)
+        symbol_ids[title] = sid
+    await session.commit()
+    for sid in symbol_ids.values():
+        await insert_edge(
+            session,
+            from_artifact_id=sid,
+            to_artifact_id=file_id,
+            edge_type="defined_in",
+            confidence=1.0,
+        )
+    return file_id, symbol_ids
+
+
 async def fetch_ledger_rows(session: AsyncSession, run_id: str) -> list[Row[Any]]:
     result = await session.execute(
         text(
