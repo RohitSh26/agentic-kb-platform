@@ -1,7 +1,7 @@
 """`build` — the one product entry point for a local KB build (ADR-0010).
 
 Wires connectors + a local-filesystem fetch backend + the real extractors (Graphify for
-code, wikify via the LLM client) + a local embedder + the local Search indexer into the
+code AND docs — docify, ADR-0023) + a local embedder + the local Search indexer into the
 existing BuildRunner, and runs one incremental build into Postgres — no cloud, no spend.
 
 Usage (from services/kb-builder, with a migrated DATABASE_URL set):
@@ -9,8 +9,9 @@ Usage (from services/kb-builder, with a migrated DATABASE_URL set):
     uv run python -m agentic_kb_builder.build --workspace ../.. --sources ./sources.example.yaml
 
 Env: DATABASE_URL (asyncpg URL, schema already migrated via `alembic upgrade head`),
-plus the wikify model vars (LLM_PROVIDER/LLM_MODEL ... default local Ollama). A build only
-goes active after the consistency validator passes (invariant 5); pass --no-activate to skip.
+plus the model vars (LLM_PROVIDER/LLM_API_KEY/LLM_MODEL ... default local Ollama; documents
+require a key). A build only goes active after the consistency validator passes (invariant
+5); pass --no-activate to skip.
 """
 
 import argparse
@@ -26,9 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agentic_kb_builder.application.active_version import activate_kb_version, get_active_kb_version
 from agentic_kb_builder.application.build_runner import (
     BuildRunner,
+    DocExtractor,
     Embedder,
     SearchIndexer,
-    Wikifier,
 )
 from agentic_kb_builder.application.publish_gates import make_publish_gate_validator
 from agentic_kb_builder.connectors import (
@@ -44,6 +45,7 @@ from agentic_kb_builder.connectors.config_validator import (
 )
 from agentic_kb_builder.connectors.local_fs import local_fs_backend_factory
 from agentic_kb_builder.connectors.production_factory import production_backend_factory
+from agentic_kb_builder.docify import DocExtractor as RealDocExtractor
 from agentic_kb_builder.embeddings import LocalHashEmbedder
 from agentic_kb_builder.embeddings.ollama_embedder import OllamaEmbedder
 from agentic_kb_builder.indexing import SearchDocUpserter, make_consistency_validator
@@ -56,7 +58,6 @@ from agentic_kb_builder.linker.embedding_similarity import EmbeddingSimilarityPr
 from agentic_kb_builder.linker.judge import RelationshipJudge
 from agentic_kb_builder.linker.semantic import SimilarityProvider
 from agentic_kb_builder.structured_logging import configure_logging, get_logger
-from agentic_kb_builder.wikify.generate import WikifyGenerator
 
 logger = get_logger(__name__)
 
@@ -65,7 +66,7 @@ logger = get_logger(__name__)
 class Collaborators:
     """The injectable build collaborators — defaulted for local runs, faked in tests."""
 
-    wikifier: Wikifier
+    doc_extractor: DocExtractor
     embedder: Embedder
     indexer: SearchIndexer
     search_client: SearchClient  # backs the activation consistency validator
@@ -74,8 +75,9 @@ class Collaborators:
 
 
 def default_collaborators(session: AsyncSession, *, index_path: Path) -> Collaborators:
-    """Real, no-cloud collaborators: LLM wikify (local Ollama by default), Graphify code
-    extraction, deterministic local embeddings, and a PERSISTENT local Search projection.
+    """Real, no-cloud collaborators: Graphify LLM doc extraction (docify; local Ollama by
+    default), Graphify code extraction, deterministic local embeddings, and a PERSISTENT
+    local Search projection.
 
     The projection is file-backed (ADR-0017) so it survives across build invocations the
     same way the Azure index does — an incremental rebuild that upserts nothing still
@@ -94,8 +96,10 @@ def default_collaborators(session: AsyncSession, *, index_path: Path) -> Collabo
     # call per UNCACHED candidate (cached by content+prompt+model version), so it is
     # opt-in via RELATIONSHIP_JUDGE; without it candidates are generated but not judged.
     judge: RelationshipJudge | None = model if os.environ.get("RELATIONSHIP_JUDGE") else None
+    # Documents go through Graphify's LLM doc extractor (ADR-0023), configured from the
+    # same LLM_* env as ChatModelClient. The Graphify backend is registered in-process.
     return Collaborators(
-        wikifier=WikifyGenerator(model),
+        doc_extractor=RealDocExtractor.from_env(),
         embedder=LocalHashEmbedder(),
         indexer=SearchDocUpserter(session, client),
         search_client=client,
@@ -138,7 +142,7 @@ async def run_build(
     runner = BuildRunner(
         session,
         kb_version=kb_version,
-        wikifier=collaborators.wikifier,
+        doc_extractor=collaborators.doc_extractor,
         embedder=collaborators.embedder,
         indexer=collaborators.indexer,
         similarity=collaborators.similarity,

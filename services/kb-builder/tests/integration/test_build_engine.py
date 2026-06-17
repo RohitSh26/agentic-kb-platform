@@ -10,6 +10,7 @@ import os
 import uuid
 from collections.abc import AsyncIterator, Iterator, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from alembic import command
@@ -22,19 +23,17 @@ from agentic_kb_builder.application import (
     EmbeddingResult,
     GenerationCacheGate,
     activate_kb_version,
-    chunk_summary_cache_key,
     code_graph_cache_key,
+    doc_extract_cache_key,
     get_active_kb_version,
 )
 from agentic_kb_builder.connectors import GitHubCodeConnector, GitHubDocConnector
+from agentic_kb_builder.docify.extractor import DocExtractor
 from agentic_kb_builder.domain import (
-    Chunk,
-    ConceptDraft,
+    DocArtifactDraft,
+    DocExtractionResult,
     NormalizedContent,
-    SourceBackedFactDraft,
     SourceRef,
-    WikifyArtifactDraft,
-    WikifyGeneration,
 )
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.infrastructure.postgres.models import (
@@ -46,7 +45,6 @@ from agentic_kb_builder.infrastructure.postgres.models import (
     KnowledgeEdge,
     SourceItem,
 )
-from agentic_kb_builder.wikify import WikifyGenerator
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
@@ -70,18 +68,16 @@ TABLES_IN_DELETE_ORDER = (
 
 
 def test_cache_keys_are_deterministic_and_distinct() -> None:
-    key_a = chunk_summary_cache_key(
+    key_a = doc_extract_cache_key(
         source_content_hash="h1",
-        chunker_version="1.0.0",
-        wikify_prompt_version="1.0.0",
+        doc_extract_prompt_version="1.0.0",
         model_name="gpt-test",
         model_params_hash="p1",
         output_schema_version="1.0.0",
     )
-    key_b = chunk_summary_cache_key(
+    key_b = doc_extract_cache_key(
         source_content_hash="h2",
-        chunker_version="1.0.0",
-        wikify_prompt_version="1.0.0",
+        doc_extract_prompt_version="1.0.0",
         model_name="gpt-test",
         model_params_hash="p1",
         output_schema_version="1.0.0",
@@ -144,29 +140,31 @@ class FakeBackend:
         return self._texts[source.source_uri]
 
 
-class SpyWikifier:
+class SpyDocExtractor:
     model_name = "gpt-test"
     model_params_hash = "params-test"
 
     def __init__(self) -> None:
         self.calls = 0
 
-    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
+    async def extract(self, content: NormalizedContent) -> DocExtractionResult:
         self.calls += 1
-        return [
-            WikifyArtifactDraft(
-                artifact_type="summary",
-                knowledge_kind="interpreted",
-                title=f"summary of {content.source.path}",
-                body_text=f"Summary of {content.source.source_uri}",
-                authority_score=0.5,
-                freshness_score=1.0,
+        return DocExtractionResult(
+            artifacts=(
+                DocArtifactDraft(
+                    artifact_type="summary",
+                    knowledge_kind="interpreted",
+                    title=f"summary of {content.source.path}",
+                    body_text=f"Summary of {content.source.source_uri}",
+                    authority_score=0.5,
+                    freshness_score=1.0,
+                ),
             )
-        ]
+        )
 
 
-class FailingWikifier(SpyWikifier):
-    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
+class FailingDocExtractor(SpyDocExtractor):
+    async def extract(self, content: NormalizedContent) -> DocExtractionResult:
         self.calls += 1
         raise RuntimeError("model exploded")
 
@@ -222,7 +220,7 @@ DOC_REF = SourceRef(
     path="docs/guide.md",
 )
 
-Spies = tuple[BuildRunner, SpyWikifier, SpyEmbedder, SpyIndexer]
+Spies = tuple[BuildRunner, SpyDocExtractor, SpyEmbedder, SpyIndexer]
 
 # A one-function code file. Whole-tree Graphify yields a code_file artifact plus a
 # code_symbol (`get_user`, span 1-2, body_text=the def line) and one `defined_in` edge.
@@ -234,22 +232,22 @@ def _connector(raw: str) -> GitHubCodeConnector:
 
 
 def _doc_connector(raw: str) -> GitHubDocConnector:
-    """A github_doc connector for wikify-pipeline tests (graphify never runs on it)."""
+    """A github_doc connector for docify-pipeline tests (graphify never runs on it)."""
     return GitHubDocConnector(FakeBackend([DOC_REF], {DOC_URI: raw}))
 
 
 def _runner(session: AsyncSession, kb_version: str = "v-test.1") -> Spies:
-    wikifier = SpyWikifier()
+    doc_extractor = SpyDocExtractor()
     embedder = SpyEmbedder()
     indexer = SpyIndexer()
     runner = BuildRunner(
         session,
         kb_version=kb_version,
-        wikifier=wikifier,
+        doc_extractor=doc_extractor,
         embedder=embedder,
         indexer=indexer,
     )
-    return runner, wikifier, embedder, indexer
+    return runner, doc_extractor, embedder, indexer
 
 
 async def _count(session: AsyncSession, model: type[KnowledgeArtifact] | type) -> int:
@@ -261,7 +259,7 @@ async def test_first_build_processes_then_unchanged_build_skips_everything(
     session: AsyncSession,
 ) -> None:
     # A github_doc source (ADR-0018): wikify runs, graphify never does.
-    runner, wikifier, embedder, indexer = _runner(session)
+    runner, doc_extractor, embedder, indexer = _runner(session)
     run1 = await runner.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
     assert run1.sources_seen == 1
@@ -269,12 +267,12 @@ async def test_first_build_processes_then_unchanged_build_skips_everything(
     assert run1.llm_calls == 1
     # only the summary body is embedded (no code source ⇒ no graphify artifacts)
     assert run1.embedding_calls == 1
-    assert (wikifier.calls, embedder.calls, indexer.calls) == (1, 1, 1)
+    assert (doc_extractor.calls, embedder.calls, indexer.calls) == (1, 1, 1)
 
     seen_before = (await session.execute(select(SourceItem.last_seen_at))).scalar_one()
     assert seen_before is not None
 
-    runner2, wikifier2, embedder2, indexer2 = _runner(session, "v-test.2")
+    runner2, doc_extractor2, embedder2, indexer2 = _runner(session, "v-test.2")
     run2 = await runner2.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
     assert run2.sources_seen == 1
@@ -282,7 +280,7 @@ async def test_first_build_processes_then_unchanged_build_skips_everything(
     assert run2.llm_calls == 0
     assert run2.embedding_calls == 0
     # unchanged content_hash => chunk/wikify/graphify/embed/index all skipped
-    assert (wikifier2.calls, embedder2.calls, indexer2.calls) == (0, 0, 0)
+    assert (doc_extractor2.calls, embedder2.calls, indexer2.calls) == (0, 0, 0)
     # but the skip path still refreshes last_seen_at for deletion sweeps
     seen_after = (await session.execute(select(SourceItem.last_seen_at))).scalar_one()
     assert seen_after is not None and seen_after > seen_before
@@ -341,13 +339,13 @@ async def test_cache_hit_prevents_model_calls_even_when_source_looks_changed(
     await session.execute(update(SourceItem).values(content_hash="stale"))
     await session.commit()
 
-    runner2, wikifier2, embedder2, indexer2 = _runner(session, "v-test.2")
+    runner2, doc_extractor2, embedder2, indexer2 = _runner(session, "v-test.2")
     run2 = await runner2.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
     assert run2.sources_changed == 1
     assert run2.llm_calls == 0
     assert run2.embedding_calls == 0
-    assert (wikifier2.calls, embedder2.calls) == (0, 0)
+    assert (doc_extractor2.calls, embedder2.calls) == (0, 0)
     assert indexer2.calls == 1  # reindexing reused artifacts is allowed
     # just the wikify summary — no duplicates on retry; doc sources have no edges
     assert await _count(session, KnowledgeArtifact) == 1
@@ -361,7 +359,7 @@ async def test_failed_wikify_leaves_no_cache_row_or_artifacts_but_audit_row_surv
     runner = BuildRunner(
         session,
         kb_version="v-test.1",
-        wikifier=FailingWikifier(),
+        doc_extractor=FailingDocExtractor(),
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
@@ -380,31 +378,33 @@ async def test_failed_wikify_leaves_no_cache_row_or_artifacts_but_audit_row_surv
     assert failed_run.completed_at is not None
 
 
-class MultiDraftWikifier(SpyWikifier):
-    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
+class MultiDraftDocExtractor(SpyDocExtractor):
+    async def extract(self, content: NormalizedContent) -> DocExtractionResult:
         self.calls += 1
-        return [
-            WikifyArtifactDraft(
-                artifact_type="concept",
-                knowledge_kind="interpreted",
-                title="a",
-                body_text="a",
-                authority_score=0.6,
-                freshness_score=1.0,
-            ),
-            WikifyArtifactDraft(
-                artifact_type="concept",
-                knowledge_kind="interpreted",
-                title="b",
-                body_text="b",
-                authority_score=0.6,
-                freshness_score=1.0,
-            ),
-        ]
+        return DocExtractionResult(
+            artifacts=(
+                DocArtifactDraft(
+                    artifact_type="concept",
+                    knowledge_kind="interpreted",
+                    title="a",
+                    body_text="a",
+                    authority_score=0.6,
+                    freshness_score=1.0,
+                ),
+                DocArtifactDraft(
+                    artifact_type="concept",
+                    knowledge_kind="interpreted",
+                    title="b",
+                    body_text="b",
+                    authority_score=0.6,
+                    freshness_score=1.0,
+                ),
+            )
+        )
 
 
 @requires_db
-async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
+async def test_multi_artifact_docify_cache_hit_returns_all_artifacts(
     session: AsyncSession,
 ) -> None:
     """One cache row -> N artifacts via generation_cache_artifact; a hit must
@@ -412,18 +412,18 @@ async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
     runner = BuildRunner(
         session,
         kb_version="v-test.1",
-        wikifier=MultiDraftWikifier(),
+        doc_extractor=MultiDraftDocExtractor(),
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
     await runner.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
-    # 2 wikify concepts (a github_doc source ⇒ no graphify artifacts)
+    # 2 doc concepts (a github_doc source ⇒ no graphify artifacts)
     assert await _count(session, KnowledgeArtifact) == 2
-    # one wikify cache row (no graphify cache row for a doc source)
+    # one docify cache row (no graphify cache row for a doc source)
     assert await _count(session, GenerationCache) == 1
     assert await _count(session, GenerationCacheArtifact) == 2
-    # the wikify mapping preserves generation order (ORDER BY position)
+    # the docify mapping preserves generation order (ORDER BY position)
     mapped_titles = (
         (
             await session.execute(
@@ -445,20 +445,20 @@ async def test_multi_artifact_wikify_cache_hit_returns_all_artifacts(
     # artifacts still reach embed/index.
     await session.execute(update(SourceItem).values(content_hash="stale"))
     await session.commit()
-    wikifier2 = MultiDraftWikifier()
+    doc_extractor2 = MultiDraftDocExtractor()
     embedder2 = SpyEmbedder()
     indexer2 = SpyIndexer()
     runner2 = BuildRunner(
         session,
         kb_version="v-test.2",
-        wikifier=wikifier2,
+        doc_extractor=doc_extractor2,
         embedder=embedder2,
         indexer=indexer2,
     )
     run2 = await runner2.run([_doc_connector("Some prose to summarize.\n")])
     await session.commit()
     assert run2.llm_calls == 0
-    assert wikifier2.calls == 0
+    assert doc_extractor2.calls == 0
     assert embedder2.calls == 0  # embedding cache also hits for every artifact
     assert indexer2.calls == 1
     assert await _count(session, KnowledgeArtifact) == 2
@@ -498,81 +498,132 @@ async def test_generation_cache_record_is_idempotent_for_same_ids(session: Async
     assert await gate.lookup_artifact_ids("k") == [artifact.artifact_id]
 
 
-class FakeModelClient:
-    model_name = "gpt-test"
-    model_params_hash = "params-test"
+DOC_TEXT = (
+    "The login flow validates a session token against the AuthMiddleware.\n"
+    "Tokens are refreshed by the rotation job.\n"
+)
 
-    def __init__(self, generation: WikifyGeneration) -> None:
-        self.calls = 0
-        self._generation = generation
 
-    async def generate_wikify(
-        self, *, chunks: Sequence[Chunk], prompt_version: str
-    ) -> WikifyGeneration:
-        self.calls += 1
-        return self._generation
+def _captured_extraction(doc_path: str) -> dict[str, Any]:
+    """A captured-shape Graphify doc extraction over DOC_TEXT. The grounded concept's
+    source_location is a verbatim source sentence; the paraphrased one is not; the
+    document node carries a heading. The raw extraction still includes a concept->concept
+    relation, which docify deliberately does NOT materialize as an edge (relation-ontology)."""
+    return {
+        "nodes": [
+            {
+                "id": "doc",
+                "label": "Login guide",
+                "file_type": "document",
+                "source_file": doc_path,
+                "source_location": "# Login guide",
+            },
+            {
+                "id": "login_flow",
+                "label": "login flow",
+                "file_type": "concept",
+                "source_file": doc_path,
+                "source_location": (
+                    "The login flow validates a session token against the AuthMiddleware."
+                ),
+            },
+            {
+                "id": "rotation",
+                "label": "token rotation",
+                "file_type": "concept",
+                "source_file": doc_path,
+                "source_location": "The credentials are rotated on a schedule.",
+            },
+        ],
+        "edges": [
+            {
+                "source": "login_flow",
+                "target": "rotation",
+                "relation": "conceptually_related_to",
+                "confidence": "EXTRACTED",
+            }
+        ],
+        "input_tokens": 10,
+        "output_tokens": 5,
+    }
+
+
+def _fake_doc_extractor() -> tuple["DocExtractor", list[int]]:
+    """A real DocExtractor wired to an INJECTED fake extract_fn (no live LLM). The list it
+    returns counts calls so the cache-gate behaviour is provable."""
+    calls = [0]
+
+    async def fake_extract_fn(*, text: str, doc_path: str) -> dict[str, Any]:
+        calls[0] += 1
+        return _captured_extraction(doc_path)
+
+    extractor = DocExtractor(
+        fake_extract_fn,
+        model_name="gpt-test",
+        model_params_hash="params-test",
+    )
+    return extractor, calls
 
 
 @requires_db
-async def test_wikify_pipeline_cache_miss_writes_then_cache_hit_skips_model(
+async def test_docify_pipeline_cache_miss_writes_then_cache_hit_skips_model(
     session: AsyncSession,
 ) -> None:
-    raw = "def f():\n    return 1\n"
-    generation = WikifyGeneration(
-        summary="Defines f returning 1.",
-        concepts=(ConceptDraft(name="f", description="A function returning 1."),),
-        facts=(
-            SourceBackedFactDraft(statement="f returns 1", quote="return 1"),
-            SourceBackedFactDraft(statement="invented", quote="not in the source"),
-        ),
-    )
-    model_client = FakeModelClient(generation)
+    extractor, calls = _fake_doc_extractor()
     runner = BuildRunner(
         session,
         kb_version="v-test.1",
-        wikifier=WikifyGenerator(model_client),
+        doc_extractor=extractor,
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
-    run1 = await runner.run([_doc_connector(raw)])
+    run1 = await runner.run([_doc_connector(DOC_TEXT)])
     await session.commit()
-    assert model_client.calls == 1
+    assert calls[0] == 1
     assert run1.llm_calls == 1
 
     artifacts = (await session.execute(select(KnowledgeArtifact))).scalars().all()
     by_type = {artifact.artifact_type: artifact for artifact in artifacts}
-    # a github_doc source (ADR-0018) ⇒ wikify only: 1 chunk + summary + concept +
-    # the quote-backed fact (the invented fact is dropped); no graphify artifacts.
-    assert sorted(by_type) == [
-        "chunk",
-        "concept",
-        "source_backed_fact",
-        "summary",
-    ]
+    # a github_doc source (ADR-0023) ⇒ docify: an interpreted summary (the document node),
+    # one source_backed_fact (the verbatim-anchored concept), and one interpreted concept
+    # (the paraphrased one). No chunk artifacts — docify replaces wikify's chunker.
+    assert sorted(by_type) == ["concept", "source_backed_fact", "summary"]
     summary = by_type["summary"]
     assert summary.knowledge_kind == "interpreted"
     assert summary.authority_score is not None and summary.authority_score < 1.0
     assert summary.freshness_score == 1.0
-    assert by_type["chunk"].knowledge_kind == "source_backed"
-    assert by_type["source_backed_fact"].knowledge_kind == "source_backed"
-    assert "not in the source" not in {a.body_text for a in artifacts}
+    backed = by_type["source_backed_fact"]
+    assert backed.knowledge_kind == "source_backed"
+    # the source_backed body carries the verbatim supporting sentence (L0-confirmable).
+    assert backed.body_text is not None and backed.body_text in DOC_TEXT
+    assert by_type["concept"].knowledge_kind == "interpreted"
+    # docify produces ARTIFACTS ONLY — concept->concept relations are NOT materialized as
+    # edges (relation-ontology); the doc path writes no knowledge_edge rows.
+    assert await _count(session, KnowledgeEdge) == 0
 
-    # cache hit: stale-looking source, same content => zero model calls
+    # cache hit: stale-looking source, same content => zero model calls, same artifact ids
+    prior_ids = {a.artifact_id for a in artifacts}
     await session.execute(update(SourceItem).values(content_hash="stale"))
     await session.commit()
-    model_client2 = FakeModelClient(generation)
+    extractor2, calls2 = _fake_doc_extractor()
     runner2 = BuildRunner(
         session,
         kb_version="v-test.2",
-        wikifier=WikifyGenerator(model_client2),
+        doc_extractor=extractor2,
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
-    run2 = await runner2.run([_doc_connector(raw)])
+    run2 = await runner2.run([_doc_connector(DOC_TEXT)])
     await session.commit()
-    assert model_client2.calls == 0
+    assert calls2[0] == 0
     assert run2.llm_calls == 0
-    assert await _count(session, KnowledgeArtifact) == 4
+    # idempotent: no duplicate artifacts (and no edges), and the SAME artifact ids replayed.
+    assert await _count(session, KnowledgeArtifact) == 3
+    assert await _count(session, KnowledgeEdge) == 0
+    after_ids = {
+        a.artifact_id for a in (await session.execute(select(KnowledgeArtifact))).scalars().all()
+    }
+    assert after_ids == prior_ids
 
 
 def _multi_connector(refs_to_text: dict[tuple[str, str, str], str]) -> GitHubCodeConnector:
@@ -611,7 +662,7 @@ async def test_graphify_real_tree_creates_artifacts_and_edges(session: AsyncSess
     runner = BuildRunner(
         session,
         kb_version="v-test.1",
-        wikifier=SpyWikifier(),
+        doc_extractor=SpyDocExtractor(),
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
@@ -708,7 +759,7 @@ async def test_cross_file_edges_resolve_within_one_build_regardless_of_order(
     runner = BuildRunner(
         session,
         kb_version="v-test.1",
-        wikifier=SpyWikifier(),
+        doc_extractor=SpyDocExtractor(),
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
@@ -748,7 +799,7 @@ async def test_same_path_in_two_repos_does_not_cross_bind_edges(session: AsyncSe
     runner = BuildRunner(
         session,
         kb_version="v-test.1",
-        wikifier=SpyWikifier(),
+        doc_extractor=SpyDocExtractor(),
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )

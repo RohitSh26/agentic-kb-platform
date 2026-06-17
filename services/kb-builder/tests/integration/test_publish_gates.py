@@ -7,7 +7,7 @@ previously active version keeps serving. The allow_large_delta override is honou
 """
 
 import os
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
@@ -25,7 +25,11 @@ from agentic_kb_builder.application.publish_gates import (
     symbol_count_delta_gate,
 )
 from agentic_kb_builder.build import Collaborators, run_build
-from agentic_kb_builder.domain import NormalizedContent, WikifyArtifactDraft
+from agentic_kb_builder.domain import (
+    DocArtifactDraft,
+    DocExtractionResult,
+    NormalizedContent,
+)
 from agentic_kb_builder.embeddings import LocalHashEmbedder
 from agentic_kb_builder.indexing import SearchDocUpserter
 from agentic_kb_builder.infrastructure.azure_search.search_client import FakeSearchClient
@@ -69,21 +73,23 @@ SOURCES_YAML = (
 )
 
 
-class FakeWikifier:
+class FakeDocExtractor:
     model_name = "fake-wikify"
     model_params_hash = "fake-params"
 
-    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
-        return [
-            WikifyArtifactDraft(
-                artifact_type="summary",
-                knowledge_kind="interpreted",
-                title=f"summary of {content.source.path}",
-                body_text=f"Summary of {content.source.path}",
-                authority_score=0.5,
-                freshness_score=1.0,
+    async def extract(self, content: NormalizedContent) -> DocExtractionResult:
+        return DocExtractionResult(
+            artifacts=(
+                DocArtifactDraft(
+                    artifact_type="summary",
+                    knowledge_kind="interpreted",
+                    title=f"summary of {content.source.path}",
+                    body_text=f"Summary of {content.source.path}",
+                    authority_score=0.5,
+                    freshness_score=1.0,
+                ),
             )
-        ]
+        )
 
 
 @pytest.fixture(scope="module")
@@ -131,7 +137,7 @@ def _workspace(tmp_path: Path) -> tuple[Path, Path]:
 def _collaborators(session: AsyncSession) -> Collaborators:
     client = FakeSearchClient()
     return Collaborators(
-        wikifier=FakeWikifier(),
+        doc_extractor=FakeDocExtractor(),
         embedder=LocalHashEmbedder(),
         indexer=SearchDocUpserter(session, client),
         search_client=client,

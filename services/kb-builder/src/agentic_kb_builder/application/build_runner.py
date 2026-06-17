@@ -1,13 +1,12 @@
 """Incremental build runner — the 8-step algorithm from docs/architecture §7.
 
-Unchanged content_hash => chunk/wikify/graphify/embed/index are all skipped.
-Wikify (kb_builder.wikify), the graphify adapter (kb_builder.graphify_adapter),
-and the search indexer (kb_builder.indexer) are real; the embedding backend
-remains a Protocol until the Azure OpenAI client lands. Every model-shaped call is
-gated by a cache lookup so a hit never reaches the model. Generation-cache rows
-are recorded in the same transaction as their output artifacts, after the
-artifacts are persisted, so a crash between generate and cache can never strand
-a cache row without output.
+Unchanged content_hash => docify/graphify/embed/index are all skipped. Document
+sources go through docify (Graphify's LLM doc extraction, ADR-0023) and code through
+the whole-tree graphify adapter; both, the search indexer, and the embedding backend
+are injected collaborators. Every model-shaped call is gated by a cache lookup so a hit
+never reaches the model. Generation-cache rows are recorded in the same transaction as
+their output artifacts, after the artifacts are persisted, so a crash between generate
+and cache can never strand a cache row without output.
 """
 
 import uuid
@@ -22,21 +21,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agentic_kb_builder.application.cache_gates import (
     EmbeddingCacheGate,
     GenerationCacheGate,
-    chunk_summary_cache_key,
+    doc_extract_cache_key,
 )
 from agentic_kb_builder.application.invalidation import run_invalidation_pass
 from agentic_kb_builder.application.write_commit import write_commit_artifact
 from agentic_kb_builder.connectors import Connector
 from agentic_kb_builder.connectors.git_metadata import parse_changed_files
+from agentic_kb_builder.docify.write import write_doc_artifacts
 from agentic_kb_builder.domain import (
+    DocExtractionResult,
     NormalizedContent,
-    WikifyArtifactDraft,
 )
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.domain.schema_versions import (
-    CHUNKER_VERSION,
+    DOC_EXTRACT_PROMPT_VERSION,
     OUTPUT_SCHEMA_VERSION,
-    PROMPT_VERSION,
 )
 from agentic_kb_builder.graphify.graphify_backend import graphify_tree
 from agentic_kb_builder.graphify.write import write_code_artifacts, write_code_edges
@@ -50,19 +49,22 @@ from agentic_kb_builder.linker.run import run_linker
 from agentic_kb_builder.linker.run_candidates import run_candidate_generator
 from agentic_kb_builder.linker.semantic import SimilarityProvider
 from agentic_kb_builder.structured_logging import get_logger
-from agentic_kb_builder.wikify.write import write_wikify_artifacts
 
 logger = get_logger(__name__)
 
 
-class Wikifier(Protocol):
+class DocExtractor(Protocol):
+    """The document-extraction seam (ADR-0023): one document -> mapped doc artifacts
+    (artifacts-only). Implemented by docify.DocExtractor (Graphify LLM extraction);
+    faked in tests."""
+
     @property
     def model_name(self) -> str: ...
 
     @property
     def model_params_hash(self) -> str: ...
 
-    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]: ...
+    async def extract(self, content: NormalizedContent) -> DocExtractionResult: ...
 
 
 @dataclass(frozen=True)
@@ -132,7 +134,7 @@ class BuildRunner:
         session: AsyncSession,
         *,
         kb_version: str,
-        wikifier: Wikifier,
+        doc_extractor: DocExtractor,
         embedder: Embedder,
         indexer: SearchIndexer,
         similarity: SimilarityProvider | None = None,
@@ -142,7 +144,7 @@ class BuildRunner:
         self._kb_version = kb_version
         # Assigned once at run start from the kb_build_seq SEQUENCE (set in run()).
         self._build_seq: int = 0
-        self._wikifier = wikifier
+        self._doc_extractor = doc_extractor
         self._embedder = embedder
         self._indexer = indexer
         self._similarity = similarity
@@ -474,15 +476,16 @@ class BuildRunner:
     ) -> uuid.UUID:
         """Process one changed NON-code source; return its source_id (seen this build).
 
-        Routing (ADR-0018): git_metadata -> one deterministic commit artifact;
-        github_doc / azure_wiki / ado_card -> wikify (the LLM is reserved for prose).
-        github_code is handled separately as a whole tree (see _graphify_code_tree).
+        Routing (ADR-0018 / ADR-0023): git_metadata -> one deterministic commit artifact;
+        github_doc / azure_wiki / ado_card -> docify (Graphify's LLM doc extraction; the LLM
+        is reserved for prose). github_code is handled separately as a whole tree (see
+        _graphify_code_tree).
         """
         if fetched.source.source_type == "git_metadata":
             return await self._process_commit_source(counters, fetched)
         source_id = await self._upsert_source_item(fetched)
-        # Prose sources (github_doc / azure_wiki / ado_card) go through wikify.
-        artifact_ids = await self._wikify_gated(counters, fetched, source_id)
+        # Prose sources (github_doc / azure_wiki / ado_card) go through docify.
+        artifact_ids = await self._docify_gated(counters, fetched, source_id)
         for artifact_id in artifact_ids:
             await self._embed_gated(counters, artifact_id)
         if artifact_ids:
@@ -577,7 +580,7 @@ class BuildRunner:
     ) -> uuid.UUID:
         """git_metadata path: ONE deterministic commit artifact, zero LLM.
 
-        No wikify, no graphify, no generation-cache row, no llm_calls increment —
+        No docify, no graphify, no generation-cache row, no llm_calls increment —
         the rendering is fully deterministic from git, so the content_hash skip
         (above) handles incrementality. The artifact is still embedded and
         indexed via the shared deterministic paths so it is retrievable.
@@ -617,60 +620,61 @@ class BuildRunner:
             )
         return artifact_ids
 
-    async def _wikify_gated(
+    async def _docify_gated(
         self, counters: _Counters, fetched: NormalizedContent, source_id: uuid.UUID
     ) -> list[uuid.UUID]:
-        cache_key = chunk_summary_cache_key(
+        """Cache-gated document extraction (ADR-0023). Mirrors the retired _wikify_gated
+        exactly for caching: a hit replays the MAPPED artifact rows from
+        generation_cache_artifact (no LLM call); a miss runs the extractor, writes
+        artifacts, and records the cache. Docify produces artifacts only — no edges
+        (relation-ontology). llm_calls is incremented only on a miss."""
+        cache_key = doc_extract_cache_key(
             source_content_hash=fetched.content_hash,
-            chunker_version=CHUNKER_VERSION,
-            wikify_prompt_version=PROMPT_VERSION,
-            model_name=self._wikifier.model_name,
-            model_params_hash=self._wikifier.model_params_hash,
+            doc_extract_prompt_version=DOC_EXTRACT_PROMPT_VERSION,
+            model_name=self._doc_extractor.model_name,
+            model_params_hash=self._doc_extractor.model_params_hash,
             output_schema_version=OUTPUT_SCHEMA_VERSION,
         )
-        # Per-file headline as this source ENTERS wikify (path + the model that will
-        # generate on a miss). Additive; fires before the cache lookup so the reader sees
+        # Per-file headline as this source ENTERS docify (path + the model that will
+        # extract on a miss). Additive; fires before the cache lookup so the reader sees
         # the file even on a hit (where no model call follows).
         logger.info(
-            "event=build_file_wikify source_uri=%s path=%s model=%s",
+            "event=build_file_docify source_uri=%s path=%s model=%s",
             fetched.source.source_uri,
             fetched.source.path or "",
-            self._wikifier.model_name,
+            self._doc_extractor.model_name,
         )
         hit = await self._generation_gate.lookup(cache_key)
         if hit is not None:
-            # Every known wikifier emits >= 1 draft, so an empty mapping on a hit
-            # almost certainly means a corrupt/unbackfilled cache row.
+            # Every doc extraction emits >= 1 artifact (the document summary), so an empty
+            # mapping on a hit almost certainly means a corrupt/unbackfilled cache row.
             return await self._cache_hit_artifact_ids(
                 cache_key,
-                empty_event="wikify_cache_hit_empty_mapping",
+                empty_event="docify_cache_hit_empty_mapping",
                 source_uri=fetched.source.source_uri,
             )
-        logger.info(
-            "event=wikify_started source_uri=%s path=%s model=%s",
-            fetched.source.source_uri,
-            fetched.source.path or "",
-            self._wikifier.model_name,
-        )
-        drafts = await self._wikifier.wikify(fetched)
+        result = await self._doc_extractor.extract(fetched)
         counters.llm_calls += 1
-        # write_wikify_artifacts flushes BEFORE the cache row is recorded (same
-        # transaction) so a cache row can never exist without its output artifacts.
-        artifact_ids = await write_wikify_artifacts(
+        # write_doc_artifacts flushes BEFORE the cache row is recorded (same transaction)
+        # so a cache row can never exist without its output artifacts. Docify writes no
+        # edges (relation-ontology) — artifacts only.
+        artifact_ids = await write_doc_artifacts(
             self._session,
             source_id=source_id,
             kb_version=self._kb_version,
             valid_from_seq=self._build_seq,
             acl_teams=list(fetched.source.acl_teams),
-            drafts=drafts,
+            drafts=result.artifacts,
         )
         counters.artifacts_created += len(artifact_ids)
+        # The cache stores the MAPPED ARTIFACT ROWS (ADR-0023 §4): a replay returns these
+        # ids and never re-runs the mapper over stale Graphify output.
         await self._generation_gate.record(
             cache_key=cache_key,
             input_hash=fetched.content_hash,
-            prompt_version=PROMPT_VERSION,
-            model_name=self._wikifier.model_name,
-            model_params_hash=self._wikifier.model_params_hash,
+            prompt_version=DOC_EXTRACT_PROMPT_VERSION,
+            model_name=self._doc_extractor.model_name,
+            model_params_hash=self._doc_extractor.model_params_hash,
             output_schema_version=OUTPUT_SCHEMA_VERSION,
             output_artifact_ids=artifact_ids,
         )

@@ -83,23 +83,23 @@ def test_get_logger_adds_no_handler_of_its_own() -> None:
 def test_timeline_keeps_the_full_event_and_key_value_tail() -> None:
     # The whole point: the human prefix is additive — every existing event=/key=value
     # token a test greps for must still appear verbatim in the rendered line.
-    message = "event=wikify_started source_uri=file:///x.md path=x.md model=ollama:llama3.1"
-    line = TimelineFormatter().format(_record("agentic_kb_builder.wikify.generate", message))
+    message = "event=docify_started source_uri=file:///x.md path=x.md model=ollama:llama3.1"
+    line = TimelineFormatter().format(_record("agentic_kb_builder.docify.extractor", message))
     assert message in line
-    assert "event=wikify_started" in line
+    assert "event=docify_started" in line
     assert "model=ollama:llama3.1" in line
 
 
 def test_timeline_leads_with_clock_stage_and_headline() -> None:
     line = TimelineFormatter().format(
-        _record("agentic_kb_builder.wikify.generate", "event=wikify_started path=x.md")
+        _record("agentic_kb_builder.docify.extractor", "event=docify_started path=x.md")
     )
-    # HH:MM:SS.mmm clock, an elapsed delta, the WIKIFY stage, and the human headline.
+    # HH:MM:SS.mmm clock, an elapsed delta, the DOCIFY stage, and the human headline.
     import re
 
     assert re.match(r"^\d{2}:\d{2}:\d{2}\.\d{3}\s+\+", line)
-    assert "WIKIFY" in line
-    assert "summarizing" in line  # the headline for wikify_started
+    assert "DOCIFY" in line
+    assert "extracting doc" in line  # the headline for docify_started
 
 
 def test_timeline_surfaces_level_for_warnings_and_errors() -> None:
@@ -116,7 +116,7 @@ def test_timeline_surfaces_level_for_warnings_and_errors() -> None:
 
 def test_stage_derivation_covers_the_build_pipeline() -> None:
     assert _stage_for("agentic_kb_builder.connectors.local_fs") == "FETCH"
-    assert _stage_for("agentic_kb_builder.wikify.generate") == "WIKIFY"
+    assert _stage_for("agentic_kb_builder.docify.extractor") == "DOCIFY"
     assert _stage_for("agentic_kb_builder.graphify.write") == "GRAPHIFY"
     assert _stage_for("agentic_kb_builder.linker.judge") == "JUDGE"
     assert _stage_for("agentic_kb_builder.linker.run") == "LINKER"

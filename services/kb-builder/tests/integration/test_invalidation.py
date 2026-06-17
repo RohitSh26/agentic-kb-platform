@@ -22,7 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from agentic_kb_builder.application import BuildRunner, EmbeddingResult
 from agentic_kb_builder.application.invalidation import run_invalidation_pass
 from agentic_kb_builder.connectors import GitHubDocConnector
-from agentic_kb_builder.domain import NormalizedContent, SourceRef, WikifyArtifactDraft
+from agentic_kb_builder.domain import (
+    DocArtifactDraft,
+    DocExtractionResult,
+    NormalizedContent,
+    SourceRef,
+)
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.infrastructure.postgres.models import (
     EmbeddingCache,
@@ -84,27 +89,29 @@ async def session(migrated_db: None) -> AsyncIterator[AsyncSession]:
     await engine.dispose()
 
 
-class _Wikifier:
+class _DocExtractor:
     model_name = "gpt-test"
     model_params_hash = "params-test"
 
     def __init__(self) -> None:
         self.calls = 0
 
-    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
+    async def extract(self, content: NormalizedContent) -> DocExtractionResult:
         self.calls += 1
         # body_text is the source text so the artifact content_hash tracks the
         # source content — the deterministic signal the rename pass keys on.
-        return [
-            WikifyArtifactDraft(
-                artifact_type="summary",
-                knowledge_kind="interpreted",
-                title=f"summary of {content.source.path}",
-                body_text=content.text,
-                authority_score=0.5,
-                freshness_score=1.0,
+        return DocExtractionResult(
+            artifacts=(
+                DocArtifactDraft(
+                    artifact_type="summary",
+                    knowledge_kind="interpreted",
+                    title=f"summary of {content.source.path}",
+                    body_text=content.text,
+                    authority_score=0.5,
+                    freshness_score=1.0,
+                ),
             )
-        ]
+        )
 
 
 class _Embedder:
@@ -161,7 +168,7 @@ def _runner(session: AsyncSession, kb_version: str) -> BuildRunner:
     return BuildRunner(
         session,
         kb_version=kb_version,
-        wikifier=_Wikifier(),
+        doc_extractor=_DocExtractor(),
         embedder=_Embedder(),
         indexer=_Indexer(),
     )

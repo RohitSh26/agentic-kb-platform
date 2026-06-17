@@ -9,6 +9,11 @@ from typing import Final
 OUTPUT_SCHEMA_VERSION: Final = "1.0.0"
 PROMPT_VERSION: Final = "1.0.0"
 CHUNKER_VERSION: Final = "1.0.0"
+# Doc-extraction prompt version (ADR-0023): part of the docify generation-cache key.
+# Graphify owns the actual doc-extraction prompt; this gates our cache so a change to the
+# docify mapper / extraction contract invalidates cached doc generations. Bump it when the
+# doc-extraction output contract or the mapper's trust derivation changes.
+DOC_EXTRACT_PROMPT_VERSION: Final = "1.0.0"
 # 1.1.0: graphify now emits artifacts (PR-06); invalidates PR-04-era cache rows
 # whose artifact mappings are empty.
 GRAPHIFY_VERSION: Final = "1.1.0"

@@ -3,7 +3,7 @@
 A derived artifact is visible only where its source is, so kb-builder propagates
 source_item.acl_teams onto its derived artifacts at build time:
 
-- the wikify/graphify writers stamp the source ACL on NEWLY written artifacts;
+- the docify/graphify writers stamp the source ACL on NEWLY written artifacts;
 - the invalidation pass propagates an ACL-only change (even content-unchanged ⇒
   cache hit) onto a source's live artifacts.
 
@@ -22,9 +22,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from agentic_kb_builder.application.invalidation import run_invalidation_pass
-from agentic_kb_builder.domain import WikifyArtifactDraft
+from agentic_kb_builder.docify.write import write_doc_artifacts
+from agentic_kb_builder.domain import DocArtifactDraft
 from agentic_kb_builder.infrastructure.postgres.models import KnowledgeArtifact, SourceItem
-from agentic_kb_builder.wikify.write import write_wikify_artifacts
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
@@ -66,19 +66,19 @@ async def test_writer_propagates_source_acl_onto_new_artifacts(migrated_db: None
             )
             session.add(source)
             await session.flush()
-            ids = await write_wikify_artifacts(
+            artifact_ids = await write_doc_artifacts(
                 session,
                 source_id=source.source_id,
                 kb_version="kb-acl-writer",
                 valid_from_seq=1,
                 acl_teams=["team-secure"],
                 drafts=[
-                    WikifyArtifactDraft(
-                        artifact_type="summary",
+                    DocArtifactDraft(
+                        artifact_type="concept",
                         title="derived",
                         body_text="derived body",
                         knowledge_kind="interpreted",
-                        authority_score=0.8,
+                        authority_score=0.6,
                         freshness_score=1.0,
                     )
                 ],
@@ -86,7 +86,7 @@ async def test_writer_propagates_source_acl_onto_new_artifacts(migrated_db: None
             stored = (
                 await session.execute(
                     select(KnowledgeArtifact.acl_teams).where(
-                        KnowledgeArtifact.artifact_id == ids[0]
+                        KnowledgeArtifact.artifact_id == artifact_ids[0]
                     )
                 )
             ).scalar_one()

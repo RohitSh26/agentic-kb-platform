@@ -20,10 +20,11 @@ from agentic_kb_builder.application import BuildRunner, EmbeddingResult
 from agentic_kb_builder.connectors import connectors_from_config, load_source_config
 from agentic_kb_builder.connectors.source_connector import FetchBackend
 from agentic_kb_builder.domain import (
+    DocArtifactDraft,
+    DocExtractionResult,
     NormalizedContent,
     SourceRef,
     SourceSpec,
-    WikifyArtifactDraft,
 )
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.infrastructure.postgres.models import SourceItem
@@ -120,21 +121,23 @@ class FakeBackend:
         return self._texts[source.source_uri]
 
 
-class FakeWikifier:
+class FakeDocExtractor:
     model_name = "gpt-test"
     model_params_hash = "params-test"
 
-    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
-        return [
-            WikifyArtifactDraft(
-                artifact_type="summary",
-                knowledge_kind="interpreted",
-                title=f"summary of {content.source.path}",
-                body_text=f"Summary of {content.source.source_uri}",
-                authority_score=0.5,
-                freshness_score=1.0,
+    async def extract(self, content: NormalizedContent) -> DocExtractionResult:
+        return DocExtractionResult(
+            artifacts=(
+                DocArtifactDraft(
+                    artifact_type="summary",
+                    knowledge_kind="interpreted",
+                    title=f"summary of {content.source.path}",
+                    body_text=f"Summary of {content.source.source_uri}",
+                    authority_score=0.5,
+                    freshness_score=1.0,
+                ),
             )
-        ]
+        )
 
 
 class FakeEmbedder:
@@ -159,7 +162,7 @@ def _runner(session: AsyncSession, kb_version: str) -> BuildRunner:
     return BuildRunner(
         session,
         kb_version=kb_version,
-        wikifier=FakeWikifier(),
+        doc_extractor=FakeDocExtractor(),
         embedder=FakeEmbedder(),
         indexer=FakeIndexer(),
     )

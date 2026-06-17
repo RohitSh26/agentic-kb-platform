@@ -1,10 +1,11 @@
 """Concrete ModelClient over any OpenAI-compatible chat endpoint.
 
-Lets wikify generation be validated locally and cheaply: it defaults to a local
-**Ollama** server (no cloud, no spend) and repoints to **Groq**, **OpenAI**, or
-**Azure OpenAI** by environment variables alone. The `openai` SDK is confined to
-this module — the rest of the build plane depends only on the `ModelClient`
-protocol (rule python.md), so the model backend stays swappable.
+Backs the phase-3B relationship judge: it defaults to a local **Ollama** server (no
+cloud, no spend) and repoints to **Groq**, **OpenAI**, or **Azure OpenAI** by
+environment variables alone. The `openai` SDK is confined to this module — the rest of
+the build plane depends only on the `ModelClient` protocol (rule python.md), so the
+model backend stays swappable. ``_PROVIDER_DEFAULTS`` (provider -> base_url) is also
+reused by the ``docify`` adapter to register Graphify's doc-extraction backend (ADR-0023).
 
 Configure via env (see the wiki "Run locally"):
 - `LLM_PROVIDER`: `ollama` (default) | `groq` | `openai` | `azure`
@@ -20,7 +21,6 @@ import json
 import os
 import re
 import time
-from collections.abc import Sequence
 from typing import cast
 
 from json_repair import repair_json
@@ -29,10 +29,8 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import ValidationError
 
 from agentic_kb_builder.domain import (
-    Chunk,
     JudgeCandidate,
     RelationshipJudgment,
-    WikifyGeneration,
 )
 from agentic_kb_builder.domain.judge_records import (
     JUDGE_RELATION_TYPES,
@@ -52,19 +50,6 @@ _PROVIDER_DEFAULTS: dict[str, tuple[str, str, str]] = {
     "groq": ("https://api.groq.com/openai/v1", "", "llama-3.1-8b-instant"),
     "openai": ("https://api.openai.com/v1", "", "gpt-4o-mini"),
 }
-
-_SYSTEM_PROMPT = (
-    "You analyze ONE source document and return STRICT JSON only — no prose, no "
-    "markdown fences. Use exactly this schema:\n"
-    '{"summary": "<2-4 sentence neutral summary>",\n'
-    ' "concepts": [{"name": "<short noun phrase>", "description": "<1-2 sentences>"}],\n'
-    ' "facts": [{"statement": "<a specific claim>", "quote": "<verbatim span copied '
-    'exactly from the source that supports the statement>"}]}\n'
-    "Every fact.quote MUST be an exact substring of the source text, copied "
-    "character-for-character — facts whose quote is not found verbatim in the source "
-    "are discarded downstream. Prefer 3-7 concepts and 2-6 facts."
-)
-
 
 _JUDGE_SYSTEM_PROMPT = (
     "You judge whether TWO knowledge artifacts from different domains (e.g. a doc and "
@@ -94,11 +79,6 @@ def _require_env(name: str) -> str:
     return value
 
 
-def _user_prompt(chunks: Sequence[Chunk]) -> str:
-    body = "\n\n".join(chunk.text for chunk in chunks)
-    return f"SOURCE DOCUMENT:\n{body}\n\nReturn the JSON now."
-
-
 def _extract_json(raw: str) -> str:
     text = raw.strip()
     if text.startswith("```"):
@@ -125,54 +105,6 @@ def _unwrap_list(data: object) -> object:
         return items
     logger.warning("event=model_json_unwrapped_array")
     return first
-
-
-def _clean_items(items: object, keys: tuple[str, ...]) -> list[dict[str, str]]:
-    """Keep only well-formed objects with non-empty string values for `keys`.
-
-    Small local models are sloppy — drop malformed entries rather than failing the
-    whole generation (and never invent: missing fields are simply not kept).
-    """
-    cleaned: list[dict[str, str]] = []
-    if not isinstance(items, list):
-        return cleaned
-    for item in cast("list[object]", items):
-        if not isinstance(item, dict):
-            continue
-        obj = cast("dict[str, object]", item)
-        values = {key: obj.get(key) for key in keys}
-        if all(isinstance(value, str) and value.strip() for value in values.values()):
-            cleaned.append({key: str(values[key]) for key in keys})
-    return cleaned
-
-
-def _parse_generation(raw: str) -> WikifyGeneration:
-    extracted = _extract_json(raw)
-    try:
-        data: object = json.loads(extracted)
-    except json.JSONDecodeError:
-        # Small local models truncate/degenerate (e.g. trailing tabs, an unclosed
-        # object). Salvage what is structurally recoverable rather than discarding a
-        # whole generation; _clean_items still drops any entry that survives malformed.
-        data = repair_json(extracted, return_objects=True)
-        logger.warning("event=wikify_model_json_repaired")
-    data = _unwrap_list(data)
-    if not isinstance(data, dict) or not data:
-        # Pure prose ("I cannot help...") repairs to nothing usable; fail loudly so the
-        # caller's retry loop resamples rather than recording an empty generation.
-        raise ValueError(f"model did not return usable JSON: {raw[:1000]!r}")
-    obj = cast("dict[str, object]", data)
-    summary = obj.get("summary")
-    payload = {
-        "summary": summary if isinstance(summary, str) else "",
-        "concepts": _clean_items(obj.get("concepts"), ("name", "description")),
-        "facts": _clean_items(obj.get("facts"), ("statement", "quote")),
-    }
-    try:
-        return WikifyGeneration.model_validate(payload)
-    except ValidationError as error:
-        logger.error("event=wikify_model_bad_shape error=%s", error)
-        raise ValueError(f"model JSON did not match the wikify schema: {error}") from error
 
 
 def _judge_user_prompt(candidate: JudgeCandidate) -> str:
@@ -241,8 +173,8 @@ class ChatModelClient:
         self._model = model
         self._temperature = temperature
         # Without an explicit cap, Ollama truncates output at its tiny default
-        # num_predict and the wikify JSON comes back unterminated. 4000 fits the
-        # whole structured response for the chunk sizes we send.
+        # num_predict and the JSON comes back unterminated. The default fits the whole
+        # structured judge response.
         self._max_tokens = max_tokens
         self.model_name = f"{provider}:{model}"
         self.model_params_hash = hashlib.sha256(
@@ -275,32 +207,6 @@ class ChatModelClient:
         return cls(
             client, model=model, provider=provider, temperature=temperature, max_tokens=max_tokens
         )
-
-    async def generate_wikify(
-        self, *, chunks: Sequence[Chunk], prompt_version: str
-    ) -> WikifyGeneration:
-        messages: list[ChatCompletionMessageParam] = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": _user_prompt(chunks)},
-        ]
-        # Small local models are non-deterministic even at temperature 0 and
-        # occasionally emit malformed JSON; a fresh sample usually parses, so
-        # retry a few times before failing the whole generation.
-        last_error: ValueError | None = None
-        for attempt in range(_MAX_PARSE_ATTEMPTS):
-            raw = await self._complete(messages, purpose="wikify")
-            try:
-                return _parse_generation(raw)
-            except ValueError as error:
-                last_error = error
-                logger.warning(
-                    "event=wikify_parse_retry attempt=%d/%d error=%s",
-                    attempt + 1,
-                    _MAX_PARSE_ATTEMPTS,
-                    error,
-                )
-        assert last_error is not None
-        raise last_error
 
     async def generate_relationship_judgment(
         self, *, candidate: JudgeCandidate, prompt_version: str
@@ -338,7 +244,7 @@ class ChatModelClient:
         raise last_error
 
     async def _complete(
-        self, messages: list[ChatCompletionMessageParam], *, purpose: str = "wikify"
+        self, messages: list[ChatCompletionMessageParam], *, purpose: str = "judge"
     ) -> str:
         started = time.monotonic()
         try:

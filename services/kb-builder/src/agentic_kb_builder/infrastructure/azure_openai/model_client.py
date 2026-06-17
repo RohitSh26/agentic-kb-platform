@@ -1,40 +1,25 @@
 """ModelClient interface: the only door to Azure OpenAI for the build plane.
 
 Builders depend on this Protocol, never on the SDK, so tests stay hermetic and
-the model backend stays swappable (rule: python.md). It covers both build-plane
-LLM uses: wikify generation and the phase-3B relationship judge.
+the model backend stays swappable (rule: python.md). After ADR-0023 retired the
+hand-rolled wikify prose pipeline (document extraction now goes through Graphify's
+LLM pipeline behind the ``docify`` adapter), the only build-plane LLM use behind this
+door is the phase-3B relationship judge.
 """
 
-from collections.abc import Sequence
 from typing import Protocol
 
 from agentic_kb_builder.domain import (
-    Chunk,
     JudgeCandidate,
     RelationshipJudgment,
-    WikifyGeneration,
 )
 
 
-class WikifyModelClient(Protocol):
-    """The narrow slice the wikify generator depends on (just generation).
-
-    Kept separate from the full ``ModelClient`` so a wikify-only test double need
-    not implement the judge method, and vice versa. ``ChatModelClient`` satisfies
-    both because it implements the union."""
+class ModelClient(Protocol):
+    """The build-plane model door: the phase-3B relationship judge."""
 
     model_name: str
     model_params_hash: str
-
-    async def generate_wikify(
-        self, *, chunks: Sequence[Chunk], prompt_version: str
-    ) -> WikifyGeneration:
-        """Produce a summary, concepts, and source-backed facts for one source."""
-        ...
-
-
-class ModelClient(WikifyModelClient, Protocol):
-    """The full build-plane model door: wikify generation + the phase-3B judge."""
 
     async def generate_relationship_judgment(
         self, *, candidate: JudgeCandidate, prompt_version: str

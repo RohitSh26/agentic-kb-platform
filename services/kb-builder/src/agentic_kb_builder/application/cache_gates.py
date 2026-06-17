@@ -30,20 +30,23 @@ def _compose_key(kind: str, *parts: str) -> str:
     return content_hash(_SEPARATOR.join((kind, *parts)))
 
 
-def chunk_summary_cache_key(
+def doc_extract_cache_key(
     *,
     source_content_hash: str,
-    chunker_version: str,
-    wikify_prompt_version: str,
+    doc_extract_prompt_version: str,
     model_name: str,
     model_params_hash: str,
     output_schema_version: str,
 ) -> str:
+    """Generation-cache key for one document's LLM extraction (ADR-0023 §4).
+
+    Keyed by (content_hash, doc_extract_prompt_version, model, params, output_schema) so an
+    unchanged document is a cache hit and makes no LLM call. The cache stores the MAPPED
+    artifact rows, so a replay never re-runs a (possibly newer) mapper over stale output."""
     return _compose_key(
-        "chunk_summary",
+        "doc_extract",
         source_content_hash,
-        chunker_version,
-        wikify_prompt_version,
+        doc_extract_prompt_version,
         model_name,
         model_params_hash,
         output_schema_version,

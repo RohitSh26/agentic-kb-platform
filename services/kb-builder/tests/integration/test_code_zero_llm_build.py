@@ -13,7 +13,7 @@ NOT be called — a failing stub proves the routing never reaches it for code.
 """
 
 import os
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
@@ -24,7 +24,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from agentic_kb_builder.application.active_version import get_active_kb_version
 from agentic_kb_builder.build import Collaborators, run_build
-from agentic_kb_builder.domain import NormalizedContent, WikifyArtifactDraft
+from agentic_kb_builder.domain import (
+    DocExtractionResult,
+    NormalizedContent,
+)
 from agentic_kb_builder.embeddings import LocalHashEmbedder
 from agentic_kb_builder.indexing import SearchDocUpserter
 from agentic_kb_builder.infrastructure.azure_search.search_client import FakeSearchClient
@@ -74,15 +77,15 @@ SOURCES_YAML = (
 )
 
 
-class ExplodingWikifier:
+class ExplodingDocExtractor:
     """A wikifier that fails if ever called. Code must route graphify-only (ADR-0018),
     so reaching wikify on a code-only build is a routing bug, surfaced loudly here."""
 
     model_name = "must-not-run"
     model_params_hash = "must-not-run"
 
-    async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]:
-        raise AssertionError(f"wikify must not run for code: {content.source.source_uri}")
+    async def extract(self, content: NormalizedContent) -> DocExtractionResult:
+        raise AssertionError(f"docify must not run for code: {content.source.source_uri}")
 
 
 @pytest.fixture(scope="module")
@@ -140,7 +143,7 @@ async def test_code_only_build_is_zero_llm_and_keyword_searchable(
         kb_version="v-code.1",
         version="local",
         collaborators=Collaborators(
-            wikifier=ExplodingWikifier(),  # must never be called
+            doc_extractor=ExplodingDocExtractor(),  # must never be called
             embedder=LocalHashEmbedder(),
             indexer=SearchDocUpserter(session, client),
             search_client=client,
@@ -251,7 +254,7 @@ async def test_imports_edges_emitted_for_in_build_module(
         kb_version="v-imports.1",
         version="local",
         collaborators=Collaborators(
-            wikifier=ExplodingWikifier(),
+            doc_extractor=ExplodingDocExtractor(),
             embedder=LocalHashEmbedder(),
             indexer=SearchDocUpserter(session, client),
             search_client=client,
@@ -332,7 +335,7 @@ async def test_imports_edge_not_emitted_for_stdlib_or_third_party(
         kb_version="v-imports.2",
         version="local",
         collaborators=Collaborators(
-            wikifier=ExplodingWikifier(),
+            doc_extractor=ExplodingDocExtractor(),
             embedder=LocalHashEmbedder(),
             indexer=SearchDocUpserter(session, client),
             search_client=client,
@@ -397,7 +400,7 @@ async def test_imports_edges_idempotent_same_kb_version(
             kb_version=kb_version,
             version="local",
             collaborators=Collaborators(
-                wikifier=ExplodingWikifier(),
+                doc_extractor=ExplodingDocExtractor(),
                 embedder=LocalHashEmbedder(),
                 indexer=SearchDocUpserter(session, client),
                 search_client=client,
@@ -445,7 +448,7 @@ async def test_search_text_idempotent_rebuild(session: AsyncSession, tmp_path: P
             kb_version=kb_version,
             version="local",
             collaborators=Collaborators(
-                wikifier=ExplodingWikifier(),
+                doc_extractor=ExplodingDocExtractor(),
                 embedder=LocalHashEmbedder(),
                 indexer=SearchDocUpserter(session, client),
                 search_client=client,

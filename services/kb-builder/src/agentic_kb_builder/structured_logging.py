@@ -2,7 +2,7 @@
 
 `configure_logging()` is the boot-time setup the build entrypoint calls: it attaches
 one structured handler to the `agentic_kb_builder` package logger so every
-`agentic_kb_builder.*` logger (connectors, wikify, graphify, linker, indexing, the
+`agentic_kb_builder.*` logger (connectors, docify, graphify, linker, indexing, the
 build runner) inherits it at INFO (or `$LOG_LEVEL`). Without it, build records at INFO
 reached a handler whose logger had no level set, so the effective level fell back to
 the root default (WARNING) and they were silently dropped — the suite only saw them
@@ -19,7 +19,7 @@ A human watching a build wants a readable, real-time TIMELINE — which source/f
 being processed, which step, every model call, each publish gate, activation — not a
 wall of bare `event=key=value` lines. `TimelineFormatter` renders each record as:
 
-    14:02:31.412  +1.8s  WIKIFY   summarizing README.md  event=wikify_started ...
+    14:02:31.412  +1.8s  DOCIFY   extracting doc README.md  event=docify_started ...
 
 i.e. a wall-clock time + an elapsed-since-build-start delta + a short STAGE label, then
 a short human message, then the FULL structured `event=... key=value` tail so logs stay
@@ -57,7 +57,7 @@ _BUILD_START_MONOTONIC: float | None = None
 # order most-specific first. Anything unmatched falls back to BUILD (the runner/CLI).
 _STAGE_RULES: tuple[tuple[str, str], ...] = (
     ("connectors", "FETCH"),
-    ("wikify", "WIKIFY"),
+    ("docify", "DOCIFY"),
     ("graphify", "GRAPHIFY"),
     ("linker.judge", "JUDGE"),
     ("linker.judgment_cache", "JUDGE"),
@@ -88,15 +88,18 @@ _EVENT_HEADLINES: dict[str, str] = {
     "build_activation": "activation decision",
     "build_skip_unchanged": "unchanged, skipping",
     "build_source_started": "processing source",
-    "build_file_wikify": "entering wikify",
+    "build_file_docify": "entering docify",
     "build_file_graphify": "entering graphify",
     "source_item_upserted": "recorded source",
     "connector_fetch": "fetched source",
     "model_call": "model call",
     "model_call_failed": "model call FAILED",
-    "wikify_started": "summarizing",
-    "wikify_generated": "summarized",
-    "wikify_artifacts_written": "wrote wikify artifacts",
+    "docify_started": "extracting doc",
+    "docify_extracted": "extracted doc",
+    "docify_generated": "mapped doc",
+    "docify_mapped": "mapped doc",
+    "docify_artifacts_written": "wrote doc artifacts",
+    "docify_backend_registered": "doc backend ready",
     "graphify_started": "parsing code",
     "graphify_artifacts_written": "wrote code artifacts",
     "graphify_edges_written": "wrote code edges",
