@@ -1,8 +1,8 @@
 """PostgresKeywordSearchClient against a real (local) Postgres registry.
 
-The local/default relevance backend behind the SearchClient seam: title hits
-weigh 2, body hits 1, results are scoped to the active build's interval
-MEMBERSHIP (version-membership.md), and LIKE metacharacters in queries are
+The local/default relevance backend behind the SearchClient seam: title/symbol-name
+hits weigh 4, search_text 1.5, body hits 1, results are scoped to the active build's
+interval MEMBERSHIP (version-membership.md), and LIKE metacharacters in queries are
 treated as literals.
 """
 
@@ -87,6 +87,51 @@ async def test_search_text_hit_retrieves_a_symbol_and_outranks_body(
     assert via_search in ids, "a search_text-only concept hit must be retrievable"
     assert via_body in ids  # the body-only hit is also retrieved, just ranked lower
     assert ids[0] == via_search  # search_text (1.5) outranks a body-only (1.0) hit
+
+
+async def test_symbol_name_match_outranks_stacked_body_mentions(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A symbol whose NAME is the query term beats a row that only mentions it in body.
+
+    The demo failure: "How does the MCP Context Broker enforce a per-agent token budget?"
+    ranked ``ChangeContextResponse``/``ChangeContextRequest`` (title matches the common
+    ``context`` term + several incidental ``budget``/``token``/``agent`` body mentions)
+    ABOVE ``BudgetPolicy`` — the symbol that actually IS the per-agent budget enforcement.
+    The large title weight makes the distinctive title hit on ``budget`` outrank the
+    stacked incidental body overlap, so the implementing symbol surfaces first.
+    """
+    async with factory() as session:
+        symbol = await insert_artifact(
+            session,
+            title="BudgetPolicy",
+            body_text="def enforce_agent_budget(): ...",
+            search_text="budget policy enforce agent allowance clamp",
+        )
+        mentions = await insert_artifact(
+            session,
+            title="ChangeContextResponse",
+            body_text="the context broker token budget for the agent request and the budget",
+        )
+        # decoys make "context" common (high df -> low IDF) while "budget" stays
+        # distinctive (low df -> high IDF), as in the real registry.
+        for i in range(8):
+            await insert_artifact(
+                session, title=f"context helper {i}", body_text="context plumbing"
+            )
+    client = PostgresKeywordSearchClient(factory)
+
+    hits = await client.search(
+        "how does the context broker enforce a per agent token budget",
+        build_seq=ACTIVE_SEQ,
+        top=10,
+    )
+
+    ids = [hit.artifact_id for hit in hits]
+    assert symbol in ids
+    assert mentions in ids
+    assert ids[0] == symbol, "the symbol whose name is the query term must rank first"
+    assert ids.index(symbol) < ids.index(mentions)
 
 
 async def test_distinctive_term_outranks_generic_overlap(

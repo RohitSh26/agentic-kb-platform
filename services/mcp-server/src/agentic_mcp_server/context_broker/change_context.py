@@ -50,11 +50,55 @@ _PYFILE = re.compile(r"\b([A-Za-z0-9_./-]+\.py)\b")
 _CONTRACT_RE = re.compile(
     r"(Error|Exception|Client|Response|Request|Config|Protocol|Backend|Base|Spec)$"
 )
+# Ubiquitous cross-cutting utility modules: logging/telemetry/tracing helpers are imported by
+# nearly every file and are almost never the dependency a CHANGE needs (the implementer already
+# knows how to log). Matched on the imported file's MODULE STEM, so a task that genuinely targets
+# logging still resolves it as the TARGET — this only de-prioritises it as a *dependency*.
+_UBIQUITOUS_UTIL_STEMS = frozenset(
+    {"structured_logging", "logging", "logger", "log", "telemetry", "tracing", "metrics"}
+)
 
 
 def _is_test_path(path: str) -> bool:
     base = path.rsplit("/", 1)[-1]
     return "/test" in path or base.startswith("test_") or base.endswith("_test.py")
+
+
+# A monorepo holds several services under ``services/<name>/`` and they MUST NOT borrow each
+# other's tests/deps (a kb-builder target must never resolve an mcp-server test). The practical
+# repo/package boundary is that top-level ``services/<name>/`` segment of the path — robust to
+# both real ``file:///…/services/kb-builder/…`` URIs and ``github://owner/repo/services/…`` ones.
+_SERVICE_SEG = re.compile(r"(?:^|/)(services/[^/]+)/")
+
+
+def _repo_scope(path: str) -> str | None:
+    """The ``services/<name>`` boundary a path belongs to, or None when the path carries no
+    service segment. A candidate is only dropped for being cross-repo when BOTH it and the target
+    resolve a scope and they differ — so layouts without a ``services/`` segment are unaffected."""
+    m = _SERVICE_SEG.search(path)
+    return m.group(1) if m else None
+
+
+def _same_repo(target_scope: str | None, candidate_path: str) -> bool:
+    """True unless the candidate resolves a DIFFERENT ``services/<name>`` scope than the target.
+    None on either side (no service segment) is treated as same-repo so non-monorepo paths pass."""
+    cand_scope = _repo_scope(candidate_path)
+    if target_scope is None or cand_scope is None:
+        return True
+    return target_scope == cand_scope
+
+
+def _path_proximity(target_path: str, candidate_path: str) -> int:
+    """Count of shared leading directory segments — higher means the candidate lives in the same
+    package subtree as the target, used to bias same-repo ranking toward path proximity."""
+    t = target_path.split("/")[:-1]
+    c = candidate_path.split("/")[:-1]
+    shared = 0
+    for a, b in zip(t, c, strict=False):
+        if a != b:
+            break
+        shared += 1
+    return shared
 
 
 def _file_of(artifact: ArtifactRow) -> str:
@@ -91,14 +135,24 @@ def _conventional_test_paths(target_path: str) -> list[str]:
     return [p for p in out if not (p in seen or seen.add(p))]
 
 
+def _module_stem(path: str) -> str:
+    """The bare module name of a file path (``src/pkg/http_client.py`` -> ``http_client``)."""
+    return path.rsplit("/", 1)[-1].removesuffix(".py")
+
+
 def _score_imported_file(
-    symbol_titles: list[str], target_body_lc: str, query_lc: str
+    symbol_titles: list[str], target_body_lc: str, query_lc: str, path: str
 ) -> tuple[float, list[str]]:
     """Rank an imported file by how contract-critical it is to the change (judge rubric).
 
-    +0.40 a defined name appears in the TASK; +0.30 it appears in the target's own body
-    (it is actually used); +0.25 it is a contract-critical kind (Error/Client/Config/...).
-    Returns (score, names actually used by the target) — names drive the human reason."""
+    +0.40 a defined name appears in the TASK; +0.45 it appears in the target's own body
+    (it is actually USED/CALLED — the strongest signal that the change needs its real shape,
+    weighted above the contract-kind hint); +0.25 it is a contract-critical kind
+    (Error/Client/Config/...). A ubiquitous cross-cutting utility module (logging/telemetry)
+    is then down-weighted by -0.50 UNLESS the task itself names it: such modules are imported
+    everywhere and are rarely the dependency a change needs, so a genuinely-used domain client
+    outranks the logger every file imports. Returns (score, names actually used by the target) —
+    names drive the human reason."""
     score = 0.0
     used: list[str] = []
     for t in symbol_titles:
@@ -106,10 +160,12 @@ def _score_imported_file(
         if tl and tl in query_lc:
             score += 0.40
         if tl and tl in target_body_lc:
-            score += 0.30
+            score += 0.45
             used.append(t)
         if _CONTRACT_RE.search(t):
             score += 0.25
+    if _module_stem(path) in _UBIQUITOUS_UTIL_STEMS and _module_stem(path) not in query_lc:
+        score -= 0.50
     return score, list(dict.fromkeys(used))
 
 
@@ -188,6 +244,15 @@ async def create_change_pack(
         _add_target(code[0], "top lexical match for the task", 0.55)
         notes.append("target resolved by lexical fallback (no exact symbol/file hint matched)")
 
+    # The target's repo/package boundary (services/<name>): test + dependency candidates resolved
+    # below MUST stay within it, so a kb-builder target never borrows an mcp-server test/dep
+    # (invariant: cross-service lexical bleed). Derived from whichever target path carries a
+    # service segment; None when the layout has no services/ dir (then scoping is a no-op).
+    target_scopes = {s for p in target_paths if (s := _repo_scope(p)) is not None}
+    target_scope = next(iter(target_scopes)) if len(target_scopes) == 1 else None
+    # the primary target path drives path-proximity ranking of same-repo candidates
+    primary_target_path = next(iter(target_paths), "")
+
     # --- graph neighbours of the targets ---------------------------------------------------
     seed_ids = list(
         {a.artifact_id for a in code if _file_of(a) in target_paths} | set(target_symbol_ids)
@@ -217,6 +282,10 @@ async def create_change_pack(
 
     def _add_test(path: str, reason: str, conf: float) -> None:
         if path in test_paths:
+            return
+        # repo-scope guard: drop a test that lives under a DIFFERENT services/<name> than the
+        # target — a kb-builder target must never get an mcp-server test, even on a lexical hit.
+        if not _same_repo(target_scope, path):
             return
         test_paths.add(path)
         test_files.append(
@@ -268,10 +337,12 @@ async def create_change_pack(
             )
     # Rank so the runtime's primary pick is the test whose FILENAME matches the target (e.g.
     # github_rest.py → test_github_rest_backend.py) before tests that merely mention the symbol;
-    # cap the list so a widely-referenced symbol doesn't return a dozen tangential tests.
+    # then bias toward path proximity (the test in the target's own package subtree) before the
+    # cap so a same-package test wins over a tangential same-repo one.
     test_files.sort(
         key=lambda f: (
             0 if any(stem in f.path.rsplit("/", 1)[-1] for stem in target_stems) else 1,
+            -_path_proximity(primary_target_path, f.path),
             -f.confidence,
         )
     )
@@ -330,20 +401,26 @@ async def create_change_pack(
         ).lower()
         query_lc = query.lower()
 
-        scored: list[tuple[float, str, str]] = []  # (score, path, reason)
+        scored: list[tuple[float, int, str, str]] = []  # (score, proximity, path, reason)
         for fid, art in imported.items():
             path = _file_of(art)
             if path in target_paths or _is_test_path(path):
                 continue
+            # repo-scope guard: an imported file under a DIFFERENT services/<name> than the target
+            # is a cross-service match (lexical bleed) and is dropped, not just down-ranked.
+            if not _same_repo(target_scope, path):
+                continue
             score, name_hits = _score_imported_file(
-                symbols_by_file.get(fid, []), target_body_lc, query_lc
+                symbols_by_file.get(fid, []), target_body_lc, query_lc, path
             )
             if score <= 0:
                 continue
             used = ", ".join(name_hits) or "imported by the target"
-            scored.append((score, path, f"defines {used} used by the target file"))
-        scored.sort(key=lambda s: -s[0])
-        for score, path, reason in scored[:_MAX_DEPENDENCY_FILES]:
+            prox = _path_proximity(primary_target_path, path)
+            scored.append((score, prox, path, f"defines {used} used by the target file"))
+        # rank by contract-relevance, then bias same-package (path-proximate) deps higher
+        scored.sort(key=lambda s: (-s[0], -s[1]))
+        for score, _prox, path, reason in scored[:_MAX_DEPENDENCY_FILES]:
             dependency_files.append(
                 FileRef(
                     path=path,

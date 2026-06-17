@@ -21,6 +21,13 @@ KB_VERSION = "kb-test"
 _REGISTRY_TABLES = (
     "entailment_cache",
     "retrieval_event",
+    # These all FK-reference knowledge_artifact; they must be cleared BEFORE it or the DELETE
+    # below trips the FK (a build leaving rows in a shared DB would otherwise block every
+    # integration test's setup/teardown).
+    "generation_cache",
+    "generation_cache_artifact",
+    "embedding_cache",
+    "relationship_candidate",
     "knowledge_edge",
     "knowledge_artifact",
     "source_item",
@@ -179,7 +186,7 @@ async def insert_code_unit(
 
     Mirrors how graphify stores a file and its symbols under a single source_item, which the
     per-artifact ``insert_artifact`` helper cannot do (it mints a new source_item each call and
-    a unique (source_type, source_uri) constraint forbids sharing). Returns (file_id, {title: id})."""
+    a unique (source_type, source_uri) constraint forbids sharing). Returns (file_id, {title})."""
     source_id = uuid.uuid4()
     await session.execute(
         text(

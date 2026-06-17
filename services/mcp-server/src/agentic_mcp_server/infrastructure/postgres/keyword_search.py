@@ -1,13 +1,21 @@
 """Postgres keyword implementation of the SearchClient protocol.
 
 The local/default relevance backend: scores knowledge_artifact rows by how many
-query tokens hit the title (weight 2), search_text (1.5, the curated code retrieval
-surface) or body (weight 1). Each token is additionally weighted by its INVERSE
-DOCUMENT FREQUENCY: a token that appears in few artifacts (e.g. ``graphify``)
+query tokens hit the title/symbol name (weight 4), search_text (1.5, the curated code
+retrieval surface) or body (weight 1). Each token is additionally weighted by its
+INVERSE DOCUMENT FREQUENCY: a token that appears in few artifacts (e.g. ``graphify``)
 outweighs a common one (``graph``/``code``/``create``), so a distinctive term in the
-question dominates generic overlap and the pack stays on-topic. Relevance is only a
-hint; Postgres remains the truth that hydrates every card. Azure AI Search slots in
-behind the same protocol later.
+question dominates generic overlap and the pack stays on-topic.
+
+The title weight is deliberately large (4 vs body's 1): an artifact whose TITLE /
+symbol name literally IS the thing asked about (``BudgetPolicy`` for "per-agent token
+budget") is the answer, whereas a row that merely mentions the term in its body is
+context. So a single distinctive-term title hit must outrank a row that stacks several
+incidental body mentions plus a common title term — otherwise the symbol that defines
+the concept gets buried under files that only reference it. IDF still applies, so a
+title hit on a rare term beats a title hit on a generic one. Relevance is only a hint;
+Postgres remains the truth that hydrates every card. Azure AI Search slots in behind
+the same protocol later.
 """
 
 import math
@@ -53,13 +61,18 @@ def _df_query(token_count: int) -> str:
 
 
 def _build_query(token_count: int) -> str:
-    # search_text (PR-34) is the deterministic retrieval surface for code symbols (split
-    # identifiers, docstring words, signatures, called names) — it carries the concept
-    # words a task names that a raw span misses, so it scores ABOVE body_text but below
-    # title. NULL search_text (non-code / span-less) simply never matches (ELSE 0.0).
-    # Each token's field score is scaled by its IDF weight :w{i} (computed from _df_query).
+    # Field weights: title 4.0 > search_text 1.5 > body_text 1.0. The title/symbol-name
+    # weight is deliberately several times the body weight so an artifact whose name IS the
+    # query term outranks one that only mentions it in prose, even when the prose row stacks
+    # multiple incidental matches (the "BudgetPolicy vs ChangeContext*" failure). search_text
+    # (PR-34) is the deterministic retrieval surface for code symbols (split identifiers,
+    # docstring words, signatures, called names) — it carries the concept words a task names
+    # that a raw span misses, so it scores ABOVE body_text but below title. NULL search_text
+    # (non-code / span-less) simply never matches (ELSE 0.0). Each token's field score is
+    # scaled by its IDF weight :w{i} (computed from _df_query), so a distinctive title term
+    # still beats a common one.
     score = " + ".join(
-        f":w{i} * (CASE WHEN title ILIKE :tok{i} ESCAPE '\\' THEN 2.0 ELSE 0.0 END"
+        f":w{i} * (CASE WHEN title ILIKE :tok{i} ESCAPE '\\' THEN 4.0 ELSE 0.0 END"
         f" + CASE WHEN search_text ILIKE :tok{i} ESCAPE '\\' THEN 1.5 ELSE 0.0 END"
         f" + CASE WHEN body_text ILIKE :tok{i} ESCAPE '\\' THEN 1.0 ELSE 0.0 END)"
         for i in range(token_count)
@@ -67,7 +80,7 @@ def _build_query(token_count: int) -> str:
     # The membership filter is repeated (not the IDF weights) so an unweighted-but-matching
     # row is still bounded by build_seq; the > 0 guard drops non-matching rows.
     raw = " + ".join(
-        f"(CASE WHEN title ILIKE :tok{i} ESCAPE '\\' THEN 2.0 ELSE 0.0 END"
+        f"(CASE WHEN title ILIKE :tok{i} ESCAPE '\\' THEN 4.0 ELSE 0.0 END"
         f" + CASE WHEN search_text ILIKE :tok{i} ESCAPE '\\' THEN 1.5 ELSE 0.0 END"
         f" + CASE WHEN body_text ILIKE :tok{i} ESCAPE '\\' THEN 1.0 ELSE 0.0 END)"
         for i in range(token_count)

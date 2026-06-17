@@ -163,6 +163,215 @@ async def test_change_pack_resolves_target_test_and_deps_from_the_graph(
     assert rows[0].agent_name == "agent-impl"
 
 
+async def test_change_pack_ranks_used_client_above_ubiquitous_logger(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Regression for a real BUILD-lane failure: the target imports BOTH a domain client it
+    actually USES (``AsyncHttpClient`` in ``http_client.py``) and the ubiquitous logging utility
+    (``structured_logging.py``). The selector must surface the USED client as the dependency —
+    not the logger every file imports — so the implementer sees the real ``AsyncHttpClient`` API.
+    """
+    log_uri = "github://acme/repo/src/pkg/structured_logging.py"
+    log_path = "src/pkg/structured_logging.py"
+    async with factory() as session:
+        # target uses BOTH the http client AND a logger from the body
+        target_file, target_syms = await insert_code_unit(
+            session,
+            source_uri=_TARGET_URI,
+            symbols={
+                "GitHubRestBackend": (
+                    "class GitHubRestBackend:\n"
+                    "    def repo_is_accessible(self, client: AsyncHttpClient):\n"
+                    "        get_logger(__name__).info('checking')\n"
+                    "        return client.request('GET', f'/repos/{owner}/{repo}')"
+                )
+            },
+        )
+        # the genuinely-needed dependency: defines the AsyncHttpClient the target calls
+        dep_file, _ = await insert_code_unit(
+            session,
+            source_uri=_DEP_URI,
+            symbols={"AsyncHttpClient": "class AsyncHttpClient:\n    def request(self): ..."},
+        )
+        # the ubiquitous utility: imported by the target and USED (get_logger) but task-irrelevant
+        log_file, _ = await insert_code_unit(
+            session,
+            source_uri=log_uri,
+            symbols={"get_logger": "def get_logger(name): ..."},
+        )
+        for imported in (dep_file, log_file):
+            await insert_edge(
+                session,
+                from_artifact_id=target_file,
+                to_artifact_id=imported,
+                edge_type="imports",
+                confidence=1.0,
+            )
+    search = FakeSearchClient()
+    search.seed("get", [SearchHit(artifact_id=target_syms["GitHubRestBackend"], score=0.9)])
+    deps = make_broker_deps(factory, search)
+
+    request = ChangeContextRequest(
+        task=(
+            "Add a method repo_is_accessible(self, client) to GitHubRestBackend that does a "
+            "GET /repos/{owner}/{repo} and returns True on 200, False on 404, with a unit test."
+        )
+    )
+    resp = await change_context.create_change_pack(deps, request, _REQUESTER)
+
+    dep_paths = [f.path for f in resp.dependency_files]
+    # the used client is selected; the ubiquitous logger does NOT outrank it
+    assert _DEP_PATH in dep_paths
+    assert dep_paths.index(_DEP_PATH) == 0, dep_paths
+    if log_path in dep_paths:  # if present at all, it must rank BELOW the used client
+        assert dep_paths.index(log_path) > dep_paths.index(_DEP_PATH)
+    assert "AsyncHttpClient" in resp.dependency_files[0].reason
+
+
+async def test_change_pack_scopes_tests_and_deps_to_the_targets_repo(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Regression for a real BUILD-lane failure: a kb-builder target resolved an mcp-server TEST
+    purely on lexical overlap. The resolver MUST scope test + dependency candidates to the
+    target's own ``services/<name>`` boundary, so a kb-builder target only ever resolves
+    kb-builder tests/deps — never a cross-service file that merely mentions the same symbols."""
+    target_uri = (
+        "file:///repo/services/kb-builder/src/agentic_kb_builder/connectors/github_rest.py"
+    )
+    target_path = "/repo/services/kb-builder/src/agentic_kb_builder/connectors/github_rest.py"
+    same_service_test_uri = (
+        "file:///repo/services/kb-builder/tests/unit/test_github_rest_backend.py"
+    )
+    same_service_test_path = "/repo/services/kb-builder/tests/unit/test_github_rest_backend.py"
+    # the genuine same-service dependency the target imports
+    dep_uri = "file:///repo/services/kb-builder/src/agentic_kb_builder/http_client.py"
+    dep_path = "/repo/services/kb-builder/src/agentic_kb_builder/http_client.py"
+    # the TEMPTING cross-service file: a DIFFERENT service that lexically mentions the same names
+    cross_service_uri = (
+        "file:///repo/services/mcp-server/tests/integration/test_create_change_pack.py"
+    )
+    cross_service_path = "/repo/services/mcp-server/tests/integration/test_create_change_pack.py"
+
+    async with factory() as session:
+        target_file, target_syms = await insert_code_unit(
+            session,
+            source_uri=target_uri,
+            symbols={
+                "AsyncHttpClient": (
+                    "class AsyncHttpClient:\n"
+                    "    def request(self): raise HttpFetchError('boom')"
+                )
+            },
+        )
+        dep_file, _ = await insert_code_unit(
+            session,
+            source_uri=dep_uri,
+            symbols={
+                "HttpFetchError": "class HttpFetchError(Exception): ...",
+                "AsyncHttpClient": "class AsyncHttpClient: ...",
+            },
+        )
+        # a cross-service NON-test dependency that defines a same-named contract symbol — the
+        # tempting cross-service dep that the repo-scope guard must drop from stage 4.
+        cross_dep_uri = (
+            "file:///repo/services/mcp-server/src/agentic_mcp_server/http_client.py"
+        )
+        cross_dep_path = "/repo/services/mcp-server/src/agentic_mcp_server/http_client.py"
+        cross_dep_file, _ = await insert_code_unit(
+            session,
+            source_uri=cross_dep_uri,
+            symbols={"HttpFetchError": "class HttpFetchError(Exception): ..."},
+        )
+        # same-service test linked by a `tests` edge to the target symbol
+        same_service_test = await insert_artifact(
+            session,
+            title="test_async_http_client",
+            body_text="def test_async_http_client(): AsyncHttpClient().request()",
+            artifact_type="test",
+            source_type="github_code",
+            source_uri=same_service_test_uri,
+        )
+        # cross-service file in a DIFFERENT service that mentions the very same symbols (lexical
+        # bait). Its body references AsyncHttpClient + HttpFetchError + structured_logging. It is
+        # given BOTH a `tests` edge (so it reaches stage 3) AND an `imports` edge (so it reaches
+        # stage 4) — the repo-scope guard, not lack of a path, is what must exclude it.
+        cross_service_test, cross_syms = await insert_code_unit(
+            session,
+            source_uri=cross_service_uri,
+            symbols={
+                "test_create_change_pack": (
+                    "def test_create_change_pack(): AsyncHttpClient(); HttpFetchError()"
+                )
+            },
+        )
+        await insert_edge(
+            session,
+            from_artifact_id=target_file,
+            to_artifact_id=dep_file,
+            edge_type="imports",
+            confidence=1.0,
+        )
+        # the target file ALSO (wrongly, per the bug) imports the cross-service files
+        await insert_edge(
+            session,
+            from_artifact_id=target_file,
+            to_artifact_id=cross_service_test,
+            edge_type="imports",
+            confidence=1.0,
+        )
+        await insert_edge(
+            session,
+            from_artifact_id=target_file,
+            to_artifact_id=cross_dep_file,
+            edge_type="imports",
+            confidence=1.0,
+        )
+        await insert_edge(
+            session,
+            from_artifact_id=same_service_test,
+            to_artifact_id=target_syms["AsyncHttpClient"],
+            edge_type="tests",
+            confidence=0.9,
+        )
+        await insert_edge(
+            session,
+            from_artifact_id=cross_syms["test_create_change_pack"],
+            to_artifact_id=target_syms["AsyncHttpClient"],
+            edge_type="tests",
+            confidence=0.9,
+        )
+
+    search = FakeSearchClient()
+    search.seed(
+        "retry",
+        [SearchHit(artifact_id=target_syms["AsyncHttpClient"], score=0.9)],
+    )
+    deps = make_broker_deps(factory, search)
+
+    request = ChangeContextRequest(
+        task="Add a retry path to AsyncHttpClient in github_rest.py"
+    )
+    resp = await change_context.create_change_pack(deps, request, _REQUESTER)
+
+    assert [f.path for f in resp.target_files] == [target_path]
+    # the same-service test resolves; the cross-service test is dropped despite lexical overlap
+    test_paths = [f.path for f in resp.test_files]
+    assert same_service_test_path in test_paths
+    assert cross_service_path not in test_paths
+
+    dep_paths = [f.path for f in resp.dependency_files]
+    assert dep_path in dep_paths
+    assert cross_dep_path not in dep_paths
+
+    # NO cross-service path appears ANYWHERE in the pack — not as a test and not as a dependency
+    all_paths = {
+        f.path for f in resp.target_files + resp.test_files + resp.dependency_files
+    }
+    assert cross_service_path not in all_paths
+    assert cross_dep_path not in all_paths
+    assert all("services/kb-builder/" in p for p in all_paths), all_paths
+
+
 async def test_change_pack_caps_dependency_files(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
