@@ -102,21 +102,17 @@ def _match_span(
 def map_extraction(
     data: Mapping[str, Any],
     *,
-    source_file_override: str | None = None,
-    file_basename_override: str | None = None,
     known_paths: frozenset[str] | None = None,
-    spans: Mapping[int, list[SymbolSpan]] | None = None,
     spans_by_file: Mapping[str, Mapping[int, list[SymbolSpan]]] | None = None,
 ) -> GraphifyResult:
-    """Normalize a Graphify extraction dict into our artifacts + edges.
+    """Normalize a Graphify whole-tree extraction dict into our artifacts + edges.
 
     Pure and deterministic — no I/O — so it is hermetically testable against a captured
-    `graph.json`. `source_file_override` rewrites every node's source path (single-file
-    extraction, where Graphify only sees a temp path). `known_paths` is the set of
-    repo-relative paths the WHOLE-TREE pass extracted (Graphify reports `source_file`
-    repo-relative under its cache_root); nodes whose source_file is NOT one of them are
-    EXTERNAL references (builtins/stdlib/third-party) and are dropped. `spans` (ADR-0018) is
-    the deterministic ast span map keyed by def-line; a matched symbol gets its EXACT body.
+    `graph.json`. `known_paths` is the set of repo-relative paths the whole-tree pass
+    extracted (Graphify reports `source_file` repo-relative under its cache_root); nodes
+    whose source_file is NOT one of them are EXTERNAL references (builtins/stdlib/third-party)
+    and are dropped. `spans_by_file` (ADR-0018) is the per-file deterministic ast span map
+    keyed by def-line; a matched symbol gets its EXACT body.
     """
     nodes = cast("list[Mapping[str, Any]]", list(data.get("nodes", [])))
     raw_edges = data.get("edges")
@@ -125,22 +121,18 @@ def map_extraction(
     edges = cast("list[Mapping[str, Any]]", list(raw_edges))
 
     def src_file(node: Mapping[str, Any]) -> str:
-        if source_file_override is not None:
-            return source_file_override
         return str(node.get("source_file", ""))
 
     def in_tree(node: Mapping[str, Any]) -> bool:
         # Whole-tree extraction emits nodes for EXTERNAL references too (builtins like
         # RuntimeError, stdlib, third-party) — they are not files we built and must be dropped,
         # or they make malformed empty-path keys. A node is ours only when its source_file is
-        # one of the files we extracted (known_paths), or there is a single-file override.
-        if source_file_override is not None:
-            return True
+        # one of the files we extracted (known_paths).
         sf = str(node.get("source_file", ""))
         return sf in known_paths if known_paths is not None else bool(sf)
 
     def is_file_node(node: Mapping[str, Any]) -> bool:
-        basename = file_basename_override or Path(str(node.get("source_file", ""))).name
+        basename = Path(str(node.get("source_file", ""))).name
         return str(node.get("label", "")) == basename
 
     # node id -> (our key, source_file); plus the file node id per source_file so we can
@@ -174,9 +166,9 @@ def map_extraction(
         if path in file_node_id:  # only when the file artifact exists (never dangling)
             symbol_files.append((key, path))
         start_line = _line(node.get("source_location"))
-        # Whole-tree extraction sees many files, so spans are looked up per FILE (line numbers
-        # collide across files); single-file extraction uses the one `spans` map.
-        file_spans = spans_by_file.get(path) if spans_by_file is not None else spans
+        # Whole-tree extraction sees many files, so spans are looked up per FILE (line
+        # numbers collide across files).
+        file_spans = spans_by_file.get(path) if spans_by_file is not None else None
         span = _match_span(file_spans, start_line, node.get("label"))
         if span is not None:
             # ADR-0018: exact deterministic source span (incl. decorators/docstring) is
@@ -244,17 +236,7 @@ def map_extraction(
             continue
         target_file = node_is_file.get(target_id)
         if target_file is None:
-            # Apply source_file_override to the target the SAME way src_file() applies it
-            # to every node. The override is only ever set for a single-file extraction,
-            # where every node (file and symbol) shares the one temp path Graphify parsed,
-            # so overriding the target to that single real path is correct. Without this the
-            # target keeps the temp path and the edge is dropped at write time as an
-            # unresolved key (graphify_edge_dropped). (Cross-file graphs are never passed an
-            # override — the per-file GraphifyGraphifier extracts one file at a time.)
-            raw_target = _node_source_file(nodes, target_id)
-            if raw_target is None:
-                continue
-            target_file = source_file_override if source_file_override is not None else raw_target
+            continue  # import target is not a file we extracted — external, dropped
         add(file_key(from_file), file_key(target_file), "imports", IMPORTS_CONFIDENCE)
 
     # Calls -> symbol->symbol. Group by call site; a site resolving to >1 distinct target
@@ -298,13 +280,6 @@ def map_extraction(
         add(node_key[source_id], node_key[target_id], edge_type, _SYMBOL_RELATION_CONFIDENCE)
 
     return GraphifyResult(artifacts=tuple(artifacts), edges=tuple(edge_drafts))
-
-
-def _node_source_file(nodes: Sequence[Mapping[str, Any]], node_id: str) -> str | None:
-    for node in nodes:
-        if str(node.get("id", "")) == node_id:
-            return str(node.get("source_file", "")) or None
-    return None
 
 
 def graphify_tree(files: Sequence[tuple[str, str]]) -> GraphifyResult:

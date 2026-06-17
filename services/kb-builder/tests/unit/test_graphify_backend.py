@@ -169,7 +169,10 @@ def test_spans_attach_exact_body_text_to_matched_symbols() -> None:
             )
         ]
     }
-    by_key = {a.key: a for a in map_extraction(GRAPH, spans=spans).artifacts}
+    by_key = {
+        a.key: a
+        for a in map_extraction(GRAPH, spans_by_file={"pkg/service.py": spans}).artifacts
+    }
     top = by_key["sym:pkg/service.py::top"]
     assert top.span_start == 7
     assert top.span_end == 9
@@ -188,7 +191,10 @@ def test_span_collision_disambiguated_by_name() -> None:
             SymbolSpan(name="top", def_line=7, span_start=7, span_end=9, body_text="RIGHT"),
         ]
     }
-    by_key = {a.key: a for a in map_extraction(GRAPH, spans=spans).artifacts}
+    by_key = {
+        a.key: a
+        for a in map_extraction(GRAPH, spans_by_file={"pkg/service.py": spans}).artifacts
+    }
     # The fixture's L7 symbol carries label "top()" -> matches the "top" span.
     assert by_key["sym:pkg/service.py::top"].body_text == "RIGHT"
 
@@ -198,31 +204,6 @@ def test_imports_map_to_file_edges_and_drop_externals() -> None:
     assert ("file:pkg/service.py", "file:pkg/util.py", "imports") in edges
     # os.path is external (no node) -> no import edge to it.
     assert not any(e.edge_type == "imports" and "os" in e.to_key for e in _result().edges)
-
-
-def test_import_target_honors_source_file_override_no_temp_path_leak() -> None:
-    # Graphify parses a TEMP copy of each file, so every node's source_file is the temp
-    # path and the file node's label is the temp basename. With source_file_override the
-    # file node maps to the real path; the import-edge TARGET must map through the SAME
-    # override (not keep the temp path, which is then dropped at write time as an
-    # unresolved key — the graphify_edge_dropped noise seen on real builds).
-    graph: dict[str, object] = {
-        "nodes": [
-            {
-                "id": "f",
-                "label": "tmpABC.py",
-                "source_file": "/tmp/tmpABC.py",
-                "source_location": "L1",
-            },
-            {"id": "s", "label": "foo()", "source_file": "/tmp/tmpABC.py", "source_location": "L2"},
-        ],
-        "links": [{"source": "f", "target": "s", "relation": "imports"}],
-    }
-    result = map_extraction(
-        graph, source_file_override="services/x/real.py", file_basename_override="tmpABC.py"
-    )
-    # No edge may carry the temp path; the spurious self-import resolves to real.py and drops.
-    assert all("/tmp/" not in e.to_key and "tmpABC" not in e.to_key for e in result.edges)
 
 
 def test_ambiguous_call_site_is_dropped_not_stored() -> None:
