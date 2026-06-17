@@ -120,31 +120,72 @@ def test_resolve_relativises_absolute_kb_paths(tmp_path: Path) -> None:
     assert not resolved.missing_target and not resolved.missing_test
 
 
-def test_parse_diff_plain_unified() -> None:
-    diff = "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
-    out = runner._parse_diff(diff)
-    assert out is not None
-    assert out.startswith("--- a/src/a.py")
-    assert out.endswith("\n")
-
-
-def test_parse_diff_strips_fences_and_prose() -> None:
+def test_parse_file_blocks_extracts_whole_files() -> None:
     raw = (
-        "Sure, here is the change:\n"
-        "```diff\n"
-        "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
-        "```\n"
-        "Let me know if you want anything else."
+        "Here you go:\n"
+        '<<<FILE path="src/a.py">\n'
+        "x = 2\n"
+        "y = 3\n"
+        "<<<END_FILE>>>\n"
+        '<<<FILE path="tests/test_a.py">\n'
+        "assert True\n"
+        "<<<END_FILE>>>\n"
+        "Done."
     )
-    out = runner._parse_diff(raw)
-    assert out is not None
-    assert out.startswith("--- a/src/a.py")
-    assert "Sure, here" not in out
-    assert "Let me know" not in out
+    blocks = runner._parse_file_blocks(raw)
+    assert set(blocks) == {"src/a.py", "tests/test_a.py"}
+    assert blocks["src/a.py"] == "x = 2\ny = 3"
+    assert "Here you go" not in blocks["src/a.py"]
 
 
-def test_parse_diff_returns_none_without_a_diff() -> None:
-    assert runner._parse_diff("I cannot do this without seeing more of the codebase.") is None
+def test_parse_file_blocks_none_without_blocks() -> None:
+    assert runner._parse_file_blocks("I need to see more of the codebase first.") == {}
+
+
+def test_normalise_block_paths_relativises(tmp_path: Path) -> None:
+    blocks = {
+        "a/src/a.py": "x = 1",  # git-style a/ prefix
+        str(tmp_path / "src" / "b.py"): "y = 1",  # absolute (local-FS KB)
+    }
+    out = runner._normalise_block_paths(blocks, tmp_path)
+    assert "src/a.py" in out
+    assert "src/b.py" in out
+
+
+def test_validate_rejects_out_of_boundary_path(tmp_path: Path) -> None:
+    _touch(tmp_path, "src/dep.py")
+    blocks = {"src/dep.py": "x = 1\n"}
+    accepted, errors = runner._validate_file_blocks(blocks, {"src/a.py"}, tmp_path)
+    assert accepted == {}
+    assert any("not in the writable set" in e for e in errors)
+
+
+def test_validate_rejects_placeholder_and_bad_python(tmp_path: Path) -> None:
+    writable = {"src/a.py", "src/b.py"}
+    blocks = {
+        "src/a.py": "def f():\n    # ... existing code ...\n    pass\n",  # placeholder
+        "src/b.py": "def f(:\n    pass\n",  # syntax error
+    }
+    accepted, errors = runner._validate_file_blocks(blocks, writable, tmp_path)
+    assert accepted == {}
+    assert any("placeholder" in e for e in errors)
+    assert any("not valid Python" in e for e in errors)
+
+
+def test_validate_rejects_suspicious_shrink(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("x = 1\n" * 100)  # large existing file
+    accepted, errors = runner._validate_file_blocks({"src/a.py": "x = 1\n"}, {"src/a.py"}, tmp_path)
+    assert accepted == {}
+    assert any("shrank" in e for e in errors)
+
+
+def test_validate_accepts_a_valid_full_file(tmp_path: Path) -> None:
+    _touch(tmp_path, "src/a.py")
+    new = "def f() -> int:\n    return 2\n"
+    accepted, errors = runner._validate_file_blocks({"src/a.py": new}, {"src/a.py"}, tmp_path)
+    assert accepted == {"src/a.py": new}
+    assert errors == []
 
 
 @pytest.mark.parametrize(
@@ -158,17 +199,6 @@ def test_parse_diff_returns_none_without_a_diff() -> None:
 )
 def test_paste_request_is_detected(text: str) -> None:
     assert runner._PASTE_REQUEST_RE.search(text) is not None
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n",
-        "This change adds a retry to the request path.",
-    ],
-)
-def test_normal_output_is_not_a_paste_request(text: str) -> None:
-    assert runner._PASTE_REQUEST_RE.search(text) is None
 
 
 def test_test_command_is_deterministic_not_model_invented() -> None:

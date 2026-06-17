@@ -569,29 +569,36 @@ _PASTE_REQUEST_RE = re.compile(
     re.IGNORECASE,
 )
 
-_IMPLEMENTER_DIFF_RULES = """
-You are writing a code change. You have been given the FULL current contents of every file you
-need — the target file, its test file, and the relevant dependencies. Everything you need is
-here; you must NEVER ask for more files or for anyone to paste a file.
+# Full-file write contract (judge ruling): the model decides CONTENT, the runner does the editor
+# mechanics (write, diff, test). We never ask the model to hand-author git hunk metadata.
+_FILE_BLOCK_RULES = """
+Return the COMPLETE updated contents of every file you change, and ONLY files you are allowed to
+edit, each as a block in EXACTLY this format (no markdown fences, no prose between or around
+blocks):
 
-Output ONLY a single unified diff in `git apply` format and NOTHING else:
-- no prose, no explanation, no commentary, no markdown fences;
-- each changed file starts with `--- a/<path>` then `+++ b/<path>` (use the EXACT paths given);
-- hunks use `@@ ... @@` headers with correct line context;
-- the diff must apply cleanly against the provided file contents.
+<<<FILE path="<exact path from the WRITABLE list>">
+<the entire new file content, from the first line to the last>
+<<<END_FILE>>>
 
-Modify the target file to satisfy the task and make the test pass. You MAY also edit the test
-file if the task requires new/changed behaviour to be covered.
+Hard rules:
+- Output the WHOLE file every time — never a diff, never a fragment, never an ellipsis. A
+  placeholder like "# ... existing code ..." is a failure; write the real lines.
+- Only emit blocks for paths in the WRITABLE list. Dependency files are READ-ONLY context.
+- Emit TWO blocks: the target file with your change, AND the test file with a NEW test that
+  exercises the new/changed behaviour. A change with no covering test is incomplete — always
+  update the test file, following the existing tests' style (imports, fixtures, mock transport).
+- You have every file you need; never ask for more files or for anyone to paste one.
 """
 
-_TESTFIXER_DIFF_RULES = """
-A change you proposed did not pass its tests. You are given the pytest output and your previous
-diff. Produce a CORRECTED unified diff against the ORIGINAL files you were given (the same base —
-NOT the already-patched tree), in `git apply` format.
+_IMPLEMENTER_FILE_RULES = (
+    "You are writing a code change. You have the FULL current contents of the files below.\n"
+    + _FILE_BLOCK_RULES
+)
 
-Output ONLY the diff — no prose, no fences, no apologies. Use the exact `--- a/<path>` /
-`+++ b/<path>` headers. Do not ask for files; everything you need is already provided.
-"""
+_TESTFIXER_FILE_RULES = (
+    "Your change did not pass its tests. You are given the pytest output and the CURRENT file "
+    "contents. Return corrected COMPLETE files.\n" + _FILE_BLOCK_RULES
+)
 
 
 @dataclass
@@ -675,88 +682,79 @@ def _read_files(workspace: Path, paths: list[str]) -> tuple[str, int]:
     return text, estimate_tokens(text)
 
 
-_FILE_HEADER_RE = re.compile(r"^\+\+\+ b/(.+)$")
+# Block protocol for full-file output (judge ruling): the model emits whole files, never diffs.
+_FILE_BLOCK_RE = re.compile(
+    r'<<<FILE\s+path="(?P<path>[^"]+)"\s*>?\s*\n(?P<body>.*?)\n?<<<END_FILE>>>',
+    re.DOTALL,
+)
+# Placeholder markers that mean the model elided real lines (a full-file violation).
+_PLACEHOLDER_RE = re.compile(
+    r"(\.\.\.\s*(existing|rest of|unchanged|previous)|"
+    r"(rest|remainder) of (the )?(file|code|method|function)|"
+    r"#\s*\.\.\.\s*(unchanged|existing|snip)|<unchanged>|keep (the )?existing)",
+    re.IGNORECASE,
+)
 
 
-def _locate(haystack: list[str], needle: list[str]) -> int:
-    """Index where `needle` matches `haystack` (rstrip-tolerant); -1 if not found."""
-    if not needle:
-        return -1
-    stripped = [h.rstrip() for h in haystack]
-    target = [n.rstrip() for n in needle]
-    for i in range(len(stripped) - len(target) + 1):
-        if stripped[i : i + len(target)] == target:
-            return i
-    return -1
+def _parse_file_blocks(raw: str) -> dict[str, str]:
+    """Parse ``<<<FILE path="...">\\n<content>\\n<<<END_FILE>>>`` blocks → {path: content}."""
+    out: dict[str, str] = {}
+    for m in _FILE_BLOCK_RE.finditer(raw):
+        out[m.group("path").strip()] = m.group("body")
+    return out
 
 
-def _recompute_hunk_headers(diff: str, workspace: Path) -> str | None:
-    """Rebuild every ``@@`` header from the ACTUAL file, so the diff applies exactly.
+def _normalise_block_paths(blocks: dict[str, str], workspace: Path) -> dict[str, str]:
+    """Map block paths to workspace-relative form (the model may echo absolute or a/ b/ paths)."""
+    out: dict[str, str] = {}
+    for path, content in blocks.items():
+        p = path
+        if not Path(p).is_absolute():  # only relative paths carry a/ b/ ./ diff-style prefixes
+            p = p.removeprefix("a/").removeprefix("b/").removeprefix("./")
+        rel = _rel_to_workspace(p, workspace)
+        if rel is not None:
+            out[rel] = content
+    return out
 
-    LLMs reliably emit correct ``-``/``+``/context BODY lines but botch the ``@@`` header
-    (abbreviated, or wrong line numbers/counts) — which `git apply` rejects. We locate each
-    hunk's old lines (context + removed) in the real file and emit a correct header. Deterministic
-    and model-agnostic: it repairs ANY model's diff, never tailors behaviour to one. Returns None
-    if a hunk's context cannot be found (the change does not match the file → a real failure)."""
-    lines = diff.splitlines()
-    # split into a preamble + per-file sections keyed by the +++ b/<path> header
-    out: list[str] = []
-    i = 0
-    current_file: list[str] | None = None
-    while i < len(lines):
-        line = lines[i]
-        m = _FILE_HEADER_RE.match(line)
-        if m:
-            path = m.group(1)
-            fp = workspace / path
-            current_file = fp.read_text().splitlines() if fp.is_file() else None
-            out.append(line)
-            i += 1
+
+def _render_blocks(blocks: dict[str, str]) -> str:
+    """Render files as labelled blocks for a follow-up prompt (the TestFixer's 'current' files)."""
+    return "\n\n".join(f"### FILE: {p}\n```\n{c}\n```" for p, c in blocks.items())
+
+
+def _validate_file_blocks(
+    blocks: dict[str, str], writable: set[str], workspace: Path
+) -> tuple[dict[str, str], list[str]]:
+    """Enforce the write contract (judge): keep only valid, in-boundary file blocks.
+
+    Rejects (with a reason) any block that: is outside the writable blast radius, carries an
+    elided-content placeholder, fails ``ast.parse`` (for .py), or shrinks a file suspiciously
+    (>50% smaller than the original — a sign of a truncated paste)."""
+    import ast
+
+    accepted: dict[str, str] = {}
+    errors: list[str] = []
+    for path, content in blocks.items():
+        if path not in writable:
+            errors.append(f"{path}: not in the writable set (dependency files are read-only)")
             continue
-        if line.startswith("@@"):
-            # gather this hunk's body (until the next @@ or file header or EOF), keeping ONLY
-            # valid unified-diff lines — models sometimes inject stray markers like
-            # "*** End of File ***" that corrupt the patch; an empty line is real context (" ").
-            j = i + 1
-            body: list[str] = []
-            while j < len(lines) and not lines[j].startswith(("@@", "--- ", "+++ ", "diff ")):
-                bl = lines[j]
-                if bl == "":
-                    body.append(" ")
-                elif bl[:1] in (" ", "+", "-", "\\"):
-                    body.append(bl)
-                j += 1
-            old = [b[1:] for b in body if b[:1] in (" ", "-")]
-            new_len = sum(1 for b in body if b[:1] in (" ", "+"))
-            if current_file is None:
-                return None
-            start = _locate(current_file, old)
-            if start == -1:
-                return None
-            out.append(f"@@ -{start + 1},{len(old)} +{start + 1},{new_len} @@")
-            out.extend(body)
-            i = j
+        if _PLACEHOLDER_RE.search(content):
+            errors.append(f"{path}: contains an elided-content placeholder, not the whole file")
             continue
-        out.append(line)
-        i += 1
-    return "\n".join(out) + "\n"
-
-
-def _parse_diff(raw: str) -> str | None:
-    """Extract a unified diff from model output. Strips ```diff fences and any leading prose;
-    returns None if no diff markers are present (so the caller can count it as a failure)."""
-    text = raw.strip()
-    if "```" in text:
-        # take the content of the first fenced block if one is present
-        fence = re.search(r"```(?:diff|patch)?\n(.*?)```", text, re.DOTALL)
-        if fence:
-            text = fence.group(1).strip()
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if line.startswith("diff --git ") or line.startswith("--- "):
-            body = "\n".join(lines[i:]).strip()
-            return body + "\n" if body else None
-    return None
+        if path.endswith(".py"):
+            try:
+                ast.parse(content)
+            except SyntaxError as exc:
+                errors.append(f"{path}: not valid Python ({exc.msg} line {exc.lineno})")
+                continue
+        existing = workspace / path
+        if existing.is_file():
+            old_len = len(existing.read_text())
+            if old_len and len(content) < old_len * 0.5:
+                errors.append(f"{path}: shrank from {old_len} to {len(content)} chars (suspicious)")
+                continue
+        accepted[path] = content
+    return accepted, errors
 
 
 def _git(wt: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -765,70 +763,49 @@ def _git(wt: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-# LLM-generated diffs routinely carry wrong @@ hunk line-counts and stray whitespace, which
-# `git apply` rejects as "corrupt patch". --recount recomputes the counts from the hunk body and
-# --ignore-whitespace tolerates indentation drift, so a semantically-correct diff still applies.
-_APPLY_FLAGS = ("--recount", "--ignore-whitespace", "--whitespace=nowarn")
+def _write_files(wt: Path, blocks: dict[str, str]) -> None:
+    """Write whole-file contents into the worktree (newline-terminated)."""
+    for path, content in blocks.items():
+        fp = wt / path
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(content if content.endswith("\n") else content + "\n")
 
 
-def _patch_fallback(wt: Path, patch_file: Path, *, dry_run: bool) -> tuple[bool, str]:
-    """GNU `patch -p1 --fuzz` fallback for when `git apply` is too strict about context.
-
-    LLMs approximate the surrounding lines; `patch` tolerates up to --fuzz mismatched context
-    lines, so a semantically-correct change still lands. git apply is tried first (stricter, so
-    a clean diff stays exact); this only runs when that fails."""
-    args = [
-        "patch",
-        "-p1",
-        "--fuzz=3",
-        "--forward",
-        "--no-backup-if-mismatch",
-        "-i",
-        str(patch_file),
-    ]
-    if dry_run:
-        args.append("--dry-run")
-    proc = subprocess.run(args, cwd=str(wt), capture_output=True, text=True, check=False)
-    return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
-
-
-def _prepare_diff(wt: Path, diff: str) -> str:
-    """Recompute hunk headers against the worktree files; fall back to the raw diff."""
-    return _recompute_hunk_headers(diff, wt) or diff
-
-
-def _apply_check(wt: Path, diff: str) -> tuple[bool, str]:
-    """Check the diff applies (recomputed headers via git apply, then a `patch` fuzz fallback)."""
-    patch = wt / ".runner_patch.diff"
-    patch.write_text(_prepare_diff(wt, diff))
-    proc = _git(wt, "apply", "--check", *_APPLY_FLAGS, str(patch))
-    if proc.returncode == 0:
-        return True, ""
-    ok, _ = _patch_fallback(wt, patch, dry_run=True)
-    return ok, (proc.stderr.strip() if not ok else "")
-
-
-def _apply(wt: Path, diff: str) -> tuple[bool, str]:
-    patch = wt / ".runner_patch.diff"
-    patch.write_text(_prepare_diff(wt, diff))
-    proc = _git(wt, "apply", *_APPLY_FLAGS, str(patch))
-    if proc.returncode == 0:
-        return True, ""
-    return _patch_fallback(wt, patch, dry_run=False)
+def _worktree_diff(wt: Path) -> str:
+    """The audit diff — generated by Git from what the runner wrote, never by the model."""
+    return _git(wt, "diff").stdout
 
 
 def _reset_worktree(wt: Path) -> None:
-    """Return the worktree to its base commit so every diff attempt applies to a clean tree."""
+    """Return the worktree to its base commit so every attempt writes onto a clean tree."""
     _git(wt, "checkout", "--", ".")
     _git(wt, "clean", "-fd")
 
 
-def _run_pytest(wt: Path, test_file: str) -> tuple[bool, str]:
-    """Run the deterministic targeted test command in the worktree; (passed, tail_output)."""
-    cmd = BUILD_TEST_CMD.format(test=test_file)
-    proc = subprocess.run(cmd, shell=True, cwd=str(wt), capture_output=True, text=True, check=False)
+def _nearest_uv_project(start: Path, stop: Path) -> Path:
+    """Nearest ancestor of `start` (up to `stop`) holding a pyproject.toml — the uv project
+    a test must run in. A monorepo has per-service projects, so `uv run pytest` from the repo
+    root has no environment; we run from the right service dir instead."""
+    d = start
+    while True:
+        if (d / "pyproject.toml").is_file():
+            return d
+        if d == stop or d.parent == d:
+            return stop
+        d = d.parent
+
+
+def _run_pytest(wt: Path, test_file: str) -> tuple[bool, str, str]:
+    """Run the deterministic targeted test in its uv project; (passed, tail_output, command)."""
+    project = _nearest_uv_project((wt / test_file).parent, wt)
+    rel_test = os.path.relpath(wt / test_file, project)
+    cmd = BUILD_TEST_CMD.format(test=rel_test)
+    proc = subprocess.run(
+        cmd, shell=True, cwd=str(project), capture_output=True, text=True, check=False
+    )
     output = (proc.stdout + "\n" + proc.stderr).strip()
-    return proc.returncode == 0, output[-3000:]
+    display = f"(cd {project.relative_to(wt)} && {cmd})"
+    return proc.returncode == 0, output[-3000:], display
 
 
 async def _build(
@@ -878,125 +855,125 @@ async def _build(
     files = resolved.all_files
     test_file = resolved.primary_test
     assert test_file is not None  # missing_test guard above guarantees this
+    # Blast radius for WRITES: target + the primary test only. Dependencies are read-only context
+    # (judge rule). The model sees deps but may not modify them.
+    writable = set(resolved.target + resolved.test[:1])
     file_blob, context_tokens = _read_files(workspace, files)
     print(f"\n  reading {len(files)} file(s) in full (~{context_tokens} ctx tokens): {files}")
+    print(f"  writable (target + test): {sorted(writable)}")
 
-    # --- 3. implementer produces a unified diff ------------------------------------------
-    impl_system = _SUBAGENT_PROMPTS.get("implementation", "") + "\n" + _IMPLEMENTER_DIFF_RULES
+    # --- 3. implementer returns COMPLETE updated files (full-file contract) ---------------
+    impl_system = _SUBAGENT_PROMPTS.get("implementation", "") + "\n" + _IMPLEMENTER_FILE_RULES
+    writable_list = "\n".join(f"  - {p}" for p in sorted(writable))
     impl_user = (
         f"Task: {task}\n\n"
-        f"Run the test command after your change: {BUILD_TEST_CMD.format(test=test_file)}\n\n"
-        f"Files (full current contents):\n{file_blob}\n\n"
-        "Output ONLY the unified diff now."
+        f"The test will be run with: {BUILD_TEST_CMD.format(test=test_file)}\n\n"
+        f"WRITABLE files (emit a FILE block for each you change):\n{writable_list}\n\n"
+        f"Files (full current contents; any not in the writable list are READ-ONLY):\n"
+        f"{file_blob}\n\n"
+        "Return the complete updated writable file(s) as FILE blocks now."
     )
-    raw, p, c = await _llm_usage(llm_client, impl_system, impl_user, label="implementer.diff")
+    raw, p, c = await _llm_usage(llm_client, impl_system, impl_user, label="implementer.files")
     prompt_tokens += p
     completion_tokens += c
-    diff = _parse_diff(raw)
-    if diff is None:
-        # Only when there's NO diff do we interpret the output: a request for files is the M1
-        # failure we care about; anything else is just a malformed response.
+
+    blocks = _normalise_block_paths(_parse_file_blocks(raw), workspace)
+    if not blocks:
         if _PASTE_REQUEST_RE.search(raw):
-            print("\n  FAILURE: the model asked for file contents instead of producing a diff —")
+            print("\n  FAILURE: the model asked for file contents instead of writing files —")
             print("  context supply is the broker's job, so M1 did not hold. Aborting.")
         else:
-            print("\n  FAILURE: the implementer did not return a unified diff.")
+            print("\n  FAILURE: the implementer returned no FILE blocks (format failure).")
+        return 1
+    blocks, errors = _validate_file_blocks(blocks, writable, workspace)
+    for e in errors:
+        print(f"  rejected {e}")
+    if not blocks:
+        print("\n  FAILURE: no valid in-boundary file blocks to write.")
         return 1
 
-    # --- 4. governance gate before touching even the sandbox worktree (ADR-0021) ---------
-    decision, _ = await _gate(
-        session_factory,
-        run_id=run_id,
-        from_agent="implementation",
-        to_agent="human",
-        display_text=f"Proposed diff for: {task}\n\n{diff}",
-        auto_approve=auto_approve,
-    )
-    if decision in ("rejected", "aborted"):
-        print("\n  Operator stopped the build before apply.")
-        return 0 if decision == "aborted" else 1
-
-    # --- 5. apply + test in a throwaway worktree, with a bounded TestFixer loop -----------
+    # --- 4. write into a throwaway worktree; Git computes the audit diff -------------------
     base_wt = Path(tempfile.mkdtemp(prefix="kb-runner-wt-"))
     wt = base_wt / "tree"
     add = _git(workspace, "worktree", "add", "--detach", str(wt), "HEAD")
     if add.returncode != 0:
         print(f"\n  FAILURE: could not create a git worktree: {add.stderr.strip()}")
+        shutil.rmtree(base_wt, ignore_errors=True)
         return 1
 
     passed = False
     test_output = ""
-    final_diff = diff
+    test_cmd = BUILD_TEST_CMD.format(test=test_file)
+    final_diff = ""
     try:
+        current = blocks
+        gated = False
         for attempt in range(_MAX_FIX_ATTEMPTS + 1):
             _reset_worktree(wt)
-            ok, err = _apply_check(wt, final_diff)
-            if not ok:
-                # one diff-repair call max, then count it a failure (judge adjustment #4)
-                print(f"\n  diff did not apply (attempt {attempt + 1}): {err.splitlines()[:1]}")
-                repair_user = (
-                    f"Your unified diff failed `git apply --check` with:\n{err}\n\n"
-                    f"Here is the diff:\n{final_diff}\n\n"
-                    f"Files (full current contents):\n{file_blob}\n\n"
-                    "Return a corrected unified diff ONLY."
-                )
-                raw, p, c = await _llm_usage(
-                    llm_client, _TESTFIXER_DIFF_RULES, repair_user, label="diff.repair"
-                )
-                prompt_tokens += p
-                completion_tokens += c
-                repaired = _parse_diff(raw)
-                _reset_worktree(wt)
-                if repaired is None or not _apply_check(wt, repaired)[0]:
-                    print("  FAILURE: diff still does not apply after one repair.")
-                    return 1
-                final_diff = repaired
-
-            _reset_worktree(wt)
-            applied_ok, apply_err = _apply(wt, final_diff)
-            if not applied_ok:
-                # --check passed but the real apply did not: never run pytest against a
-                # half-patched tree (a misleading PASS) — fail loudly instead.
-                print(f"\n  FAILURE: git apply failed after a clean --check: {apply_err}")
-                return 1
-            passed, test_output = _run_pytest(wt, test_file)
-            print(f"  pytest (attempt {attempt + 1}): {'PASS' if passed else 'FAIL'}")
-            if passed:
+            _write_files(wt, current)
+            final_diff = _worktree_diff(wt)
+            if not final_diff.strip():
+                print("\n  FAILURE: the written files produced no diff (no actual change).")
                 break
-            if attempt < _MAX_FIX_ATTEMPTS:
-                fix_user = (
-                    f"Task: {task}\n\n"
-                    f"pytest output:\n{test_output}\n\n"
-                    f"Your previous diff:\n{final_diff}\n\n"
-                    f"Files (full ORIGINAL contents):\n{file_blob}\n\n"
-                    "Return a corrected unified diff ONLY."
+            if _git(wt, "diff", "--check").returncode != 0:
+                print("  warning: git diff --check flagged whitespace errors")
+
+            if not gated:  # governance gate on the real (Git-computed) diff, once
+                decision, _ = await _gate(
+                    session_factory,
+                    run_id=run_id,
+                    from_agent="implementation",
+                    to_agent="human",
+                    display_text=f"Proposed change for: {task}\n\n{final_diff}",
+                    auto_approve=auto_approve,
                 )
-                raw, p, c = await _llm_usage(
-                    llm_client, _TESTFIXER_DIFF_RULES, fix_user, label="testfixer.diff"
-                )
-                prompt_tokens += p
-                completion_tokens += c
-                nxt = _parse_diff(raw)
-                if nxt is None:
-                    if _PASTE_REQUEST_RE.search(raw):
-                        print("\n  FAILURE: the model asked for file contents in the fix loop.")
-                    else:
-                        print("  FAILURE: TestFixer did not return a unified diff.")
-                    break
-                final_diff = nxt
+                if decision in ("rejected", "aborted"):
+                    print("\n  Operator stopped the build before tests.")
+                    return 0 if decision == "aborted" else 1
+                gated = True
+
+            passed, test_output, test_cmd = _run_pytest(wt, test_file)
+            print(f"  pytest (attempt {attempt + 1}): {'PASS' if passed else 'FAIL'}  {test_cmd}")
+            if passed or attempt >= _MAX_FIX_ATTEMPTS:
+                break
+
+            # TestFixer: same full-file contract, shown its own current files + the failure.
+            fix_user = (
+                f"Task: {task}\n\n"
+                f"pytest output:\n{test_output}\n\n"
+                f"WRITABLE files:\n{writable_list}\n\n"
+                f"Current contents of the files you wrote:\n{_render_blocks(current)}\n\n"
+                f"Read-only context:\n{file_blob}\n\n"
+                "Return corrected COMPLETE writable file(s) as FILE blocks now."
+            )
+            raw, p, c = await _llm_usage(
+                llm_client, _TESTFIXER_FILE_RULES, fix_user, label="testfixer.files"
+            )
+            prompt_tokens += p
+            completion_tokens += c
+            nxt = _normalise_block_paths(_parse_file_blocks(raw), workspace)
+            nxt, fix_errors = _validate_file_blocks(nxt, writable, workspace)
+            for e in fix_errors:
+                print(f"  rejected {e}")
+            if not nxt:
+                print("  FAILURE: TestFixer returned no valid file blocks.")
+                break
+            current = nxt
     finally:
         _git(workspace, "worktree", "remove", "--force", str(wt))
         shutil.rmtree(base_wt, ignore_errors=True)  # remove the temp parent, not just the tree
 
-    # --- 6. accounting (the head-to-head numbers the experiment compares) -----------------
+    # --- 5. accounting (the head-to-head numbers the experiment compares) ------------------
+    total_tokens = prompt_tokens + completion_tokens
     _print_section("BUILD result")
     print(f"  task              : {task}")
     print(f"  files read        : {files}")
+    print(f"  files written     : {sorted(blocks)}")
     print(f"  est context tokens: {context_tokens}")
-    print(f"  model tokens      : in={prompt_tokens} out={completion_tokens}")
-    print(f"  test command      : {BUILD_TEST_CMD.format(test=test_file)}")
+    print(f"  model tokens      : in={prompt_tokens} out={completion_tokens} total={total_tokens}")
+    print(f"  test command      : {test_cmd}")
     print(f"  result            : {'PASS' if passed else 'FAIL'}")
-    print("\n  final diff:")
+    print("\n  final diff (computed by git):")
     print(textwrap.indent(final_diff, "    "))
     if not passed:
         print("\n  last pytest output:")
