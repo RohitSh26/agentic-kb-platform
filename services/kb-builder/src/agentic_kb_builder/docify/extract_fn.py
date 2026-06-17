@@ -22,12 +22,14 @@ so the live LLM is never required by the test suite (the hermetic-test requireme
 """
 
 import asyncio
+import os
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from agentic_kb_builder.infrastructure.azure_openai.llm_endpoint import (
+    ANTHROPIC_FOUNDRY_PROVIDER,
     AZURE_PROVIDER,
     ModelEndpoint,
     resolve_endpoint_from_env,
@@ -56,12 +58,30 @@ class DocExtractFn(Protocol):
 
 
 def resolve_endpoint() -> ModelEndpoint:
-    """Resolve the docify model endpoint from the build env (thin shared pass-through).
+    """Resolve the docify model endpoint from the build env.
 
-    Doc extraction REQUIRES a key/deployment (unlike code extraction); the shared resolver
-    fails loudly on a missing one, so docs are never silently dropped.
+    Documents can run on a SEPARATE model from the agent/judge: if ``DOC_LLM_PROVIDER`` is set,
+    docify reads the ``DOC_LLM_*`` family; otherwise it shares the global ``LLM_*`` config.
+
+    docify runs its LLM call THROUGH Graphify, which speaks the OpenAI / Azure-OpenAI APIs — it
+    has NO Anthropic backend. So the ``anthropic_foundry`` provider (Claude on Azure Foundry,
+    Messages API) cannot extract documents and is rejected with an actionable error instead of a
+    cryptic ``/chat/completions`` 404. Use ``DOC_LLM_PROVIDER`` to point documents at a
+    Groq/OpenAI/Azure model, or build code-only (no doc sources).
     """
-    return resolve_endpoint_from_env(max_tokens_default=_DOCIFY_MAX_TOKENS_DEFAULT)
+    env_prefix = "DOC_LLM" if os.environ.get("DOC_LLM_PROVIDER") else "LLM"
+    endpoint = resolve_endpoint_from_env(
+        max_tokens_default=_DOCIFY_MAX_TOKENS_DEFAULT, env_prefix=env_prefix
+    )
+    if endpoint.provider == ANTHROPIC_FOUNDRY_PROVIDER:
+        raise RuntimeError(
+            "docify (document extraction) cannot use the 'anthropic_foundry' provider: it runs "
+            "through Graphify, which calls the OpenAI /chat/completions API, but a Claude-on-"
+            "Foundry endpoint only speaks the Anthropic Messages API. Point documents at a "
+            "Groq/OpenAI/Azure model via DOC_LLM_PROVIDER (+ DOC_LLM_BASE_URL / DOC_LLM_API_KEY / "
+            "DOC_LLM_MODEL), or build code-only (no doc sources)."
+        )
+    return endpoint
 
 
 def _graphify_backend_name(endpoint: ModelEndpoint) -> str:

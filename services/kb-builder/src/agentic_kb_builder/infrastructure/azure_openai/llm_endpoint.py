@@ -70,16 +70,19 @@ class ModelEndpoint:
         return self.provider == ANTHROPIC_FOUNDRY_PROVIDER
 
 
-def resolve_endpoint_from_env(*, max_tokens_default: int) -> ModelEndpoint:
+def resolve_endpoint_from_env(*, max_tokens_default: int, env_prefix: str = "LLM") -> ModelEndpoint:
     """Resolve the model endpoint from the build env (the ONE provider resolution).
 
-    ``max_tokens_default`` lets each consumer keep its own historical ``LLM_MAX_TOKENS``
-    fallback (the judge and docify differ) without changing any other behavior. Raises a clear
-    RuntimeError when a required credential/deployment is missing so work is never silently
-    dropped.
+    ``max_tokens_default`` lets each consumer keep its own historical ``*_MAX_TOKENS`` fallback
+    (the judge and docify differ). ``env_prefix`` selects the generic var family: the default
+    ``"LLM"`` reads ``LLM_PROVIDER`` / ``LLM_BASE_URL`` / ``LLM_API_KEY`` / ``LLM_MODEL``;
+    docify passes ``"DOC_LLM"`` to run documents on a SEPARATE model from the agent/judge (e.g.
+    Claude-on-Foundry can't extract docs — Graphify speaks OpenAI's API). The azure branch keeps
+    its own ``AZURE_OPENAI_*`` namespace regardless of prefix. Raises a clear RuntimeError when a
+    required credential/deployment is missing so work is never silently dropped.
     """
-    provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
-    max_tokens = int(os.environ.get("LLM_MAX_TOKENS", str(max_tokens_default)))
+    provider = os.environ.get(f"{env_prefix}_PROVIDER", "ollama").lower()
+    max_tokens = int(os.environ.get(f"{env_prefix}_MAX_TOKENS", str(max_tokens_default)))
 
     if provider == AZURE_PROVIDER:
         azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
@@ -109,15 +112,15 @@ def resolve_endpoint_from_env(*, max_tokens_default: int) -> ModelEndpoint:
         )
 
     if provider == ANTHROPIC_FOUNDRY_PROVIDER:
-        base_url = os.environ.get("LLM_BASE_URL", "")
-        api_key = os.environ.get("LLM_API_KEY", "")
-        model = os.environ.get("LLM_MODEL", "")
+        base_url = os.environ.get(f"{env_prefix}_BASE_URL", "")
+        api_key = os.environ.get(f"{env_prefix}_API_KEY", "")
+        model = os.environ.get(f"{env_prefix}_MODEL", "")
         missing = [
             name
             for name, value in (
-                ("LLM_BASE_URL", base_url),  # the .../anthropic Foundry endpoint
-                ("LLM_API_KEY", api_key),
-                ("LLM_MODEL", model),  # the Claude deployment name, e.g. claude-sonnet-4-6
+                (f"{env_prefix}_BASE_URL", base_url),  # the .../anthropic Foundry endpoint
+                (f"{env_prefix}_API_KEY", api_key),
+                (f"{env_prefix}_MODEL", model),  # the Claude deployment, e.g. claude-sonnet-4-6
             )
             if not value
         ]
@@ -136,11 +139,11 @@ def resolve_endpoint_from_env(*, max_tokens_default: int) -> ModelEndpoint:
     default_base, default_key, default_model = PROVIDER_DEFAULTS.get(
         provider, PROVIDER_DEFAULTS["ollama"]
     )
-    base_url = os.environ.get("LLM_BASE_URL", default_base)
-    api_key = os.environ.get("LLM_API_KEY", default_key)
+    base_url = os.environ.get(f"{env_prefix}_BASE_URL", default_base)
+    api_key = os.environ.get(f"{env_prefix}_API_KEY", default_key)
     if not api_key:
-        raise RuntimeError(f"LLM_API_KEY is required for provider {provider!r}")
-    model = os.environ.get("LLM_MODEL", default_model)
+        raise RuntimeError(f"{env_prefix}_API_KEY is required for provider {provider!r}")
+    model = os.environ.get(f"{env_prefix}_MODEL", default_model)
     return ModelEndpoint(
         provider=provider,
         base_url=base_url,

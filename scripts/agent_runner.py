@@ -1135,13 +1135,21 @@ async def _run(task: str, auto_approve: bool, workspace: Path) -> int:  # orches
     # --- shared infrastructure -----------------------------------------------
     # Claude on Azure AI Foundry uses the Anthropic SDK + Messages API (a DIFFERENT SDK to the
     # OpenAI-compatible lanes); both flow through the `_chat` seam below so the lanes are agnostic.
-    # LLM_SSL_VERIFY=false disables TLS verification (insecure; for a corporate TLS-inspecting
-    # proxy where the provider cert can't be verified). Default = None = the SDK's secure default.
-    _http = (
-        httpx.AsyncClient(verify=False)
-        if os.environ.get("LLM_SSL_VERIFY", "true").strip().lower() in ("0", "false", "no", "off")
-        else None
-    )
+    # TLS behind a corporate proxy (e.g. Zscaler): the Anthropic/OpenAI SDKs use certifi and
+    # ignore SSL_CERT_FILE, so thread the trust material in explicitly. LLM_SSL_VERIFY=false
+    # disables verification (insecure); else a CA bundle (LLM_CA_CERT / SSL_CERT_FILE /
+    # REQUESTS_CA_BUNDLE) is trusted via verify=<path>; else the SDK's secure default.
+    _http: httpx.AsyncClient | None
+    if os.environ.get("LLM_SSL_VERIFY", "true").strip().lower() in ("0", "false", "no", "off"):
+        _http = httpx.AsyncClient(verify=False)
+    elif _ca := (
+        os.environ.get("LLM_CA_CERT")
+        or os.environ.get("SSL_CERT_FILE")
+        or os.environ.get("REQUESTS_CA_BUNDLE")
+    ):
+        _http = httpx.AsyncClient(verify=_ca)
+    else:
+        _http = None
     llm_client: LLMClient
     if _IS_ANTHROPIC:
         llm_client = AsyncAnthropicFoundry(

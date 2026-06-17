@@ -159,15 +159,28 @@ def _parse_judgment(raw: str) -> RelationshipJudgment:
 def _llm_http_client() -> httpx.AsyncClient | None:
     """The httpx client the LLM SDKs should use, or None for the SDK's secure default.
 
-    Behind a corporate TLS-inspecting proxy the provider cert can't be verified
-    (``CERTIFICATE_VERIFY_FAILED``). Setting ``LLM_SSL_VERIFY=false`` returns a client with
-    verification DISABLED so the call goes through. This is INSECURE and dev/proxy-only —
-    prefer ``SSL_CERT_FILE`` pointing at the corporate CA. Default (unset/true) returns None,
-    so TLS verification is never weakened unless explicitly opted in.
+    Behind a corporate TLS-inspecting proxy (e.g. Zscaler) the provider cert chains to the
+    corporate CA, so the call fails with ``CERTIFICATE_VERIFY_FAILED``. The Anthropic / OpenAI
+    SDKs build their httpx client from ``certifi`` and do NOT read ``SSL_CERT_FILE``, so we must
+    pass the trust material EXPLICITLY:
+
+    1. ``LLM_SSL_VERIFY=false`` -> verification DISABLED (insecure; last resort).
+    2. else a CA bundle from ``LLM_CA_CERT`` / ``SSL_CERT_FILE`` / ``REQUESTS_CA_BUNDLE`` ->
+       ``verify=<that bundle>`` so the corporate CA (e.g. ZscalerRootCA.pem) is trusted. THIS is
+       the right fix.
+    3. else None -> the SDK's secure certifi default (TLS never weakened unless opted in).
     """
     if os.environ.get("LLM_SSL_VERIFY", "true").strip().lower() in ("0", "false", "no", "off"):
         logger.warning("event=llm_ssl_verify_disabled msg=TLS-verification-OFF-insecure")
         return httpx.AsyncClient(verify=False)
+    ca_bundle = (
+        os.environ.get("LLM_CA_CERT")
+        or os.environ.get("SSL_CERT_FILE")
+        or os.environ.get("REQUESTS_CA_BUNDLE")
+    )
+    if ca_bundle:
+        logger.info("event=llm_ca_cert_used path=%s", ca_bundle)
+        return httpx.AsyncClient(verify=ca_bundle)
     return None
 
 
