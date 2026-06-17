@@ -35,6 +35,12 @@ PROVIDER_DEFAULTS: dict[str, tuple[str, str, str]] = {
 # OpenAI-compatible base_url path.
 AZURE_PROVIDER = "azure"
 
+# Claude models hosted on Azure AI Foundry. They use the Anthropic SDK's AnthropicFoundry
+# client + the Messages API (NOT OpenAI chat.completions), so they route to a separate client
+# path. Config reuses the generic LLM_* vars: LLM_BASE_URL is the
+# https://<resource>.services.ai.azure.com/anthropic endpoint, LLM_MODEL is the deployment name.
+ANTHROPIC_FOUNDRY_PROVIDER = "anthropic_foundry"
+
 _DEFAULT_AZURE_API_VERSION = "2024-06-01"
 
 
@@ -58,6 +64,10 @@ class ModelEndpoint:
     @property
     def is_azure(self) -> bool:
         return self.provider == AZURE_PROVIDER
+
+    @property
+    def is_anthropic_foundry(self) -> bool:
+        return self.provider == ANTHROPIC_FOUNDRY_PROVIDER
 
 
 def resolve_endpoint_from_env(*, max_tokens_default: int) -> ModelEndpoint:
@@ -98,6 +108,31 @@ def resolve_endpoint_from_env(*, max_tokens_default: int) -> ModelEndpoint:
             ),
         )
 
+    if provider == ANTHROPIC_FOUNDRY_PROVIDER:
+        base_url = os.environ.get("LLM_BASE_URL", "")
+        api_key = os.environ.get("LLM_API_KEY", "")
+        model = os.environ.get("LLM_MODEL", "")
+        missing = [
+            name
+            for name, value in (
+                ("LLM_BASE_URL", base_url),  # the .../anthropic Foundry endpoint
+                ("LLM_API_KEY", api_key),
+                ("LLM_MODEL", model),  # the Claude deployment name, e.g. claude-sonnet-4-6
+            )
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(
+                f"anthropic_foundry provider requires {', '.join(missing)} to be set"
+            )
+        return ModelEndpoint(
+            provider=provider,
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            max_tokens=max_tokens,
+        )
+
     default_base, default_key, default_model = PROVIDER_DEFAULTS.get(
         provider, PROVIDER_DEFAULTS["ollama"]
     )
@@ -116,6 +151,7 @@ def resolve_endpoint_from_env(*, max_tokens_default: int) -> ModelEndpoint:
 
 
 __all__ = [
+    "ANTHROPIC_FOUNDRY_PROVIDER",
     "AZURE_PROVIDER",
     "PROVIDER_DEFAULTS",
     "ModelEndpoint",

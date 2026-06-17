@@ -24,9 +24,11 @@ Required env vars (repo-root .env or shell):
     DATABASE_URL   asyncpg connection string (e.g. postgresql+asyncpg://...)
     MCP_URL        defaults to http://127.0.0.1:8765/mcp/
     MCP_BEARER     defaults to local-dev-token
-    LLM_BASE_URL   Groq or any OpenAI-compatible base URL
+    LLM_PROVIDER   groq (default) | ollama | openai | anthropic_foundry
+    LLM_BASE_URL   Groq/OpenAI-compatible base URL; for anthropic_foundry the .../anthropic
+                   Azure AI Foundry endpoint (REQUIRED for that provider)
     LLM_API_KEY    API key for that model provider
-    LLM_MODEL      model name (e.g. llama-3.3-70b-versatile)
+    LLM_MODEL      model name (e.g. llama-3.3-70b-versatile, or a Claude deployment)
     BUILD_TEST_CMD BUILD-lane test command, default "uv run pytest {test} -q"
 """
 
@@ -46,6 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from anthropic import AsyncAnthropicFoundry
 from fastmcp import Client
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -112,7 +115,13 @@ _DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
 }
 _PROVIDER = os.environ.get("LLM_PROVIDER", "groq").lower()
-_DEFAULT_BASE = next((u for k, u in _DEFAULT_BASE_URLS.items() if k in _PROVIDER), None)
+# Claude on Azure AI Foundry: a DIFFERENT SDK (Anthropic AsyncAnthropicFoundry) + the Messages
+# API. It has NO default base_url (the .../anthropic endpoint is deployment-specific and REQUIRED).
+_ANTHROPIC_FOUNDRY = "anthropic_foundry"
+_IS_ANTHROPIC = _PROVIDER == _ANTHROPIC_FOUNDRY
+_DEFAULT_BASE = None if _IS_ANTHROPIC else next(
+    (u for k, u in _DEFAULT_BASE_URLS.items() if k in _PROVIDER), None
+)
 LLM_BASE_URL: str | None = os.environ.get("LLM_BASE_URL") or _DEFAULT_BASE
 LLM_API_KEY: str | None = os.environ.get("LLM_API_KEY")
 LLM_MODEL: str = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
@@ -191,12 +200,69 @@ def _unwrap(result: object) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# LLM call (Groq/OpenAI-compatible)
+# LLM call — one seam over two SDKs.
+#
+# Two providers, two SDKs/APIs: Groq/OpenAI-compatible (chat.completions) and Claude on Azure
+# AI Foundry (Anthropic Messages API). `_chat` branches on the client type ONCE and returns the
+# uniform (text, in_tokens, out_tokens) tuple, so the lanes (`_llm` / `_llm_usage` and their
+# callers) never sprinkle isinstance checks and the token metering stays identical.
 # ---------------------------------------------------------------------------
+
+LLMClient = AsyncOpenAI | AsyncAnthropicFoundry
+
+
+async def _chat(
+    client: LLMClient,
+    *,
+    system: str,
+    user: str,
+    max_tokens: int,
+    temperature: float,
+) -> tuple[str, int, int]:
+    """One model call over either SDK; return (text, in_tokens, out_tokens).
+
+    OpenAI: chat.completions with system+user messages; usage.prompt/completion_tokens.
+    Anthropic Foundry: Messages API — the system prompt is a top-level `system=` param (NOT a
+    role=system message), the reply is a LIST of content blocks (join the text ones), and usage
+    is input_tokens/output_tokens. There is NO response_format param.
+    """
+    if isinstance(client, AsyncAnthropicFoundry):
+        message = await client.messages.create(
+            model=LLM_MODEL,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        text = "".join(
+            getattr(block, "text", "")
+            for block in message.content
+            if getattr(block, "type", None) == "text"
+        )
+        usage = getattr(message, "usage", None)
+        in_tokens = getattr(usage, "input_tokens", 0) or 0
+        out_tokens = getattr(usage, "output_tokens", 0) or 0
+        return text, in_tokens, out_tokens
+
+    response = await client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        temperature=temperature,
+        # Full-file output (and a reasoning model's <think> preamble) needs room — without an
+        # explicit cap the provider default truncates the reply before the file blocks appear.
+        max_tokens=max_tokens,
+    )
+    usage = response.usage
+    prompt_tokens = usage.prompt_tokens if usage else 0
+    completion_tokens = usage.completion_tokens if usage else 0
+    return response.choices[0].message.content or "", prompt_tokens, completion_tokens
 
 
 async def _llm(
-    llm_client: AsyncOpenAI,
+    llm_client: LLMClient,
     system: str,
     user: str,
     label: str,
@@ -207,32 +273,20 @@ async def _llm(
 
 
 async def _llm_usage(
-    llm_client: AsyncOpenAI,
+    llm_client: LLMClient,
     system: str,
     user: str,
     label: str,
 ) -> tuple[str, int, int]:
-    """Call the LLM; return (content, prompt_tokens, completion_tokens).
+    """Call the LLM; return (content, in_tokens, out_tokens).
 
     The BUILD lane meters model tokens so the accounting can be compared head-to-head
     against a grep baseline — the token win is the product claim, so it must be measured.
     """
     logger.info("llm_call label=%r model=%r", label, LLM_MODEL)
-    response = await llm_client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=0.3,
-        # Full-file output (and a reasoning model's <think> preamble) needs room — without an
-        # explicit cap the provider default truncates the reply before the file blocks appear.
-        max_tokens=LLM_MAX_TOKENS,
+    return await _chat(
+        llm_client, system=system, user=user, max_tokens=LLM_MAX_TOKENS, temperature=0.3
     )
-    usage = response.usage
-    prompt_tokens = usage.prompt_tokens if usage else 0
-    completion_tokens = usage.completion_tokens if usage else 0
-    return response.choices[0].message.content or "", prompt_tokens, completion_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +503,7 @@ Answer the question directly and clearly. Rules:
 
 async def _explain(
     broker: Client,
-    llm_client: AsyncOpenAI,
+    llm_client: LLMClient,
     *,
     run_id: str,
     task: str,
@@ -849,7 +903,7 @@ def _run_pytest(wt: Path, test_file: str) -> tuple[bool, str, str]:
 
 async def _build(
     broker: Client,
-    llm_client: AsyncOpenAI,
+    llm_client: LLMClient,
     session_factory: async_sessionmaker[AsyncSession],
     *,
     run_id: str,
@@ -1056,8 +1110,18 @@ async def _run(task: str, auto_approve: bool, workspace: Path) -> int:  # orches
     if not DATABASE_URL:
         print("ERROR: DATABASE_URL env var is required", file=sys.stderr)
         return 2
-    if not LLM_BASE_URL or not LLM_API_KEY:
-        print("ERROR: LLM_BASE_URL and LLM_API_KEY env vars are required", file=sys.stderr)
+    if not LLM_API_KEY:
+        print("ERROR: LLM_API_KEY env var is required", file=sys.stderr)
+        return 2
+    if not LLM_BASE_URL:
+        # OpenAI-compatible providers default the base URL; anthropic_foundry has none (the
+        # .../anthropic Foundry endpoint is deployment-specific), so it MUST be set explicitly.
+        hint = (
+            " (the .../anthropic Foundry endpoint is required for anthropic_foundry)"
+            if _IS_ANTHROPIC
+            else ""
+        )
+        print(f"ERROR: LLM_BASE_URL env var is required{hint}", file=sys.stderr)
         return 2
 
     run_id = f"runner-{uuid.uuid4().hex[:8]}"
@@ -1068,7 +1132,13 @@ async def _run(task: str, auto_approve: bool, workspace: Path) -> int:  # orches
     print(f"model  : {LLM_MODEL}")
 
     # --- shared infrastructure -----------------------------------------------
-    llm_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+    # Claude on Azure AI Foundry uses the Anthropic SDK + Messages API (a DIFFERENT SDK to the
+    # OpenAI-compatible lanes); both flow through the `_chat` seam below so the lanes are agnostic.
+    llm_client: LLMClient
+    if _IS_ANTHROPIC:
+        llm_client = AsyncAnthropicFoundry(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+    else:
+        llm_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
 
     engine = create_async_engine(DATABASE_URL)
     session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(

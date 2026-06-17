@@ -9,10 +9,15 @@ model backend stays swappable. The provider->endpoint resolution is shared with 
 this module just builds the OpenAI/Azure SDK client from the resolved ``ModelEndpoint``.
 
 Configure via env (see the wiki "Run locally"):
-- `LLM_PROVIDER`: `ollama` (default) | `groq` | `openai` | `azure`
+- `LLM_PROVIDER`: `ollama` (default) | `groq` | `openai` | `azure` | `anthropic_foundry`
 - OpenAI-compatible providers: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
 - Azure: `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`,
   `AZURE_OPENAI_API_VERSION`
+- Anthropic on Azure AI Foundry (`anthropic_foundry`): the Anthropic SDK's
+  ``AsyncAnthropicFoundry`` client + the Messages API (a DIFFERENT SDK/API to OpenAI). Reuses
+  the generic `LLM_BASE_URL` (the ``.../anthropic`` endpoint), `LLM_API_KEY`, `LLM_MODEL` (the
+  Claude deployment). The system prompt is a top-level ``system=`` param, not a message; the
+  response is a list of content blocks; usage is ``input_tokens`` / ``output_tokens``.
 """
 
 from __future__ import annotations
@@ -22,8 +27,9 @@ import json
 import os
 import re
 import time
-from typing import cast
+from typing import Any, cast
 
+from anthropic import AsyncAnthropicFoundry
 from json_repair import repair_json
 from openai import AsyncAzureOpenAI, AsyncOpenAI, BadRequestError
 from openai.types.chat import ChatCompletionMessageParam
@@ -154,20 +160,24 @@ class ChatModelClient:
 
     def __init__(
         self,
-        client: AsyncOpenAI | AsyncAzureOpenAI,
+        client: AsyncOpenAI | AsyncAzureOpenAI | AsyncAnthropicFoundry,
         *,
         model: str,
         provider: str,
         temperature: float = 0.0,
         max_tokens: int = 4000,
+        is_anthropic: bool = False,
     ) -> None:
         self._client = client
         self._model = model
         self._temperature = temperature
         # Without an explicit cap, Ollama truncates output at its tiny default
         # num_predict and the JSON comes back unterminated. The default fits the whole
-        # structured judge response.
+        # structured judge response. (For Anthropic max_tokens is a REQUIRED Messages-API param.)
         self._max_tokens = max_tokens
+        # Dispatch flag: True routes _complete to the Anthropic Messages API (system split,
+        # content-block join, input/output_tokens) instead of OpenAI chat.completions.
+        self._is_anthropic = is_anthropic
         self.model_name = f"{provider}:{model}"
         self.model_params_hash = hashlib.sha256(
             f"{self.model_name}|temp={temperature}|max_tokens={max_tokens}".encode()
@@ -180,15 +190,22 @@ class ChatModelClient:
         # resolved azure fields; every other provider builds AsyncOpenAI(base_url=..., api_key=...).
         endpoint = resolve_endpoint_from_env(max_tokens_default=_JUDGE_MAX_TOKENS_DEFAULT)
         temperature = float(os.environ.get("LLM_TEMPERATURE", "0"))
-        client: AsyncOpenAI | AsyncAzureOpenAI
+        client: AsyncOpenAI | AsyncAzureOpenAI | AsyncAnthropicFoundry
         if endpoint.is_azure:
             client = AsyncAzureOpenAI(
                 azure_endpoint=endpoint.azure_endpoint,
                 api_key=endpoint.api_key,
                 api_version=endpoint.azure_api_version,
             )
+        elif endpoint.is_anthropic_foundry:
+            # Claude on Azure AI Foundry: a DIFFERENT SDK (Anthropic) + the Messages API.
+            # base_url is the .../anthropic endpoint; api_key is API-key auth.
+            client = AsyncAnthropicFoundry(
+                base_url=endpoint.base_url, api_key=endpoint.api_key
+            )
         else:
             client = AsyncOpenAI(base_url=endpoint.base_url, api_key=endpoint.api_key)
+        # The api_key is NEVER logged (rule python.md) — only provider + model.
         logger.info(
             "event=model_client_configured provider=%s model=%s",
             endpoint.provider,
@@ -200,6 +217,7 @@ class ChatModelClient:
             provider=endpoint.provider,
             temperature=temperature,
             max_tokens=endpoint.max_tokens,
+            is_anthropic=endpoint.is_anthropic_foundry,
         )
 
     async def generate_relationship_judgment(
@@ -240,26 +258,20 @@ class ChatModelClient:
     async def _complete(
         self, messages: list[ChatCompletionMessageParam], *, purpose: str = "judge"
     ) -> str:
+        """Run one model call, dispatching to the OpenAI or Anthropic SDK.
+
+        Timing and the single ``event=model_call`` / ``event=model_call_failed`` log line live
+        HERE so both backends are metered identically. The actual SDK call is delegated to one
+        of two helpers, each returning ``(text, input_tokens, output_tokens)`` — the OpenAI helper
+        keeps the json_object/BadRequestError fallback; the Anthropic helper splits the system
+        prompt out, joins the text content blocks, and reads input/output_tokens.
+        """
         started = time.monotonic()
         try:
-            try:
-                response = await self._client.chat.completions.create(
-                    model=self._model,
-                    temperature=self._temperature,
-                    max_tokens=self._max_tokens,
-                    response_format={"type": "json_object"},
-                    messages=messages,
-                )
-            except BadRequestError:
-                # some local/older endpoints reject response_format; the parser tolerates
-                # fenced/prose output, so retry without forcing JSON mode
-                logger.warning("event=model_json_mode_unsupported model=%s", self._model)
-                response = await self._client.chat.completions.create(
-                    model=self._model,
-                    temperature=self._temperature,
-                    max_tokens=self._max_tokens,
-                    messages=messages,
-                )
+            if self._is_anthropic:
+                text, input_tokens, output_tokens = await self._call_anthropic(messages)
+            else:
+                text, input_tokens, output_tokens = await self._call_openai(messages)
         except Exception as error:
             latency_ms = (time.monotonic() - started) * 1000
             # No silent failures on the model path: record the failed call (provider:model
@@ -273,22 +285,93 @@ class ChatModelClient:
             )
             raise
         latency_ms = (time.monotonic() - started) * 1000
-        # `usage` is optional on the OpenAI-compatible response (some local/older
-        # endpoints omit it); read it defensively and log -1 when absent so the call is
-        # still visible. The token counts are emitted as additive fields on every model
-        # call so a human can watch spend accrue line by line.
-        usage = getattr(response, "usage", None)
-        prompt_tokens = getattr(usage, "prompt_tokens", None)
-        completion_tokens = getattr(usage, "completion_tokens", None)
-        total_tokens = getattr(usage, "total_tokens", None)
+        # Token counts may be absent (some local/older OpenAI-compatible endpoints omit `usage`);
+        # the helpers return None in that case and we log -1 so the call stays visible. Emitted as
+        # additive fields on every model call so a human can watch spend accrue line by line.
+        total_tokens = (
+            input_tokens + output_tokens
+            if input_tokens is not None and output_tokens is not None
+            else None
+        )
         logger.info(
             "event=model_call model=%s purpose=%s prompt_tokens=%s completion_tokens=%s "
             "total_tokens=%s latency_ms=%.0f",
             self.model_name,
             purpose,
-            prompt_tokens if prompt_tokens is not None else -1,
-            completion_tokens if completion_tokens is not None else -1,
+            input_tokens if input_tokens is not None else -1,
+            output_tokens if output_tokens is not None else -1,
             total_tokens if total_tokens is not None else -1,
             latency_ms,
         )
-        return response.choices[0].message.content or ""
+        return text
+
+    async def _call_openai(
+        self, messages: list[ChatCompletionMessageParam]
+    ) -> tuple[str, int | None, int | None]:
+        """OpenAI chat.completions path (verbatim, incl. the json_object / BadRequestError
+        fallback). Returns ``(text, prompt_tokens, completion_tokens)``."""
+        client = cast("AsyncOpenAI | AsyncAzureOpenAI", self._client)
+        try:
+            response = await client.chat.completions.create(
+                model=self._model,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+                response_format={"type": "json_object"},
+                messages=messages,
+            )
+        except BadRequestError:
+            # some local/older endpoints reject response_format; the parser tolerates
+            # fenced/prose output, so retry without forcing JSON mode
+            logger.warning("event=model_json_mode_unsupported model=%s", self._model)
+            response = await client.chat.completions.create(
+                model=self._model,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+                messages=messages,
+            )
+        usage = getattr(response, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        return response.choices[0].message.content or "", prompt_tokens, completion_tokens
+
+    async def _call_anthropic(
+        self, messages: list[ChatCompletionMessageParam]
+    ) -> tuple[str, int | None, int | None]:
+        """Anthropic Messages-API path (Claude on Azure AI Foundry).
+
+        The system prompt is a top-level ``system=`` param (NOT a message with role "system"),
+        the response is a LIST of content blocks (we join the text blocks), and usage is
+        ``input_tokens`` / ``output_tokens``. There is NO response_format / JSON-mode param —
+        the judge prompt already asks for strict JSON, which the tolerant parser handles.
+        Returns ``(text, input_tokens, output_tokens)``.
+        """
+        client = cast("AsyncAnthropicFoundry", self._client)
+        system_parts: list[str] = []
+        user_msgs: list[dict[str, str]] = []
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content")
+            text = content if isinstance(content, str) else str(content)
+            if role == "system":
+                system_parts.append(text)
+            else:
+                user_msgs.append({"role": str(role), "content": text})
+        system = "\n\n".join(system_parts)
+        response = await client.messages.create(
+            model=self._model,
+            system=system,
+            messages=cast("Any", user_msgs),
+            max_tokens=self._max_tokens,
+            temperature=self._temperature,
+        )
+        # response.content is a union of block types; only text blocks carry `.text`. Read it
+        # via getattr so a non-text block (tool use etc.) is skipped, not a crash.
+        text = "".join(
+            getattr(block, "text", "")
+            for block in response.content
+            if getattr(block, "type", None) == "text"
+        )
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "input_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None)
+        return text, input_tokens, output_tokens

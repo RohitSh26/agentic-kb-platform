@@ -17,6 +17,7 @@ dependencies = [
     # import-boundary test still forbids the azure-search SDK here — no leakage.
     "openai>=1.40",
     "json_repair>=0.25",
+    "anthropic>=0.109.2",
 ]
 
 [dependency-groups]
