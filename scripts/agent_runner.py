@@ -92,6 +92,8 @@ _KNOWN_SUBAGENTS = [
 _BUILD_ROLES = frozenset({"implementation", "test_layer", "code_reviewer"})
 _EXPAND_BUDGET = 4000
 _MAX_CARDS_IN_PROMPT = 40
+# EXPLAIN lane: open the top span from up to this many DISTINCT files (depth knob).
+_MAX_OPEN_SPANS = 5
 
 
 def _load_manifest(name: str) -> str:
@@ -517,12 +519,25 @@ async def _explain(
     cards: list[dict[str, Any]] = pack.get("evidence_cards", [])
     print(f"  pack_id={pack_id}  kb_version={pack.get('kb_version', '?')}  cards={len(cards)}")
 
-    # Open the top spans FIRST so the explanation is built from real code, not thin
-    # summaries — expand (breadth) must not starve open_evidence (depth) of budget.
+    # Expand first so the candidate set spans the whole pipeline (the connected files,
+    # not just the seed file), then open across DISTINCT files below.
+    seed_ids = [c["artifact_id"] for c in cards if c.get("artifact_id")][:3]
+    expanded: list[dict[str, Any]] = []
+    if seed_ids:
+        expanded = await _expand_into_pack(broker, pack_id=pack_id, seed_artifact_ids=seed_ids)
+    all_cards = (cards + expanded)[:_MAX_CARDS_IN_PROMPT]
+
+    # Open the top span from each DISTINCT FILE (depth knob) so the answer covers the
+    # whole pipeline — not several symbols from one file. Budget-bounded, best-effort.
     opened: list[str] = []
-    for card in cards[:3]:
+    seen_files: set[str] = set()
+    for card in all_cards:
+        if len(opened) >= _MAX_OPEN_SPANS:
+            break
+        cite = card.get("display_citation") or card.get("title", "")
+        source_file = cite.split(":", 1)[0] or cite
         eid = card.get("evidence_id")
-        if not eid:
+        if not eid or source_file in seen_files:
             continue
         try:
             ev = _unwrap(
@@ -532,18 +547,13 @@ async def _explain(
                 )
             )
         except Exception as exc:  # budget/ACL denial is non-fatal for an explanation
-            print(f"  open_evidence skipped for {card.get('display_citation', eid)}: {exc}")
+            print(f"  open_evidence skipped for {cite}: {exc}")
             continue
         body = (ev.get("untrusted_content") or "").strip()
         if body:
-            opened.append(f"[{card.get('display_citation', eid)}]\n{body[:1200]}")
-
-    # Then expand for the connected neighbourhood with the remaining budget.
-    seed_ids = [c["artifact_id"] for c in cards if c.get("artifact_id")][:3]
-    expanded: list[dict[str, Any]] = []
-    if seed_ids:
-        expanded = await _expand_into_pack(broker, pack_id=pack_id, seed_artifact_ids=seed_ids)
-    all_cards = (cards + expanded)[:_MAX_CARDS_IN_PROMPT]
+            seen_files.add(source_file)
+            opened.append(f"[{cite}]\n{body[:1200]}")
+    print(f"  opened {len(opened)} span(s) across {len(seen_files)} file(s)")
 
     user = (
         f"Question: {task}\n\n"
