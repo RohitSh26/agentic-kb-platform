@@ -24,6 +24,7 @@ dist/
 # Claude Code session state
 .claude/cadence/
 .claude/scheduled_tasks.lock
+.claude/worktrees/
 
 # Generated eval output (baseline.json IS committed)
 evals/report.json
@@ -31,6 +32,9 @@ evals/report.json
 # Local dev search index projection (ADR-0017) — rebuildable from Postgres, never truth
 .kb-local-search-index.json
 *.kb-local-search-index.json
+
+# Local BUILD-lane working index (scripts/agent_runner) — generated, not truth
+.kb-buildlane-index.json
 
 # Real-source build run logs (local artifact, not committed)
 build-run*.md
