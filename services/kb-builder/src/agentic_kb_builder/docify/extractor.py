@@ -8,6 +8,8 @@ never hit a live LLM (the hermetic-test seam, ADR-0023 §5).
 """
 
 import hashlib
+from collections.abc import Mapping
+from typing import Any
 
 from agentic_kb_builder.docify.docify_backend import map_doc_extraction
 from agentic_kb_builder.docify.extract_fn import (
@@ -19,6 +21,20 @@ from agentic_kb_builder.domain import DocExtractionResult, NormalizedContent
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _deferred_failure_fn(error: Exception) -> DocExtractFn:
+    """A doc-extract fn that re-raises a config error only when actually CALLED.
+
+    The build constructs a DocExtractor eagerly even when there are no document sources, so an
+    unusable doc-model config (e.g. ``anthropic_foundry``, which docify can't use, or a missing
+    key) must NOT fail construction — only an actual doc extraction. This keeps a CODE-ONLY
+    build working while still failing a real doc build loudly and clearly."""
+
+    async def _fail(*, text: str, doc_path: str) -> Mapping[str, Any]:
+        raise error
+
+    return _fail
 
 
 def _doc_path(content: NormalizedContent) -> str:
@@ -59,10 +75,19 @@ class DocExtractor:
     def from_env(cls) -> "DocExtractor":
         """Construct the real DocExtractor from the same env as ChatModelClient.from_env.
 
-        Resolves the OpenAI-compatible endpoint (LLM_PROVIDER / LLM_API_KEY / LLM_MODEL),
-        registers the Graphify backend, and derives a deterministic model identity for the
-        generation-cache key. The API key is never stored on the instance or logged."""
-        endpoint = resolve_endpoint()
+        Resolves the doc-model endpoint (LLM_* or DOC_LLM_*), registers the Graphify backend, and
+        derives a deterministic model identity for the generation-cache key. The API key is never
+        stored on the instance or logged. If the doc model can't be resolved (e.g. the
+        ``anthropic_foundry`` provider, which docify can't use, or a missing key), construction
+        STILL succeeds — the error is deferred to the first ``extract()`` so a code-only build
+        (no doc sources) is never blocked."""
+        try:
+            endpoint = resolve_endpoint()
+        except RuntimeError as error:
+            logger.warning("event=docify_unavailable reason=%s", error)
+            return cls(
+                _deferred_failure_fn(error), model_name="docify-unavailable", model_params_hash=""
+            )
         extract_fn = make_graphify_doc_extract(endpoint)
         model_name = f"{endpoint.provider}:{endpoint.model}"
         model_params_hash = hashlib.sha256(
