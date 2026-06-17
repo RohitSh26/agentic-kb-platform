@@ -20,7 +20,6 @@ from agentic_kb_builder.application.active_version import get_active_kb_version
 from agentic_kb_builder.build import Collaborators, run_build
 from agentic_kb_builder.domain import NormalizedContent, WikifyArtifactDraft
 from agentic_kb_builder.embeddings import LocalHashEmbedder
-from agentic_kb_builder.graphify import GraphifyGraphifier
 from agentic_kb_builder.indexing import SearchDocUpserter
 from agentic_kb_builder.infrastructure.azure_search.search_client import FakeSearchClient
 from agentic_kb_builder.infrastructure.local_search import LocalFileSearchClient
@@ -127,7 +126,6 @@ def _collaborators(session: AsyncSession) -> Collaborators:
     client = FakeSearchClient()
     return Collaborators(
         wikifier=FakeWikifier(),
-        graphifier=GraphifyGraphifier(),
         embedder=LocalHashEmbedder(),
         indexer=SearchDocUpserter(session, client),
         search_client=client,
@@ -140,7 +138,6 @@ def _persistent_collaborators(session: AsyncSession, index_path: Path) -> Collab
     client = LocalFileSearchClient(index_path)
     return Collaborators(
         wikifier=FakeWikifier(),
-        graphifier=GraphifyGraphifier(),
         embedder=LocalHashEmbedder(),
         indexer=SearchDocUpserter(session, client),
         search_client=client,
@@ -245,7 +242,6 @@ async def test_rebuild_with_an_empty_index_backfills_from_registry(
         version="local",
         collaborators=Collaborators(
             wikifier=FakeWikifier(),
-            graphifier=GraphifyGraphifier(),
             embedder=LocalHashEmbedder(),
             indexer=SearchDocUpserter(session, empty_index),
             search_client=empty_index,

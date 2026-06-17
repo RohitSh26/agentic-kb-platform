@@ -20,7 +20,6 @@ from agentic_kb_builder.application import BuildRunner, EmbeddingResult
 from agentic_kb_builder.connectors import connectors_from_config, load_source_config
 from agentic_kb_builder.connectors.source_connector import FetchBackend
 from agentic_kb_builder.domain import (
-    GraphifyResult,
     NormalizedContent,
     SourceRef,
     SourceSpec,
@@ -138,11 +137,6 @@ class FakeWikifier:
         ]
 
 
-class FakeGraphifier:
-    async def graphify(self, content: NormalizedContent) -> GraphifyResult:
-        return GraphifyResult(artifacts=(), edges=())
-
-
 class FakeEmbedder:
     embedding_model = "embed-test"
 
@@ -166,7 +160,6 @@ def _runner(session: AsyncSession, kb_version: str) -> BuildRunner:
         session,
         kb_version=kb_version,
         wikifier=FakeWikifier(),
-        graphifier=FakeGraphifier(),
         embedder=FakeEmbedder(),
         indexer=FakeIndexer(),
     )

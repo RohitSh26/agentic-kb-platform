@@ -27,7 +27,6 @@ from agentic_kb_builder.application.publish_gates import (
 from agentic_kb_builder.build import Collaborators, run_build
 from agentic_kb_builder.domain import NormalizedContent, WikifyArtifactDraft
 from agentic_kb_builder.embeddings import LocalHashEmbedder
-from agentic_kb_builder.graphify import GraphifyGraphifier
 from agentic_kb_builder.indexing import SearchDocUpserter
 from agentic_kb_builder.infrastructure.azure_search.search_client import FakeSearchClient
 from agentic_kb_builder.infrastructure.postgres.models import KbBuildRun
@@ -133,7 +132,6 @@ def _collaborators(session: AsyncSession) -> Collaborators:
     client = FakeSearchClient()
     return Collaborators(
         wikifier=FakeWikifier(),
-        graphifier=GraphifyGraphifier(),
         embedder=LocalHashEmbedder(),
         indexer=SearchDocUpserter(session, client),
         search_client=client,

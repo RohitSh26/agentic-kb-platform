@@ -23,24 +23,19 @@ from agentic_kb_builder.application.cache_gates import (
     EmbeddingCacheGate,
     GenerationCacheGate,
     chunk_summary_cache_key,
-    code_graph_cache_key,
 )
 from agentic_kb_builder.application.invalidation import run_invalidation_pass
 from agentic_kb_builder.application.write_commit import write_commit_artifact
 from agentic_kb_builder.connectors import Connector
 from agentic_kb_builder.connectors.git_metadata import parse_changed_files
 from agentic_kb_builder.domain import (
-    CodeEdgeDraft,
-    GraphifyResult,
     NormalizedContent,
     WikifyArtifactDraft,
 )
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.domain.schema_versions import (
     CHUNKER_VERSION,
-    GRAPHIFY_VERSION,
     OUTPUT_SCHEMA_VERSION,
-    PARSER_CONFIG_VERSION,
     PROMPT_VERSION,
 )
 from agentic_kb_builder.graphify.graphify_backend import graphify_tree
@@ -68,10 +63,6 @@ class Wikifier(Protocol):
     def model_params_hash(self) -> str: ...
 
     async def wikify(self, content: NormalizedContent) -> Sequence[WikifyArtifactDraft]: ...
-
-
-class Graphifier(Protocol):
-    async def graphify(self, content: NormalizedContent) -> GraphifyResult: ...
 
 
 @dataclass(frozen=True)
@@ -102,11 +93,23 @@ class SearchIndexer(Protocol):
 
 
 @dataclass(frozen=True)
-class _PendingEdges:
-    """Edge drafts from one graphified file, held until the end of the run."""
+class _CodeUnit:
+    """One current code file collected for the whole-tree graphify pass."""
 
+    path: str
+    text: str
+    source_id: uuid.UUID
+    acl: list[str]
     repo: str
-    drafts: tuple[CodeEdgeDraft, ...]
+
+
+def _path_of_code_key(key: str) -> str:
+    """Repo-relative file path a code artifact key belongs to (``file:p`` / ``sym:p::name``)."""
+    if key.startswith("file:"):
+        return key[len("file:") :]
+    if key.startswith("sym:"):
+        return key[len("sym:") :].split("::", 1)[0]
+    return ""
 
 
 @dataclass
@@ -130,7 +133,6 @@ class BuildRunner:
         *,
         kb_version: str,
         wikifier: Wikifier,
-        graphifier: Graphifier,
         embedder: Embedder,
         indexer: SearchIndexer,
         similarity: SimilarityProvider | None = None,
@@ -141,7 +143,6 @@ class BuildRunner:
         # Assigned once at run start from the kb_build_seq SEQUENCE (set in run()).
         self._build_seq: int = 0
         self._wikifier = wikifier
-        self._graphifier = graphifier
         self._embedder = embedder
         self._indexer = indexer
         self._similarity = similarity
@@ -243,11 +244,12 @@ class BuildRunner:
         artifacts at this build_seq); the supersession sweep retires their PRIOR
         generation so the new version does not serve both."""
         code_key_map: dict[tuple[str, str], uuid.UUID] = {}
-        pending_edges: list[_PendingEdges] = []
-        # Every CURRENT code file (changed AND unchanged) as (repo_relative_path, text), so the
-        # whole-tree graphify pass at end-of-run resolves cross-file imports/calls over the FULL
-        # codebase — not just the files that changed this build (correct under incrementality).
-        code_files: list[tuple[str, str]] = []
+        # Code (github_code) is graphified as ONE whole tree (Graphify resolves cross-file
+        # imports/calls/uses only when it sees all files together — ADR-0012), so every current
+        # code file is collected here and the whole graph is (re)built after the loop. Docs and
+        # commits keep their incremental per-file path.
+        code_units: list[_CodeUnit] = []
+        any_code_changed = False
         seen_source_ids: set[uuid.UUID] = set()
         changed_source_ids: set[uuid.UUID] = set()
         for connector in connectors:
@@ -255,7 +257,30 @@ class BuildRunner:
                 fetched = await connector.fetch(ref)
                 counters.sources_seen += 1
                 if fetched.source.source_type == "github_code" and ref.path:
-                    code_files.append((ref.path, fetched.text))
+                    # Code is graphified as ONE whole tree (Graphify resolves cross-file edges
+                    # only when it sees all files), so a single changed file means the whole
+                    # graph is rebuilt; if NOTHING changed the prior graph stands (idempotent).
+                    changed = not await self._is_unchanged(fetched)
+                    source_id = (
+                        await self._upsert_source_item(fetched)
+                        if changed
+                        else await self._touch_last_seen(fetched)
+                    )
+                    if source_id is None:
+                        continue
+                    seen_source_ids.add(source_id)
+                    code_units.append(
+                        _CodeUnit(
+                            path=ref.path,
+                            text=fetched.text,
+                            source_id=source_id,
+                            acl=list(fetched.source.acl_teams),
+                            repo=ref.repo or "",
+                        )
+                    )
+                    if changed:
+                        any_code_changed = True
+                    continue
                 if await self._is_unchanged(fetched):
                     source_id = await self._touch_last_seen(fetched)
                     if source_id is not None:
@@ -267,9 +292,6 @@ class BuildRunner:
                     )
                     continue
                 counters.sources_changed += 1
-                # Per-source headline so a human always knows what is being processed
-                # (connector type + uri + the routing decision). Additive; the existing
-                # per-step events below carry the same source_uri for grep continuity.
                 logger.info(
                     "event=build_source_started connector=%s source_uri=%s "
                     "source_version=%s decision=changed",
@@ -277,13 +299,16 @@ class BuildRunner:
                     ref.source_uri,
                     fetched.source.source_version,
                 )
-                changed_id = await self._process_changed_source(
-                    counters, fetched, code_key_map, pending_edges
-                )
+                changed_id = await self._process_changed_source(counters, fetched)
                 seen_source_ids.add(changed_id)
                 changed_source_ids.add(changed_id)
-        await self._write_pending_edges(code_key_map, pending_edges)
-        await self._write_whole_tree_edges(code_key_map, code_files, pending_edges)
+        if code_units and any_code_changed:
+            # the whole code graph is regenerated: mark every code source changed so the
+            # supersession sweep retires the prior generation (no duplicate served edges).
+            for unit in code_units:
+                changed_source_ids.add(unit.source_id)
+            counters.sources_changed += len(code_units)
+            await self._graphify_code_tree(counters, code_units, code_key_map)
         return seen_source_ids, changed_source_ids
 
     async def _finalize_graph(
@@ -445,46 +470,107 @@ class BuildRunner:
         return source_id
 
     async def _process_changed_source(
-        self,
-        counters: _Counters,
-        fetched: NormalizedContent,
-        code_key_map: dict[tuple[str, str], uuid.UUID],
-        pending_edges: list[_PendingEdges],
+        self, counters: _Counters, fetched: NormalizedContent
     ) -> uuid.UUID:
-        """Process one changed source; return its source_id (seen this build).
+        """Process one changed NON-code source; return its source_id (seen this build).
 
         Routing (ADR-0018): git_metadata -> one deterministic commit artifact;
-        github_code -> graphify ONLY (zero-LLM; exact spans make code searchable);
         github_doc / azure_wiki / ado_card -> wikify (the LLM is reserved for prose).
+        github_code is handled separately as a whole tree (see _graphify_code_tree).
         """
         if fetched.source.source_type == "git_metadata":
             return await self._process_commit_source(counters, fetched)
         source_id = await self._upsert_source_item(fetched)
-        if fetched.source.source_type == "github_code":
-            # Code is graphify-only: a deterministic AST extraction (NO LLM, llm_calls
-            # untouched) yielding code_symbol artifacts with exact-span body_text.
-            try:
-                artifact_ids = await self._graphify_gated(
-                    counters, fetched, source_id, code_key_map, pending_edges
-                )
-            except Exception as error:
-                # One unparsable file must not abort the build; count it for the
-                # extractor-error-rate publish gate and move on (no silent failure).
-                counters.extractor_failures += 1
-                logger.error(
-                    "event=graphify_extraction_failed source_uri=%s error=%s",
-                    fetched.source.source_uri,
-                    f"{type(error).__name__}: {error}",
-                )
-                artifact_ids = []
-        else:
-            # Prose sources (github_doc / azure_wiki / ado_card) go through wikify.
-            artifact_ids = await self._wikify_gated(counters, fetched, source_id)
+        # Prose sources (github_doc / azure_wiki / ado_card) go through wikify.
+        artifact_ids = await self._wikify_gated(counters, fetched, source_id)
         for artifact_id in artifact_ids:
             await self._embed_gated(counters, artifact_id)
         if artifact_ids:
             counters.search_docs_upserted += await self._indexer.upsert_documents(artifact_ids)
         return source_id
+
+    async def _graphify_code_tree(
+        self,
+        counters: _Counters,
+        code_units: list[_CodeUnit],
+        code_key_map: dict[tuple[str, str], uuid.UUID],
+    ) -> None:
+        """Build the WHOLE code graph in one Graphify pass (ADR-0012, the way the library is
+        meant to be used): run Graphify over every current code file together so it resolves
+        cross-file imports/calls/uses, then write the artifacts (grouped by their file's source)
+        and the edges in one consistent key space. Zero-LLM; embeddings stay body-hash cached."""
+        # Run Graphify ONCE PER REPO. Symbolic keys are repo-relative, so two repos that
+        # share a path (both have src/utils.py) would collide in a single shared temp tree
+        # and cross-bind their edges. A per-repo pass keeps each repo's tree — and therefore
+        # its cross-file import/call resolution — isolated to its own files.
+        units_by_repo: dict[str, list[_CodeUnit]] = {}
+        for unit in code_units:
+            units_by_repo.setdefault(unit.repo, []).append(unit)
+        for repo, units in sorted(units_by_repo.items()):
+            await self._graphify_one_repo(counters, repo, units, code_key_map)
+
+    async def _graphify_one_repo(
+        self,
+        counters: _Counters,
+        repo: str,
+        units: list[_CodeUnit],
+        code_key_map: dict[tuple[str, str], uuid.UUID],
+    ) -> None:
+        try:
+            result = graphify_tree([(u.path, u.text) for u in units])
+            logger.info(
+                "event=code_graph_built repo=%s units=%d artifacts=%d edges=%d",
+                repo, len(units), len(result.artifacts), len(result.edges),
+            )
+        except Exception as error:
+            counters.extractor_failures += 1
+            logger.error(
+                "event=graphify_tree_failed repo=%s files=%d error=%s",
+                repo,
+                len(units),
+                f"{type(error).__name__}: {error}",
+            )
+            return
+        unit_by_path = {u.path: u for u in units}
+        drafts_by_path: dict[str, list] = {}
+        for draft in result.artifacts:
+            drafts_by_path.setdefault(_path_of_code_key(draft.key), []).append(draft)
+        artifact_ids: list[uuid.UUID] = []
+        for path, drafts in drafts_by_path.items():
+            unit = unit_by_path.get(path)
+            if unit is None:
+                continue  # an artifact for a path we did not collect (defensive)
+            key_to_id = await write_code_artifacts(
+                self._session,
+                source_id=unit.source_id,
+                kb_version=self._kb_version,
+                valid_from_seq=self._build_seq,
+                acl_teams=unit.acl,
+                drafts=drafts,
+            )
+            counters.artifacts_created += len(key_to_id)
+            code_key_map.update({(repo, k): aid for k, aid in key_to_id.items()})
+            artifact_ids.extend(key_to_id.values())
+        for artifact_id in artifact_ids:
+            await self._embed_gated(counters, artifact_id)
+        if artifact_ids:
+            counters.search_docs_upserted += await self._indexer.upsert_documents(artifact_ids)
+        # Both endpoints resolve against this build's code artifacts for this repo
+        # (write_code_edges drops any edge whose endpoint is not present in key_to_id).
+        inserted, dropped = await write_code_edges(
+            self._session,
+            kb_version=self._kb_version,
+            valid_from_seq=self._build_seq,
+            repo=repo,
+            drafts=tuple(result.edges),
+            key_to_id=code_key_map,
+        )
+        logger.info(
+            "event=code_graph_edges_written repo=%s inserted=%d dropped=%d",
+            repo,
+            inserted,
+            dropped,
+        )
 
     async def _process_commit_source(
         self, counters: _Counters, fetched: NormalizedContent
@@ -589,137 +675,6 @@ class BuildRunner:
             output_artifact_ids=artifact_ids,
         )
         return artifact_ids
-
-    async def _graphify_gated(
-        self,
-        counters: _Counters,
-        fetched: NormalizedContent,
-        source_id: uuid.UUID,
-        code_key_map: dict[tuple[str, str], uuid.UUID],
-        pending_edges: list[_PendingEdges],
-    ) -> list[uuid.UUID]:
-        """Graphify one changed code file's ARTIFACTS (code_file + code_symbol with exact
-        spans); returns its artifact ids so they reach embed/index on hits and misses alike
-        (graphify is a deterministic parser, not an LLM call). Cross-file edges are NOT
-        produced here — they come from the end-of-run WHOLE-TREE graphify pass, which is the
-        only way Graphify can resolve imports/calls across files."""
-        ref = fetched.source
-        repo = ref.repo or ""
-        cache_key = code_graph_cache_key(
-            repo=repo,
-            commit_sha=ref.source_version,
-            file_path=ref.path or "",
-            file_content_hash=fetched.content_hash,
-            graphify_version=GRAPHIFY_VERSION,
-            parser_config_version=PARSER_CONFIG_VERSION,
-        )
-        # Per-file headline as this code file ENTERS graphify (deterministic AST
-        # extraction, zero-LLM — ADR-0018). Additive; fires before the cache lookup so
-        # the reader sees the file even on a hit.
-        logger.info(
-            "event=build_file_graphify source_uri=%s path=%s repo=%s",
-            ref.source_uri,
-            ref.path or "",
-            ref.repo or "",
-        )
-        if await self._generation_gate.lookup(cache_key) is not None:
-            # Every file graph yields at least its code_file artifact, so an empty
-            # mapping on a hit means a corrupt/unbackfilled cache row.
-            return await self._cache_hit_artifact_ids(
-                cache_key,
-                empty_event="graphify_cache_hit_empty_mapping",
-                source_uri=ref.source_uri,
-            )
-        result = await self._graphifier.graphify(fetched)
-        key_to_id = await write_code_artifacts(
-            self._session,
-            source_id=source_id,
-            kb_version=self._kb_version,
-            valid_from_seq=self._build_seq,
-            acl_teams=list(fetched.source.acl_teams),
-            drafts=result.artifacts,
-        )
-        counters.artifacts_created += len(key_to_id)
-        code_key_map.update({(repo, key): artifact_id for key, artifact_id in key_to_id.items()})
-        if result.edges:
-            pending_edges.append(_PendingEdges(repo=repo, drafts=result.edges))
-        artifact_ids = list(key_to_id.values())
-        await self._generation_gate.record(
-            cache_key=cache_key,
-            input_hash=fetched.content_hash,
-            prompt_version=GRAPHIFY_VERSION,
-            model_name="graphify",
-            model_params_hash=PARSER_CONFIG_VERSION,
-            output_schema_version=OUTPUT_SCHEMA_VERSION,
-            output_artifact_ids=artifact_ids,
-        )
-        return artifact_ids
-
-    async def _write_pending_edges(
-        self, code_key_map: dict[tuple[str, str], uuid.UUID], pending_edges: list[_PendingEdges]
-    ) -> None:
-        """Single end-of-run resolution pass: every changed file's artifacts are
-        already flushed, so cross-file targets within this build resolve to this
-        build's artifacts regardless of connector iteration order."""
-        for pending in pending_edges:
-            await write_code_edges(
-                self._session,
-                kb_version=self._kb_version,
-                valid_from_seq=self._build_seq,
-                repo=pending.repo,
-                drafts=pending.drafts,
-                key_to_id=code_key_map,
-            )
-
-    async def _write_whole_tree_edges(
-        self,
-        code_key_map: dict[tuple[str, str], uuid.UUID],
-        code_files: list[tuple[str, str]],
-        pending_edges: list[_PendingEdges],
-    ) -> None:
-        """Run Graphify ONCE over the whole codebase and write its CROSS-FILE edges.
-
-        Per-file extraction can only see one file, so it cannot resolve imports or calls that
-        cross files (the very capability we adopted Graphify for). Given all files together,
-        Graphify's two-pass extractor resolves them (file→file imports, symbol→symbol calls
-        like Client→Response). We write those edges, skipping ones the per-file pass already
-        emitted (defined_in / intra-file calls) so no duplicate rows. write_code_edges drops
-        any edge whose endpoints are not artifacts of this build (never dangling). Zero-LLM.
-        """
-        if not code_files:
-            return
-        result = graphify_tree(code_files)
-        if not result.edges:
-            return
-        already: set[tuple[str, str, str, str]] = {
-            (pe.repo, d.from_key, d.to_key, str(d.edge_type))
-            for pe in pending_edges
-            for d in pe.drafts
-        }
-        key_repo = {key: repo for (repo, key) in code_key_map}
-        by_repo: dict[str, list[CodeEdgeDraft]] = {}
-        for draft in result.edges:
-            repo = key_repo.get(draft.from_key)
-            if repo is None:
-                continue  # endpoint not built this run; write_code_edges would drop it anyway
-            if (repo, draft.from_key, draft.to_key, str(draft.edge_type)) in already:
-                continue
-            by_repo.setdefault(repo, []).append(draft)
-        for repo, drafts in by_repo.items():
-            inserted, dropped = await write_code_edges(
-                self._session,
-                kb_version=self._kb_version,
-                valid_from_seq=self._build_seq,
-                repo=repo,
-                drafts=tuple(drafts),
-                key_to_id=code_key_map,
-            )
-            logger.info(
-                "event=whole_tree_edges_written repo=%s inserted=%d dropped=%d",
-                repo,
-                inserted,
-                dropped,
-            )
 
     async def _embed_gated(self, counters: _Counters, artifact_id: uuid.UUID) -> None:
         artifact = await self._session.get(KnowledgeArtifact, artifact_id)

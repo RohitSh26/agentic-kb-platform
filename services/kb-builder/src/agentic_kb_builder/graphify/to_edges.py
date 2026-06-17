@@ -1,81 +1,13 @@
-"""FileGraph -> code edge drafts by symbolic key (resolved to uuids at write time)."""
+"""Confidence weights for code edges mapped from Graphify's whole-tree extraction.
 
-from agentic_kb_builder.domain import CodeEdgeDraft, FileGraph
-from agentic_kb_builder.graphify.keys import endpoint_key, file_key, symbol_key, test_key
-from agentic_kb_builder.structured_logging import get_logger
+Imports and route declarations are exact AST facts (1.0); call/test-target resolution
+can be confused by dynamic dispatch, so it sits below 1.0. Consumed by
+``graphify_backend.map_extraction`` when it turns Graphify relations into edge drafts.
+"""
 
-logger = get_logger(__name__)
-
-# Imports and route declarations are read directly off the AST; call and
-# test-target extraction can be confused by dynamic dispatch, hence < 1.0.
 IMPORTS_CONFIDENCE = 1.0
 EXPOSED_AS_CONFIDENCE = 1.0
 # A symbol's containing file is an exact AST fact (the file is the symbol's own key).
 DEFINED_IN_CONFIDENCE = 1.0
 CALLS_CONFIDENCE = 0.9
 TESTS_CONFIDENCE = 0.9
-
-
-def file_graph_to_edges(graph: FileGraph) -> tuple[CodeEdgeDraft, ...]:
-    edges: list[CodeEdgeDraft] = []
-    seen: set[tuple[str, str, str]] = set()
-
-    def add(draft: CodeEdgeDraft) -> None:
-        # A symbol may call or import another more than once; graphify carries no
-        # call-site distinguisher, so identical (from, to, edge_type) drafts are
-        # redundant rows for one logical fact. Dedupe within the file so the
-        # registry holds one edge per fact (graph queries already dedupe neighbors).
-        key = (draft.from_key, draft.to_key, str(draft.edge_type))
-        if key in seen:
-            return
-        seen.add(key)
-        edges.append(draft)
-
-    source_file = file_key(graph.path)
-    for imported in graph.imports:
-        add(
-            CodeEdgeDraft(
-                from_key=source_file,
-                to_key=file_key(imported.target_path),
-                edge_type="imports",
-                confidence=IMPORTS_CONFIDENCE,
-            )
-        )
-    for call in graph.calls:
-        add(
-            CodeEdgeDraft(
-                from_key=symbol_key(graph.path, call.from_symbol),
-                to_key=_symbol_ref_key(graph.path, call.to_symbol),
-                edge_type="calls",
-                confidence=CALLS_CONFIDENCE,
-            )
-        )
-    for test in graph.tests:
-        for target in test.targets:
-            add(
-                CodeEdgeDraft(
-                    from_key=test_key(graph.path, test.name),
-                    to_key=_symbol_ref_key(graph.path, target),
-                    edge_type="tests",
-                    confidence=TESTS_CONFIDENCE,
-                )
-            )
-    for endpoint in graph.endpoints:
-        add(
-            CodeEdgeDraft(
-                from_key=symbol_key(graph.path, endpoint.symbol),
-                to_key=endpoint_key(graph.path, endpoint.http_method, endpoint.route),
-                edge_type="exposed_as",
-                confidence=EXPOSED_AS_CONFIDENCE,
-            )
-        )
-    logger.info("event=graphify_edges_drafted path=%s count=%d", graph.path, len(edges))
-    return tuple(edges)
-
-
-def _symbol_ref_key(default_path: str, ref: str) -> str:
-    """Symbol refs are a same-file name or a cross-file 'path::name'."""
-    if "::" in ref:
-        path, _, name = ref.rpartition("::")
-        return symbol_key(path, name)
-    return symbol_key(default_path, ref)

@@ -27,7 +27,6 @@ from agentic_kb_builder.domain import (
     CodeArtifactDraft,
     CodeEdgeDraft,
     GraphifyResult,
-    NormalizedContent,
 )
 from agentic_kb_builder.graphify.keys import file_key, symbol_key
 from agentic_kb_builder.graphify.span_recovery import (
@@ -47,6 +46,10 @@ logger = get_logger(__name__)
 # and any future relation) is structural or out-of-ontology and produces no edge.
 _IMPORT_RELATIONS = frozenset({"imports", "imports_from"})
 _CALL_RELATIONS = frozenset({"calls"})
+# Graphify symbol→symbol relation -> our code edge type (cross-file dependency signals).
+_SYMBOL_RELATIONS = {"uses": "uses", "references": "references", "inherits": "inherits"}
+# EXTRACTED but inferred (not a pure structural fact like defined_in); below imports/calls.
+_SYMBOL_RELATION_CONFIDENCE = 0.8
 
 
 def _line(source_location: object) -> int | None:
@@ -101,18 +104,19 @@ def map_extraction(
     *,
     source_file_override: str | None = None,
     file_basename_override: str | None = None,
-    path_prefix: str | None = None,
+    known_paths: frozenset[str] | None = None,
     spans: Mapping[int, list[SymbolSpan]] | None = None,
+    spans_by_file: Mapping[str, Mapping[int, list[SymbolSpan]]] | None = None,
 ) -> GraphifyResult:
     """Normalize a Graphify extraction dict into our artifacts + edges.
 
     Pure and deterministic — no I/O — so it is hermetically testable against a captured
     `graph.json`. `source_file_override` rewrites every node's source path (single-file
-    extraction, where Graphify only sees a temp path). `path_prefix` is stripped from each
-    node's absolute `source_file` to get the repo-relative path used as the artifact key —
-    used by the WHOLE-TREE pass, where Graphify resolves cross-file imports/calls across all
-    files and reports absolute paths under a temp root. `spans` (ADR-0018) is the
-    deterministic ast span map keyed by def-line; a matched symbol gets its EXACT body_text.
+    extraction, where Graphify only sees a temp path). `known_paths` is the set of
+    repo-relative paths the WHOLE-TREE pass extracted (Graphify reports `source_file`
+    repo-relative under its cache_root); nodes whose source_file is NOT one of them are
+    EXTERNAL references (builtins/stdlib/third-party) and are dropped. `spans` (ADR-0018) is
+    the deterministic ast span map keyed by def-line; a matched symbol gets its EXACT body.
     """
     nodes = cast("list[Mapping[str, Any]]", list(data.get("nodes", [])))
     raw_edges = data.get("edges")
@@ -123,20 +127,17 @@ def map_extraction(
     def src_file(node: Mapping[str, Any]) -> str:
         if source_file_override is not None:
             return source_file_override
-        sf = str(node.get("source_file", ""))
-        if path_prefix and sf.startswith(path_prefix):
-            return sf[len(path_prefix) :]
-        return sf
+        return str(node.get("source_file", ""))
 
     def in_tree(node: Mapping[str, Any]) -> bool:
         # Whole-tree extraction emits nodes for EXTERNAL references too (builtins like
-        # RuntimeError, stdlib, third-party) — they have no file under our tree and must be
-        # dropped, or they make malformed empty-path keys. A node is ours only when its
-        # source_file lives under the materialized tree (path_prefix) or has an override.
+        # RuntimeError, stdlib, third-party) — they are not files we built and must be dropped,
+        # or they make malformed empty-path keys. A node is ours only when its source_file is
+        # one of the files we extracted (known_paths), or there is a single-file override.
         if source_file_override is not None:
             return True
         sf = str(node.get("source_file", ""))
-        return sf.startswith(path_prefix) if path_prefix else bool(sf)
+        return sf in known_paths if known_paths is not None else bool(sf)
 
     def is_file_node(node: Mapping[str, Any]) -> bool:
         basename = file_basename_override or Path(str(node.get("source_file", ""))).name
@@ -156,6 +157,8 @@ def map_extraction(
     symbol_files: list[tuple[str, str]] = []
     artifacts: list[CodeArtifactDraft] = []
     for node in nodes:
+        if not in_tree(node):
+            continue  # external reference (builtin/stdlib/third-party) — no artifact, no key
         nid = str(node.get("id", ""))
         path = src_file(node)
         if is_file_node(node):
@@ -171,7 +174,10 @@ def map_extraction(
         if path in file_node_id:  # only when the file artifact exists (never dangling)
             symbol_files.append((key, path))
         start_line = _line(node.get("source_location"))
-        span = _match_span(spans, start_line, node.get("label"))
+        # Whole-tree extraction sees many files, so spans are looked up per FILE (line numbers
+        # collide across files); single-file extraction uses the one `spans` map.
+        file_spans = spans_by_file.get(path) if spans_by_file is not None else spans
+        span = _match_span(file_spans, start_line, node.get("label"))
         if span is not None:
             # ADR-0018: exact deterministic source span (incl. decorators/docstring) is
             # the symbol's citable body_text — no LLM, keyword-searchable. span_start is
@@ -275,6 +281,22 @@ def map_extraction(
         (target_id,) = tuple(targets)
         add(node_key[source_id], node_key[target_id], "calls", CALLS_CONFIDENCE)
 
+    # uses / references / inherits -> symbol->symbol. Graphify's richer cross-file relations:
+    # a symbol USES another (calls/attribute), type-REFERENCES it (annotations), or INHERITS
+    # it (subclass). Both ends must be in-tree symbols (never a file node). These give the
+    # broker symbol-level dependency edges (DigestAuth -> Response) for change_pack.
+    for edge in edges:
+        edge_type = _SYMBOL_RELATIONS.get(str(edge.get("relation", "")))
+        if edge_type is None:
+            continue
+        source_id = str(edge.get("source", ""))
+        target_id = str(edge.get("target", ""))
+        if source_id not in node_key or target_id not in node_key:
+            continue
+        if source_id in node_is_file or target_id in node_is_file:
+            continue  # symbol->symbol only
+        add(node_key[source_id], node_key[target_id], edge_type, _SYMBOL_RELATION_CONFIDENCE)
+
     return GraphifyResult(artifacts=tuple(artifacts), edges=tuple(edge_drafts))
 
 
@@ -283,37 +305,6 @@ def _node_source_file(nodes: Sequence[Mapping[str, Any]], node_id: str) -> str |
         if str(node.get("id", "")) == node_id:
             return str(node.get("source_file", "")) or None
     return None
-
-
-class GraphifyGraphifier:
-    """Graphifier (build_runner Protocol) backed by Graphify's public AST extractor.
-
-    Extracts one file at a time to fit the incremental per-file build; cross-file edge
-    resolution stays the linker's job (phase 2). Materializes the in-memory content to a
-    temp file because Graphify reads from disk and dispatches language by extension.
-    """
-
-    async def graphify(self, content: NormalizedContent) -> GraphifyResult:
-        from graphify.extract import extract  # declared dependency (ADR-0012)
-
-        path = content.source.path or "unknown"
-        suffix = Path(path).suffix or ".py"
-        # ADR-0018: recover exact symbol spans deterministically from the SAME text
-        # Graphify parsed (no LLM) so code_symbol artifacts get a real, citable body.
-        spans = recover_spans(file_text=content.text, suffix=suffix, path=path)
-        with tempfile.NamedTemporaryFile("w", suffix=suffix, encoding="utf-8") as handle:
-            handle.write(content.text)
-            handle.flush()
-            tmp = Path(handle.name)
-            data = cast("Mapping[str, Any]", extract([tmp], parallel=False))
-        # Per-file extraction yields this file's ARTIFACTS (symbols + exact spans) and its
-        # intra-file edges; cross-file imports/calls come from the end-of-run whole-tree pass.
-        return map_extraction(
-            data,
-            source_file_override=path,
-            file_basename_override=tmp.name,
-            spans=spans,
-        )
 
 
 def graphify_tree(files: Sequence[tuple[str, str]]) -> GraphifyResult:
@@ -331,6 +322,12 @@ def graphify_tree(files: Sequence[tuple[str, str]]) -> GraphifyResult:
     files = list(files)
     if not files:
         return GraphifyResult(artifacts=(), edges=())
+    # Recover exact symbol spans per file (ADR-0018) so code_symbol artifacts carry real,
+    # citable body_text — keyed by repo-relative path since line numbers collide across files.
+    spans_by_file = {
+        rel: recover_spans(file_text=text, suffix=Path(rel).suffix or ".py", path=rel)
+        for rel, text in files
+    }
     with tempfile.TemporaryDirectory(prefix="kb-graphify-tree-") as tmp:
         root = Path(tmp).resolve()
         paths: list[Path] = []
@@ -340,7 +337,10 @@ def graphify_tree(files: Sequence[tuple[str, str]]) -> GraphifyResult:
             fp.write_text(text, encoding="utf-8")
             paths.append(fp)
         data = cast("Mapping[str, Any]", extract(sorted(paths), cache_root=root, parallel=False))
-        return map_extraction(data, path_prefix=f"{root}/")
+        # Graphify reports source_file repo-relative under cache_root (e.g. "httpx/_auth.py"),
+        # so the known input paths ARE the keys; nodes outside this set are external refs.
+        known = frozenset(rel for rel, _ in files)
+        return map_extraction(data, known_paths=known, spans_by_file=spans_by_file)
 
 
-__all__ = ["GraphifyGraphifier", "graphify_tree", "map_extraction"]
+__all__ = ["graphify_tree", "map_extraction"]

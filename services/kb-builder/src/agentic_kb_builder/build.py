@@ -27,7 +27,6 @@ from agentic_kb_builder.application.active_version import activate_kb_version, g
 from agentic_kb_builder.application.build_runner import (
     BuildRunner,
     Embedder,
-    Graphifier,
     SearchIndexer,
     Wikifier,
 )
@@ -47,7 +46,6 @@ from agentic_kb_builder.connectors.local_fs import local_fs_backend_factory
 from agentic_kb_builder.connectors.production_factory import production_backend_factory
 from agentic_kb_builder.embeddings import LocalHashEmbedder
 from agentic_kb_builder.embeddings.ollama_embedder import OllamaEmbedder
-from agentic_kb_builder.graphify import GraphifyGraphifier
 from agentic_kb_builder.indexing import SearchDocUpserter, make_consistency_validator
 from agentic_kb_builder.infrastructure.azure_openai.chat_model_client import ChatModelClient
 from agentic_kb_builder.infrastructure.azure_search.search_client import SearchClient
@@ -68,7 +66,6 @@ class Collaborators:
     """The injectable build collaborators — defaulted for local runs, faked in tests."""
 
     wikifier: Wikifier
-    graphifier: Graphifier
     embedder: Embedder
     indexer: SearchIndexer
     search_client: SearchClient  # backs the activation consistency validator
@@ -99,7 +96,6 @@ def default_collaborators(session: AsyncSession, *, index_path: Path) -> Collabo
     judge: RelationshipJudge | None = model if os.environ.get("RELATIONSHIP_JUDGE") else None
     return Collaborators(
         wikifier=WikifyGenerator(model),
-        graphifier=GraphifyGraphifier(),
         embedder=LocalHashEmbedder(),
         indexer=SearchDocUpserter(session, client),
         search_client=client,
@@ -143,7 +139,6 @@ async def run_build(
         session,
         kb_version=kb_version,
         wikifier=collaborators.wikifier,
-        graphifier=collaborators.graphifier,
         embedder=collaborators.embedder,
         indexer=collaborators.indexer,
         similarity=collaborators.similarity,

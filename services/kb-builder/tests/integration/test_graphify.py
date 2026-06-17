@@ -1,58 +1,17 @@
-"""Unit tests for the graphify adapter (no DB): parse, keys, artifacts, edges."""
+"""Unit tests for the graphify adapter (no DB): symbolic keys + whole-tree extraction.
+
+The per-file FileGraph mapping (file_graph_to_* / parse_file_graph) was deleted when the
+build moved to whole-tree Graphify (ADR-0012); these tests now drive the REAL Graphify
+library over real Python source and assert on its deterministic, offline output.
+"""
 
 import pytest
-from pydantic import ValidationError
 
-from agentic_kb_builder.domain import (
-    FileGraph,
-    ParsedCall,
-    ParsedEndpoint,
-    ParsedImport,
-    ParsedSymbol,
-    ParsedTest,
-)
 from agentic_kb_builder.graphify import (
-    CALLS_CONFIDENCE,
-    EXPOSED_AS_CONFIDENCE,
-    IMPORTS_CONFIDENCE,
-    TESTS_CONFIDENCE,
     ParsedKey,
-    file_graph_to_artifacts,
-    file_graph_to_edges,
-    parse_file_graph,
+    graphify_tree,
     parse_key,
 )
-
-GRAPH = FileGraph(
-    path="api/users.py",
-    symbols=(ParsedSymbol(name="get_user", kind="function", span_start=1, span_end=2),),
-    endpoints=(ParsedEndpoint(http_method="GET", route="/users/{id}", symbol="get_user"),),
-    tests=(ParsedTest(name="test_get_user", span_start=4, span_end=5, targets=("get_user",)),),
-    imports=(ParsedImport(target_path="lib/util.py"),),
-    calls=(
-        ParsedCall(from_symbol="get_user", to_symbol="lib/util.py::helper"),
-        ParsedCall(from_symbol="get_user", to_symbol="validate"),
-    ),
-)
-FILE_TEXT = "line1\nline2\nline3\nline4\nline5\n"
-
-
-def test_parse_file_graph_validates_raw_payload() -> None:
-    raw = {
-        "path": "a.py",
-        "symbols": [{"name": "f", "kind": "function", "span_start": 1, "span_end": 2}],
-    }
-    graph = parse_file_graph(raw)
-    assert graph.path == "a.py"
-    assert graph.symbols[0].name == "f"
-
-    with pytest.raises(ValidationError):  # span_end < span_start
-        parse_file_graph(
-            {
-                "path": "a.py",
-                "symbols": [{"name": "f", "kind": "function", "span_start": 3, "span_end": 1}],
-            }
-        )
 
 
 def test_parse_key_round_trips_every_scheme() -> None:
@@ -72,52 +31,65 @@ def test_parse_key_round_trips_every_scheme() -> None:
         parse_key("bogus:a.py")
 
 
-def test_to_artifacts_exact_spans_and_pointer_only_rows() -> None:
-    drafts = {draft.key: draft for draft in file_graph_to_artifacts(GRAPH, file_text=FILE_TEXT)}
-    assert set(drafts) == {
-        "file:api/users.py",
-        "sym:api/users.py::get_user",
-        "test:api/users.py::test_get_user",
-        "endpoint:api/users.py::GET /users/{id}",
-    }
-    file_draft = drafts["file:api/users.py"]
-    assert file_draft.body_text is None and file_draft.span_start is None
-    symbol = drafts["sym:api/users.py::get_user"]
-    assert symbol.body_text == "line1\nline2"
+def test_graphify_tree_empty_input_is_empty() -> None:
+    result = graphify_tree([])
+    assert result.artifacts == ()
+    assert result.edges == ()
+
+
+def test_graphify_tree_single_function_file() -> None:
+    """One file with one function: a code_file (pointer-only) + a code_symbol with the
+    exact recovered span/body_text, plus a `defined_in` symbol->file edge."""
+    result = graphify_tree([("a.py", "def get_user():\n    return 1\n")])
+    by_key = {a.key: a for a in result.artifacts}
+    assert set(by_key) == {"file:a.py", "sym:a.py::get_user"}
+
+    code_file = by_key["file:a.py"]
+    assert code_file.artifact_type == "code_file"
+    assert code_file.body_text is None and code_file.span_start is None
+
+    symbol = by_key["sym:a.py::get_user"]
+    assert symbol.artifact_type == "code_symbol"
     assert (symbol.span_start, symbol.span_end) == (1, 2)
-    test_draft = drafts["test:api/users.py::test_get_user"]
-    assert test_draft.body_text == "line4\nline5"
-    endpoint = drafts["endpoint:api/users.py::GET /users/{id}"]
-    assert endpoint.title == "GET /users/{id}" and endpoint.body_text is None
+    assert symbol.body_text == "def get_user():\n    return 1"
+
+    edges = {(e.edge_type, e.from_key, e.to_key): e for e in result.edges}
+    defined_in = edges[("defined_in", "sym:a.py::get_user", "file:a.py")]
+    assert defined_in.confidence == 1.0
 
 
-def test_to_artifacts_rejects_span_past_end_of_file() -> None:
-    graph = FileGraph(
-        path="a.py",
-        symbols=(ParsedSymbol(name="f", kind="function", span_start=1, span_end=9),),
+def test_graphify_tree_assignment_only_file_has_no_symbol_or_edge() -> None:
+    result = graphify_tree([("x.py", "x = 1\n")])
+    assert {a.key for a in result.artifacts} == {"file:x.py"}
+    assert result.edges == ()
+
+
+def test_graphify_tree_resolves_cross_file_imports_and_calls() -> None:
+    """Two files in one tree: Graphify resolves the import (file->file) and the call
+    (symbol->symbol) across files — the capability whole-tree extraction provides."""
+    result = graphify_tree(
+        [
+            ("a2.py", "from b import thing\n\ndef run():\n    return thing()\n"),
+            ("b.py", "def thing():\n    return 2\n"),
+        ]
     )
-    with pytest.raises(ValueError, match="exceeds"):
-        file_graph_to_artifacts(graph, file_text="only\ntwo\n")
+    keys = {a.key for a in result.artifacts}
+    assert {"file:a2.py", "sym:a2.py::run", "file:b.py", "sym:b.py::thing"} <= keys
+
+    edge_keys = {(e.edge_type, e.from_key, e.to_key) for e in result.edges}
+    assert ("defined_in", "sym:a2.py::run", "file:a2.py") in edge_keys
+    assert ("defined_in", "sym:b.py::thing", "file:b.py") in edge_keys
+    assert ("imports", "file:a2.py", "file:b.py") in edge_keys
+    assert ("calls", "sym:a2.py::run", "sym:b.py::thing") in edge_keys
 
 
-def test_to_edges_symbolic_keys_types_and_confidence() -> None:
-    edges = {(edge.edge_type, edge.to_key): edge for edge in file_graph_to_edges(GRAPH)}
-    assert len(edges) == 5
-
-    imports = edges[("imports", "file:lib/util.py")]
-    assert imports.from_key == "file:api/users.py"
-    assert imports.confidence == IMPORTS_CONFIDENCE
-
-    cross_file_call = edges[("calls", "sym:lib/util.py::helper")]
-    assert cross_file_call.from_key == "sym:api/users.py::get_user"
-    assert cross_file_call.confidence == CALLS_CONFIDENCE
-    same_file_call = edges[("calls", "sym:api/users.py::validate")]
-    assert same_file_call.from_key == "sym:api/users.py::get_user"
-
-    tests_edge = edges[("tests", "sym:api/users.py::get_user")]
-    assert tests_edge.from_key == "test:api/users.py::test_get_user"
-    assert tests_edge.confidence == TESTS_CONFIDENCE
-
-    exposed = edges[("exposed_as", "endpoint:api/users.py::GET /users/{id}")]
-    assert exposed.from_key == "sym:api/users.py::get_user"
-    assert exposed.confidence == EXPOSED_AS_CONFIDENCE
+def test_graphify_tree_drops_out_of_tree_stdlib_imports() -> None:
+    """A stdlib import (`os`) is out-of-tree and produces NO file->file edge — the
+    adapter never fabricates a node for a reference it did not extract."""
+    result = graphify_tree([("c.py", "import os\n\ndef f():\n    return os.getcwd()\n")])
+    import_edges = [e for e in result.edges if e.edge_type == "imports"]
+    assert import_edges == []
+    # the defined_in edge still exists for the local function.
+    assert ("defined_in", "sym:c.py::f", "file:c.py") in {
+        (e.edge_type, e.from_key, e.to_key) for e in result.edges
+    }

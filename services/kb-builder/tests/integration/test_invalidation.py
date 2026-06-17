@@ -107,11 +107,6 @@ class _Wikifier:
         ]
 
 
-class _NoGraph:
-    async def graphify(self, content: NormalizedContent):  # pragma: no cover - unused path
-        raise AssertionError("graphify should not run for github_doc sources")
-
-
 class _Embedder:
     embedding_model = "embed-test"
 
@@ -167,7 +162,6 @@ def _runner(session: AsyncSession, kb_version: str) -> BuildRunner:
         session,
         kb_version=kb_version,
         wikifier=_Wikifier(),
-        graphifier=_NoGraph(),
         embedder=_Embedder(),
         indexer=_Indexer(),
     )

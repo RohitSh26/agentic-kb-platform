@@ -56,6 +56,10 @@ ALLOWED_EDGE_TYPES: frozenset[str] = frozenset(
         "requests",
         # structural code edges (ADR-0020): deterministic symbol->file / file->file
         "defined_in",
+        # Graphify cross-file symbol relations (ADR-0012 delegation): a symbol uses /
+        # type-references another, ingested whole-tree for symbol-level dependency.
+        "uses",
+        "references",
     }
 )
 

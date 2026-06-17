@@ -7,7 +7,6 @@ from agentic_kb_builder.application.build_runner import (
     BuildRunner,
     Embedder,
     EmbeddingResult,
-    Graphifier,
     SearchIndexer,
     Wikifier,
 )
@@ -32,7 +31,6 @@ __all__ = [
     "EmbeddingResult",
     "GateResult",
     "GenerationCacheGate",
-    "Graphifier",
     "SearchIndexer",
     "ValidationHook",
     "Wikifier",

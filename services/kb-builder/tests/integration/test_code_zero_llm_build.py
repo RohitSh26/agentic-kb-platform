@@ -7,8 +7,8 @@ A `github_code`-only build (no doc/wiki/card source) must:
   - project those symbols into the search index so an exact source token (a function
     name only present in raw code) is keyword-findable in the projection.
 
-Drives the REAL GraphifyGraphifier (the ast span recovery is exercised end-to-end, not
-a spy) with the local embedder + in-memory Search client. A wikifier is wired but MUST
+Drives REAL whole-tree Graphify extraction (the ast span recovery is exercised end-to-end,
+not a spy) with the local embedder + in-memory Search client. A wikifier is wired but MUST
 NOT be called — a failing stub proves the routing never reaches it for code.
 """
 
@@ -26,7 +26,6 @@ from agentic_kb_builder.application.active_version import get_active_kb_version
 from agentic_kb_builder.build import Collaborators, run_build
 from agentic_kb_builder.domain import NormalizedContent, WikifyArtifactDraft
 from agentic_kb_builder.embeddings import LocalHashEmbedder
-from agentic_kb_builder.graphify import GraphifyGraphifier
 from agentic_kb_builder.indexing import SearchDocUpserter
 from agentic_kb_builder.infrastructure.azure_search.search_client import FakeSearchClient
 from agentic_kb_builder.infrastructure.postgres.models import (
@@ -142,7 +141,6 @@ async def test_code_only_build_is_zero_llm_and_keyword_searchable(
         version="local",
         collaborators=Collaborators(
             wikifier=ExplodingWikifier(),  # must never be called
-            graphifier=GraphifyGraphifier(),
             embedder=LocalHashEmbedder(),
             indexer=SearchDocUpserter(session, client),
             search_client=client,
@@ -254,7 +252,6 @@ async def test_imports_edges_emitted_for_in_build_module(
         version="local",
         collaborators=Collaborators(
             wikifier=ExplodingWikifier(),
-            graphifier=GraphifyGraphifier(),
             embedder=LocalHashEmbedder(),
             indexer=SearchDocUpserter(session, client),
             search_client=client,
@@ -336,7 +333,6 @@ async def test_imports_edge_not_emitted_for_stdlib_or_third_party(
         version="local",
         collaborators=Collaborators(
             wikifier=ExplodingWikifier(),
-            graphifier=GraphifyGraphifier(),
             embedder=LocalHashEmbedder(),
             indexer=SearchDocUpserter(session, client),
             search_client=client,
@@ -402,7 +398,6 @@ async def test_imports_edges_idempotent_same_kb_version(
             version="local",
             collaborators=Collaborators(
                 wikifier=ExplodingWikifier(),
-                graphifier=GraphifyGraphifier(),
                 embedder=LocalHashEmbedder(),
                 indexer=SearchDocUpserter(session, client),
                 search_client=client,
@@ -451,7 +446,6 @@ async def test_search_text_idempotent_rebuild(session: AsyncSession, tmp_path: P
             version="local",
             collaborators=Collaborators(
                 wikifier=ExplodingWikifier(),
-                graphifier=GraphifyGraphifier(),
                 embedder=LocalHashEmbedder(),
                 indexer=SearchDocUpserter(session, client),
                 search_client=client,
