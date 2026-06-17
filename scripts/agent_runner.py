@@ -576,12 +576,15 @@ async def _explain(
                         "claims": [
                             {"claim_id": "c1", "text": answer[:500], "evidence_ids": evidence_ids[:3]}
                         ],
-                        "verifier_levels": ["L0"],
+                        # L1 (coverage) + L3 (entailment: does the evidence SUPPORT the claim?).
+                        # The server drops L3 unless MCP_ENABLE_ENTAILMENT is set, so this is safe.
+                        "verifier_levels": ["L0", "L1", "L3"],
                     }
                 },
             )
         )
-        print(f"\n  verify_answer: overall={receipt.get('overall', '?')}")
+        levels = receipt.get("verifier_levels_run", [])
+        print(f"\n  verify_answer: overall={receipt.get('overall', '?')}  levels={levels}")
     print(f"\nreplay this run with: python -m agentic_mcp_server.replay {run_id}")
     return 0
 

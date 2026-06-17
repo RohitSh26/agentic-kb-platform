@@ -5,6 +5,7 @@ exist at this boundary without a versioned schema.
 """
 
 import logging
+import os
 
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
@@ -18,6 +19,7 @@ from agentic_mcp_server.config import SERVER_NAME, load_config
 from agentic_mcp_server.context_broker.budgets import BudgetPolicy, parse_agent_allowances
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps, BrokerSettings
 from agentic_mcp_server.health import health
+from agentic_mcp_server.infrastructure.entailment.client import EntailmentClient
 from agentic_mcp_server.infrastructure.postgres.keyword_search import PostgresKeywordSearchClient
 from agentic_mcp_server.infrastructure.postgres.session import (
     create_engine,
@@ -40,6 +42,7 @@ def build_server(
     settings: BrokerSettings | None = None,
     budget_policy: BudgetPolicy | None = None,
     client_registry: ClientRegistry | None = None,
+    entailment_client: EntailmentClient | None = None,
 ) -> FastMCP:
     deps = BrokerDeps(
         session_factory=session_factory,
@@ -47,6 +50,7 @@ def build_server(
         settings=settings or BrokerSettings(),
         budget_policy=budget_policy or BudgetPolicy(),
         client_registry=client_registry or ClientRegistry(),
+        entailment_client=entailment_client,
     )
     server = FastMCP(name=SERVER_NAME, auth=auth, middleware=[TelemetryMiddleware()])
 
@@ -85,10 +89,24 @@ def create_app() -> FastMCP:
     logger.info("event=agent_allowances_loaded subjects=%d", len(allowances))
     client_registry = parse_client_registry(config.client_registry_json)
     logger.info("event=client_registry_loaded clients=%d", len(client_registry.policies))
+
+    # L3 entailment is OPT-IN: only when MCP_ENABLE_ENTAILMENT is set do we attach an LLM
+    # entailment client (built from ENTAIL_LLM_* env, ollama by default). Unset ⇒ the server
+    # stays LLM-free and an "L3" request is dropped from verifier_levels_run (provenance-only).
+    entailment_client: EntailmentClient | None = None
+    if os.environ.get("MCP_ENABLE_ENTAILMENT", "").strip().lower() in {"1", "true", "yes", "on"}:
+        from agentic_mcp_server.infrastructure.entailment.ollama_client import (
+            OllamaEntailmentClient,
+        )
+
+        entailment_client = OllamaEntailmentClient.from_env()
+        logger.info("event=entailment_enabled")
+
     engine = create_engine(config.database_url)
     return build_server(
         auth=select_verifier(config),
         session_factory=create_session_factory(engine),
         budget_policy=BudgetPolicy(allowances=allowances),
         client_registry=client_registry,
+        entailment_client=entailment_client,
     )
