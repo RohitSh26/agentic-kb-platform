@@ -36,8 +36,17 @@ _LOCAL_FETCHABLE = (GithubCodeSourceSpec, GithubDocSourceSpec)
 # Pruned from the local-match walk: never part of an ingested source, and walking
 # them (especially .git / .venv / node_modules) is slow and noisy.
 _PRUNE_DIRS = frozenset(
-    {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache",
-     ".ruff_cache", ".kb-local-search-index.json"}
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".kb-local-search-index.json",
+    }
 )
 
 

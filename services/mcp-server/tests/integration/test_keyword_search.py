@@ -85,6 +85,7 @@ async def test_search_text_hit_retrieves_a_symbol_and_outranks_body(
 
     ids = [hit.artifact_id for hit in hits]
     assert via_search in ids, "a search_text-only concept hit must be retrievable"
+    assert via_body in ids  # the body-only hit is also retrieved, just ranked lower
     assert ids[0] == via_search  # search_text (1.5) outranks a body-only (1.0) hit
 
 

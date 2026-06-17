@@ -57,17 +57,13 @@ def test_production_missing_token_env_is_an_error() -> None:
 
 def test_production_token_present_is_clean() -> None:
     config = _config(_github_code("code", auth={"token_env": "GITHUB_TOKEN"}))
-    issues = validate_source_config(
-        config, backend="production", environ={"GITHUB_TOKEN": "ghp_x"}
-    )
+    issues = validate_source_config(config, backend="production", environ={"GITHUB_TOKEN": "ghp_x"})
     assert issues == []
 
 
 def test_production_public_with_auth_warns() -> None:
     config = _config(_github_code("code", auth={"token_env": "GITHUB_TOKEN"}, public=True))
-    issues = validate_source_config(
-        config, backend="production", environ={"GITHUB_TOKEN": "ghp_x"}
-    )
+    issues = validate_source_config(config, backend="production", environ={"GITHUB_TOKEN": "ghp_x"})
     assert not has_errors(issues)
     assert any(i.severity is Severity.WARNING and "public" in i.message for i in issues)
 
@@ -123,9 +119,7 @@ def test_local_warns_when_globs_match_no_files(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("hi\n")  # exists, but no .py under services/
     config = _config(_github_code("code", include=["services/**/*.py"]))
     issues = validate_source_config(config, backend="local", environ={}, workspace=tmp_path)
-    assert any(
-        i.severity is Severity.WARNING and "match no files" in i.message for i in issues
-    )
+    assert any(i.severity is Severity.WARNING and "match no files" in i.message for i in issues)
 
 
 def test_local_clean_when_globs_match(tmp_path: Path) -> None:
@@ -145,7 +139,14 @@ def test_disabled_source_is_skipped() -> None:
 # keep the unused imports meaningful: build a doc + ado spec via the models too
 def test_specs_construct() -> None:
     assert GithubDocSourceSpec(name="d", type="github_doc", repo="o/r").auth is None
-    assert AdoCardSourceSpec(
-        name="c", type="ado_card", organization="o", project="p", auth=AuthRef(token_env="ADO_PAT")
-    ).public is False
+    assert (
+        AdoCardSourceSpec(
+            name="c",
+            type="ado_card",
+            organization="o",
+            project="p",
+            auth=AuthRef(token_env="ADO_PAT"),
+        ).public
+        is False
+    )
     assert GithubCodeSourceSpec(name="x", type="github_code", repo="o/r").public is False

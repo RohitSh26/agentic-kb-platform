@@ -46,9 +46,10 @@ def test_details_column_exists_after_upgrade() -> None:
     import asyncio
 
     assert TEST_DATABASE_URL is not None
+    db_url = TEST_DATABASE_URL  # narrowed local so the nested closure sees str, not str | None
 
     async def _check() -> None:
-        engine = create_async_engine(TEST_DATABASE_URL)
+        engine = create_async_engine(db_url)
         factory = async_sessionmaker(engine, expire_on_commit=False)
 
         async with factory() as session:

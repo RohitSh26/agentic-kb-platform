@@ -60,9 +60,16 @@ def test_change_requests_route_to_build_change(task: str) -> None:
 
 def test_evidence_for_explain_uses_citations_not_uuids() -> None:
     cards = [
-        {"evidence_id": "1111-uuid", "display_citation": "budgets.py:parse_agent_allowances",
-         "summary": "parses per-agent allowances"},
-        {"evidence_id": "2222-uuid", "title": "ReadPackRequest", "summary": "the read_pack request"},
+        {
+            "evidence_id": "1111-uuid",
+            "display_citation": "budgets.py:parse_agent_allowances",
+            "summary": "parses per-agent allowances",
+        },
+        {
+            "evidence_id": "2222-uuid",
+            "title": "ReadPackRequest",
+            "summary": "the read_pack request",
+        },
     ]
     rendered = runner._evidence_for_explain(cards)
     assert "budgets.py:parse_agent_allowances" in rendered

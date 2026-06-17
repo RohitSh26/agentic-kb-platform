@@ -182,8 +182,7 @@ async def main() -> None:
     df = _doc_freq(arts, all_qwords)
 
     print(
-        f"KB={DB} artifacts={len(arts)} edges={len(edges)} "
-        f"budget={TOKEN_BUDGET} seed_k={SEED_K}\n"
+        f"KB={DB} artifacts={len(arts)} edges={len(edges)} budget={TOKEN_BUDGET} seed_k={SEED_K}\n"
     )
     agg: dict[str, list[float]] = {m: [] for m in MODES}
     for task in tasks:
