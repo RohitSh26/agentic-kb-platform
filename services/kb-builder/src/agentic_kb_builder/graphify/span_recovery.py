@@ -264,19 +264,39 @@ def recover_spans(*, file_text: str, suffix: str, path: str) -> dict[int, list[S
     return {}
 
 
+def _resolve_relative_import(path: str, level: int, module: str | None) -> str | None:
+    """Resolve a relative import to its absolute dotted module, using the importing file's path.
+
+    ``path`` is the repo-relative path of the file doing the import (e.g. ``httpx/_client.py``),
+    which is exactly the form the imports linker turns into a dotted module path. A ``from .X``
+    (level 1) names the current package; each extra leading dot climbs one package up. Returns
+    None if it climbs above the source root (unresolvable). Examples, from ``httpx/_client.py``:
+    ``from ._exceptions import E`` -> ``httpx._exceptions``;
+    from ``httpx/_transports/default.py``: ``from .._config import C`` -> ``httpx._config``."""
+    parts = path.replace("\\", "/").split("/")
+    package = parts[:-1]  # the directory containing the file = its package
+    up = level - 1
+    if up > len(package):
+        return None
+    base = package[: len(package) - up]
+    tail = module.split(".") if module else []
+    dotted = ".".join([*base, *tail])
+    return dotted or None
+
+
 def extract_import_modules(*, file_text: str, suffix: str, path: str) -> tuple[str, ...]:
-    """Return the ABSOLUTE imported module dotted-names for a Python source file.
+    """Return the imported module dotted-names for a Python source file.
 
     Rules:
     - ``import a.b.c`` -> ``"a.b.c"``
     - ``from a.b import c`` -> ``"a.b"`` (the containing package, not the attribute)
-    - Relative imports (level > 0, e.g. ``from . import x``) are SKIPPED — V1
-      limitation; resolving relative imports requires the full package layout.
-      Follow-up: emit relative edges once the build knows the full dotted package path.
+    - Relative imports are RESOLVED against ``path`` to their absolute dotted module
+      (``from ._x import y`` in ``pkg/mod.py`` -> ``"pkg._x"``), so intra-package imports
+      in libraries that use relative imports (most of them) produce file→file edges.
     - Non-Python suffixes -> empty (Python-first, same convention as recover_spans).
     - Syntax errors -> empty (never raise; the build continues).
 
-    The result is deterministic: same text + suffix -> same tuple.
+    The result is deterministic: same text + suffix + path -> same tuple.
     """
     if suffix.lower() not in _PYTHON_SUFFIXES:
         return ()
@@ -296,9 +316,10 @@ def extract_import_modules(*, file_text: str, suffix: str, path: str) -> tuple[s
                 modules.append(alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.level and node.level > 0:
-                # Relative import — skip (V1 limitation, requires package-layout knowledge).
-                continue
-            if node.module:
+                resolved = _resolve_relative_import(path, node.level, node.module)
+                if resolved:
+                    modules.append(resolved)
+            elif node.module:
                 modules.append(node.module)
     logger.info(
         "event=import_extract_completed path=%s modules=%d",

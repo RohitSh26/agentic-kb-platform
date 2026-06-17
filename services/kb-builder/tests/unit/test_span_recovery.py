@@ -115,12 +115,31 @@ def test_from_import_captures_package_not_attribute() -> None:
     assert "a.b.c" not in mods
 
 
-def test_relative_imports_are_skipped() -> None:
-    mods = extract_import_modules(file_text=IMPORT_SOURCE, suffix=".py", path="m.py")
-    # Relative imports (level > 0) must not appear
-    assert "sibling" not in mods
-    assert "util" not in mods
-    assert "pkg" not in mods
+def test_relative_imports_resolve_against_the_file_path() -> None:
+    # `from ._exceptions import E` in httpx/_client.py -> the absolute module httpx._exceptions,
+    # which the imports linker resolves to httpx/_exceptions.py (libraries use relative imports).
+    src = "from ._exceptions import HttpError\nfrom ._config import Config\n"
+    mods = extract_import_modules(file_text=src, suffix=".py", path="httpx/_client.py")
+    assert "httpx._exceptions" in mods
+    assert "httpx._config" in mods
+
+
+def test_multi_dot_relative_import_climbs_packages() -> None:
+    # `from .._config import C` in httpx/_transports/default.py -> httpx._config
+    mods = extract_import_modules(
+        file_text="from .._config import C\n",
+        suffix=".py",
+        path="httpx/_transports/default.py",
+    )
+    assert "httpx._config" in mods
+
+
+def test_relative_import_above_root_is_dropped_not_raised() -> None:
+    # climbing above the source root is unresolvable — drop, never raise
+    mods = extract_import_modules(
+        file_text="from ...way.up import x\n", suffix=".py", path="pkg/mod.py"
+    )
+    assert mods == ()
 
 
 def test_non_python_suffix_returns_empty() -> None:
