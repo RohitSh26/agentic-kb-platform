@@ -1,6 +1,6 @@
 # agentic-kb-builder
 
-Nightly incremental KB build plane: connectors → wikify → graphify → linker →
+Nightly incremental KB build plane: connectors → docify → graphify → linker →
 indexing. **Owns the Postgres Knowledge Registry schema** — Alembic migrations
 live in `migrations/` and run only from this service.
 
@@ -19,8 +19,8 @@ live in `migrations/` and run only from this service.
 src/agentic_kb_builder/
   application/      build_runner, cache_gates, active_version
   connectors/       deterministic source connectors (github, azure wiki, ado)
-  wikify/           generation pipeline (cache-gated)
-  graphify/         code-graph extraction for changed files
+  docify/           document extraction pipeline (Graphify LLM, cache-gated)
+  graphify/         whole-tree code-graph extraction
   linker/           cross-artifact edge linking
   indexing/         search projection, upsert, consistency validation
   domain/           artifact models, content_hasher, schema_versions

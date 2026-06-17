@@ -12,7 +12,7 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
   receipts), and the architecture invariants with pointers to where each is enforced in code.
 - [02 — Implementation tour](02-implementation-tour.md): a guided walk through both planes as
   implemented (PR-01 → PR-33): contracts, schema, connectors (local-FS + the production GitHub/ADO
-  backends), incremental build engine, wikify, graphify, the linker (deterministic, cross-domain,
+  backends), incremental build engine, docify, graphify, the linker (deterministic, cross-domain,
   candidate→judge), version-membership invalidation, indexing, the MCP server and Context Broker,
   the verifier ladder + signed receipts, client identity + scopes, temporal ranking, security
   hardening, source configuration, the portable agent framework, and the deployment follow-ons.

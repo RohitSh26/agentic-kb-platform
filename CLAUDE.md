@@ -55,7 +55,7 @@ The blueprint is implementation-agnostic; these are the V1 choices recorded in `
 ## Repo map
 
 ```
-services/kb-builder  Self-contained build plane: connectors, wikify, graphify, linker, indexing.
+services/kb-builder  Self-contained build plane: connectors, docify, graphify, linker, indexing.
                      OWNS the Postgres schema — Alembic migrations live here (migrations/).
 services/mcp-server  Self-contained runtime plane: MCP Context Broker, auth, telemetry, tool
                      schemas, health. NEVER runs migrations or build-plane code.

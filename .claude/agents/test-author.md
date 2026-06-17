@@ -15,7 +15,7 @@ Always cover, where the code under test allows:
 - Budget: per-run and per-agent budget exceeded → request denied, ledger records the denial.
 - Dedupe: identical query → exact-cache hit, no new search; reworded query → semantic reuse.
 - Caches: generation_cache and embedding_cache HIT means no LLM / no embedding call (assert via mock).
-- Incremental build: unchanged content_hash skips chunk/wikify/graphify/embed/index.
+- Incremental build: unchanged content_hash skips docify/graphify/embed/index.
 - Evidence: cards returned before raw chunks; open_evidence expands only the requested handle.
 - Idempotency: re-running a build job or cache write produces no duplicate rows.
 - Active version: a failed validation never flips kb_version active; MCP keeps serving the last good one.

@@ -121,8 +121,8 @@ uv run alembic upgrade head
 | Real system (V1 target) | Interface (Protocol) | Defined in | Fake used in tests |
 |---|---|---|---|
 | GitHub / Azure Wiki / ADO APIs | `FetchBackend` | `connectors/source_connector.py` | in-test backends returning canned text (`test_connectors.py`, `test_build_engine.py`) |
-| Azure OpenAI (wikify) | `ModelClient` / `Wikifier` | `infrastructure/azure_openai/model_client.py`, `application/build_runner.py` | spy wikifiers returning canned `WikifyGeneration` (`test_build_engine.py`) |
-| Code parser | `Graphifier` | `application/build_runner.py` | spies returning fixture `FileGraph`s |
+| Chat model (docify doc extraction, ADR-0023) | `DocExtractor` | `application/build_runner.py`, `docify/extractor.py` | spy doc extractors returning canned `DocExtractionResult` (`test_build_engine.py`) |
+| Code extraction | whole-tree `graphify_tree` | `graphify/graphify_backend.py` | spies returning fixture `GraphifyResult`s |
 | Azure OpenAI embeddings | `Embedder` | `application/build_runner.py` | fake returning a deterministic `embedding_hash` |
 | Azure AI Search (upsert) | `SearchIndexer` | `application/build_runner.py` | `SpyIndexer` counting received artifact ids |
 | Azure AI Search (index) | `SearchClient` | `infrastructure/azure_search/search_client.py` | `FakeSearchClient` — a real in-memory index holding full `SearchDoc`s; tests inject drift/orphans by mutating `.docs` (`test_indexing.py`) |
@@ -136,8 +136,9 @@ Protocol next to its caller and a fake next to its tests — never import an SDK
 
 ## Running an end-to-end build locally
 
-The `build` CLI (PR-22) runs a full no-cloud build into Postgres — local-FS fetch + Graphify (AST)
-+ wikify (local Ollama by default) + local embeddings + the in-memory Search projection, plus the
+The `build` CLI (PR-22) runs a full no-cloud build into Postgres — local-FS fetch + Graphify
+(whole-tree) for code + docify (Graphify LLM doc extraction, local Ollama by default) + local
+embeddings + the in-memory Search projection, plus the
 `git_metadata` connector (PR-26) that turns local commits into `commit` artifacts and cross-domain
 links:
 
@@ -159,7 +160,7 @@ credentials and no network, so keep using `--backend local` (the default) for th
 
 For a fully hermetic view of the pipeline, the integration suite still drives a real `BuildRunner`
 against your local Postgres with fakes — `test_build_engine.py` exercises the complete flow: fetch →
-hash-skip → wikify (cache-gated) → graphify (cache-gated) → embed (cache-gated) → index → edges →
+hash-skip → docify (cache-gated) → graphify (cache-gated) → embed (cache-gated) → index → edges →
 linker → run accounting → activation gating. The production backends are tested hermetically too:
 `production_backend_factory(client_transport=httpx.MockTransport(...))` drives the whole
 config→connector→HTTP path with canned responses, no network.
@@ -185,12 +186,12 @@ uv run env TEST_DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/agentic_k
   pytest tests/integration/test_build_engine.py -k "first_build" -v --log-cli-level=INFO
 ```
 
-The structured `event=...` log lines (source upserts, cache lookups/hits, wikify/graphify writes,
+The structured `event=...` log lines (source upserts, cache lookups/hits, docify/graphify writes,
 linker matching, edge reconciliation) narrate every step — they are the same lines you would grep
 in production logs.
 
 To experiment interactively, copy the fixture pattern from `test_build_engine.py` into a scratch
-script: build a `BuildRunner(session, kb_version=..., wikifier=fake, graphifier=fake,
+script: build a `BuildRunner(session, kb_version=..., doc_extractor=fake,
 embedder=fake, indexer=fake)` and feed it a connector whose `FetchBackend` returns whatever
 markdown/code you want ingested. Inspect results directly in Postgres:
 
@@ -206,11 +207,11 @@ All under `services/kb-builder/tests/`:
 
 | File | Covers |
 |---|---|
-| `integration/test_build_engine.py` | cache-key determinism; first build vs unchanged-skip; **cache hit ⇒ no model call** (invariant 4); idempotent re-runs; failed-wikify rollback (audit row survives, no orphan cache rows); cross-file graphify edges; validation-gated activation (invariant 5) |
+| `integration/test_build_engine.py` | cache-key determinism; first build vs unchanged-skip; **cache hit ⇒ no model call** (invariant 4); idempotent re-runs; failed-docify rollback (audit row survives, no orphan cache rows); cross-file graphify edges; validation-gated activation (invariant 5) |
 | `integration/test_linker.py` | deterministic matching + precision guards; semantic threshold and dedupe; reconcile-in-place (rerun refresh, new-version refresh, stale deletion); protected-edge survival without a provider; low-confidence flagging |
 | `integration/test_indexing.py` | projection field mapping + stale-embedding exclusion; changed-docs-only upsert (no duplicates on rerun); orphan-doc deletion; consistency check passing on a mirrored index and failing on each injected drift class |
-| `integration/test_wikify.py` | chunker determinism and packing; draft kind/type validation |
-| `integration/test_graphify.py` | parse validation; key round-trips; exact spans; span-past-EOF rejection; edge confidences |
+| `unit/test_docify_mapping.py` | docify trust derivation (verbatim quote ⇒ `source_backed_fact`, else `interpreted` concept; document ⇒ `summary`); artifacts-only mapping; draft kind/type validation |
+| `integration/test_graphify.py` | whole-tree extraction; key round-trips; exact spans; span-past-EOF rejection; edge confidences |
 | `integration/test_registry_roundtrip.py` | migrations up/down + model round-trips |
 | `unit/test_connectors.py` | normalize+hash pipeline determinism per source type |
 | `contract/test_import_boundaries.py` | no cross-service or legacy root-package imports (ADR-0008) |

@@ -8,7 +8,7 @@
 An agentic system that helps developers plan and execute software work using a centrally managed
 knowledge base. A human-approved **orchestrator** plans the work; specialized **subagents** execute
 against one shared **Evidence Pack** governed by a remote **MCP Context Broker**; a **nightly-built**
-KB combines semantic knowledge (Wikify) with code-structure knowledge (Graphify) in one canonical
+KB combines semantic knowledge (Docify) with code-structure knowledge (Graphify) in one canonical
 **Postgres** registry, projected into **Azure AI Search** for retrieval.
 
 The design is deliberately lean: no event-driven cloud, no Redis, no API Management, no Blob (by
@@ -38,25 +38,30 @@ The KB is a Postgres-backed Knowledge Registry with graph-shaped relationships a
 projection — not "just a vector index."
 
 ### Artifact types
-`source_item` (connectors), `chunk` (chunker), `concept` / `summary` / `source_backed_fact`
-(Wikify), `code_file` / `code_symbol` / `endpoint` / `test` (Graphify), `evidence_card` (MCP runtime).
+`source_item` (connectors), `concept` / `summary` / `source_backed_fact`
+(Docify), `code_file` / `code_symbol` / `endpoint` / `test` (Graphify), `evidence_card` (MCP runtime).
 
 ### Edge types
 `documents`, `implements`, `calls`, `imports`, `tests`, `requests`, `mentions`, `depends_on`,
-`exposed_as`. Each edge carries `confidence`, `source` (wikify|graphify|linker|manual), `kb_version`.
+`exposed_as`. Each edge carries `confidence`, `source` (graphify|linker|llm_judge|manual), `kb_version`.
 
 > Graph decision: the graph abstraction is V1; the graph database is not. Edges live in Postgres;
 > graph behavior is exposed through MCP tools.
 
-## 5. Wikify / Graphify / Linker
+## 5. Docify / Graphify / Linker
 
-- **Wikify** = semantic layer. Inputs: docs, wiki, ADO cards, selected code comments. Outputs:
-  concepts, summaries, source-backed facts, rollups, evidence-ready chunks. Risk: generated summaries
-  are interpreted knowledge — rank below current source-backed evidence.
-- **Graphify** = code-structure layer. Inputs: code at commit SHA. Outputs: files, symbols,
-  endpoints, imports, call edges, test links, service boundaries. Risk: it is a navigation aid; final
-  evidence uses exact snippets at a source version.
-- **Linker** connects Wikify concepts to Graphify code via deterministic matching, source refs, path
+- **Docify** = semantic layer (ADR-0023). Inputs: docs, wiki, ADO cards. Document sources run
+  through Graphify's LLM doc pipeline behind a thin `docify` adapter (same `LLM_*` config as every
+  other model call). Outputs the same artifact shapes as before: concepts, summaries, source-backed
+  facts. Trust is re-derived — a concept whose supporting sentence is a verbatim substring of the
+  source becomes a citable `source_backed_fact`, otherwise an `interpreted` concept; the document
+  node becomes an interpreted `summary`. Artifacts only (no concept→concept edges). Risk: generated
+  summaries are interpreted knowledge — rank below current source-backed evidence.
+- **Graphify** = code-structure layer. Inputs: code at commit SHA. The Graphify library runs once
+  per repo (`graphify_tree`), resolving cross-file imports/calls/uses natively. Outputs: files,
+  symbols, endpoints, imports, call edges, test links. Risk: it is a navigation aid; final evidence
+  uses exact snippets at a source version.
+- **Linker** connects Docify concepts to Graphify code via deterministic matching, source refs, path
   conventions, embedding similarity, and limited LLM help. Example:
   `Concept: User Embeddings → documents → Wiki; → requested_by → ADO card; → implemented_by →
   EmbeddingService.get_user_embedding; → exposed_as → GET /users/{userId}/embeddings; → tested_by →
@@ -111,12 +116,12 @@ Rule: if `content_hash` and generation inputs are unchanged, do not call the LLM
 
 1. Fetch source metadata + content (GitHub, Wiki, ADO). 2. Normalize. 3. Compute `content_hash`.
 4. Compare to `source_item`. 5. If unchanged → skip everything. 6. If changed → update source_item,
-chunk, Wikify on generation_cache miss, Graphify for changed code, update artifacts+edges, embed on
+Docify on generation_cache miss, Graphify for changed code, update artifacts+edges, embed on
 embedding_cache miss, upsert changed docs to Search. 7. Validate retrieval/index consistency.
 8. Mark new `kb_version` active only if validation succeeds.
 
 ### Cache keys
-- Chunk summary: `source_content_hash + chunker_version + wikify_prompt_version + model_name +
+- Doc extraction (docify): `source_content_hash + doc_extract_prompt_version + model_name +
   model_params_hash + output_schema_version`.
 - Concept rollup: `concept_id + sorted_supporting_artifact_hashes + rollup_prompt_version +
   model_name + output_schema_version`.

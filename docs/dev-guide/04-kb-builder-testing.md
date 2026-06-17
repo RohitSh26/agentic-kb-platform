@@ -5,11 +5,11 @@
 > (Ollama / Groq / OpenAI / Azure / Claude / …) → run a build → export to Obsidian → query the
 > database to confirm everything worked. No cloud is required for a local build.
 
-The build plane is **Postgres-first** and **deterministic**: code is parsed by a real AST extractor
-(no LLM), prose is summarised by a quote-guarded LLM, embeddings are computed locally, and a
-`kb_version` only goes **active** after the publish gates pass. Only two steps call the chat LLM —
-**wikify** (doc/card summaries + concepts) and the **relationship judge** (phase-3B inferred links);
-everything else is deterministic.
+The build plane is **Postgres-first** and **deterministic**: code is extracted by Graphify
+whole-tree (no LLM), prose is summarised by Graphify's LLM doc pipeline behind the `docify` adapter
+(ADR-0023), embeddings are computed locally, and a `kb_version` only goes **active** after the
+publish gates pass. Only two steps call the chat LLM — **docify** (doc/card summaries + concepts) and
+the **relationship judge** (phase-3B inferred links); everything else is deterministic.
 
 ---
 
@@ -78,7 +78,7 @@ The driver **must** be `postgresql+asyncpg://` (everything is async SQLAlchemy).
 
 ## 4. Choose and configure an LLM provider
 
-Only **wikify** and the **relationship judge** call the chat model; **embeddings are always computed
+Only **docify** and the **relationship judge** call the chat model; **embeddings are always computed
 locally** (a deterministic hash embedder), so you never need an embedding API for a local build.
 
 The model client speaks the **OpenAI chat-completions protocol** for everything except Azure OpenAI,
@@ -156,8 +156,10 @@ export LLM_MODEL=<model-id>
 
 > **Notes.** Temperature defaults to `0` for reproducible summaries — keep it there for testing.
 > A remote provider with no key will fail fast (`LLM_API_KEY is required for provider ...`).
-> If wikify logs `event=wikify_fact_dropped reason=quote_not_in_source`, that's the **quote-guard**
-> rejecting a paraphrase — expected with small models, not an error.
+> Docify re-derives trust deterministically: a concept whose supporting sentence is a verbatim
+> substring of the source becomes a citable `source_backed_fact`; otherwise it stays an `interpreted`
+> concept (`event=docify_mapped … source_backed=N interpreted=M`) — paraphrases are downgraded, never
+> dropped. Fewer source-backed facts with a small model is expected, not an error.
 
 ---
 
@@ -189,7 +191,7 @@ Useful flags:
 | `--allow-large-delta` | bypass only the symbol-count-delta publish gate (recorded + logged) |
 
 What the log narrates (these are the same `event=` lines you'd grep in production): source upserts →
-`wikify`/`graphify` writes (cache-gated) → `linker_*` (deterministic + cross-domain links) →
+`docify`/`graphify` writes (cache-gated) → `linker_*` (deterministic + cross-domain links) →
 `candidate_*` (phase-3A) → `judge_*` (phase-3B inferred links, only if the model infers one) →
 `publish_gate_*` → `build_activation`.
 
@@ -390,7 +392,7 @@ Expect `0`. (If non-zero, the publish gate should have blocked activation — ch
 SELECT build_seq, kb_version, llm_calls, embedding_calls, sources_changed
 FROM kb_build_run ORDER BY build_seq DESC LIMIT 10;
 
--- cache sizes: a generation-cache hit means wikify/graphify did NOT call the model
+-- cache sizes: a generation-cache hit means docify/graphify did NOT call the model
 SELECT count(*) AS generation_cache_rows FROM generation_cache;
 SELECT count(*) AS embedding_cache_rows  FROM embedding_cache;
 ```
@@ -445,6 +447,6 @@ retrieval evals (the DB-backed tests migrate up and downgrade to base on teardow
 | `role "postgres" does not exist` | Homebrew/macOS Postgres uses your `$USER` — set `DATABASE_URL`/`TEST_DATABASE_URL` accordingly. |
 | `LLM_API_KEY is required for provider ...` | A remote provider needs a key — export `LLM_API_KEY` (or use `LLM_PROVIDER=ollama`). |
 | `Connection refused` to `:11434` | Ollama isn't running — `ollama serve` (and `ollama pull <model>`). |
-| `event=wikify_fact_dropped reason=quote_not_in_source` | Expected: the quote-guard rejected a paraphrase. Not an error. |
+| `event=docify_mapped … source_backed=N interpreted=M` | Normal: docify classified each concept — verbatim quotes became `source_backed_fact`, paraphrases stayed `interpreted`. Not an error. |
 | Build runs but `status` is `failed`/`validation_failed` | A publish gate blocked activation — see `failed_gate`/`gate_measured_value` in §8.1. |
 | Migrations behind | `cd services/kb-builder && uv run alembic upgrade head` (head is the highest `00NN` revision). |

@@ -98,7 +98,7 @@ but not `docs/intro.md`; `**/tests/**` matches any `tests` directory at any dept
 | `branch` | str | default `main`; resolved to **one commit SHA per build** — every fetched file carries that SHA as `source_version` |
 
 `github_code` feeds Graphify (normalized line-endings-only; evidence stays byte-exact).
-`github_doc` feeds Wikify (full prose normalization).
+`github_doc` feeds Docify (full prose normalization, ADR-0023).
 
 ### `azure_wiki`
 

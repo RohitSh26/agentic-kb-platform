@@ -7,7 +7,7 @@
 ## Layout at a glance
 
 ```
-services/kb-builder  the nightly build: connectors → build engine → wikify/graphify → linker →
+services/kb-builder  the nightly build: connectors → build engine → docify/graphify → linker →
                      indexing. Owns the registry: SQLAlchemy models + Alembic migrations.
 services/mcp-server  the runtime plane: auth, telemetry, tool contracts, health, Context Broker
 docs/contracts/      markdown cross-service contracts — the only thing the services share
@@ -25,7 +25,8 @@ cross-service or legacy root-package import.
 Every boundary exchanges **frozen pydantic models** (`ConfigDict(frozen=True, extra="forbid")`)
 carrying an explicit `schema_version`. Build-plane version constants live in
 `agentic_kb_builder/domain/schema_versions.py`: `OUTPUT_SCHEMA_VERSION`, `PROMPT_VERSION`,
-`CHUNKER_VERSION`, `GRAPHIFY_VERSION` (1.1.0 — bumped when artifact emission changed in PR-06),
+`CHUNKER_VERSION`, `DOC_EXTRACT_PROMPT_VERSION` (ADR-0023 — gates the docify doc-extraction
+generation cache), `GRAPHIFY_VERSION` (1.1.0 — bumped when artifact emission changed in PR-06),
 `PARSER_CONFIG_VERSION`. These constants are *cache-key inputs*: bumping one deliberately
 invalidates the relevant generation cache. (`MCP_SCHEMA_VERSION` lives in the runtime plane:
 `agentic_mcp_server/mcp/tool_schemas/base.py`.)
@@ -36,13 +37,15 @@ Build-plane schemas, all under `services/kb-builder/src/agentic_kb_builder/`:
   git_metadata), `SourceRef` (mirrors `source_item`: uri, version, repo/branch/path/external_id), and
   `NormalizedContent` (source + normalized text + `content_hash`; same source state must hash
   identically on any machine).
-- `domain/wiki_artifacts.py` — `Chunk`, `ConceptDraft`, `SourceBackedFactDraft`,
-  `WikifyGeneration` (the ModelClient response shape), and `WikifyArtifactDraft` with a validator
-  forcing `knowledge_kind` to match the artifact type (chunks/facts are `source_backed`;
-  summaries/concepts are `interpreted`).
-- `domain/graph_artifacts.py` — `FileGraph` (parsed code file: symbols, endpoints, tests,
-  imports, calls), `CodeArtifactDraft` (symbolic `key`, optional snippet + 1-based inclusive
-  `span_start`/`span_end`), `CodeEdgeDraft` (symbolic from/to keys + `CodeEdgeType`).
+- `domain/docify_artifacts.py` (ADR-0023) — `DocArtifactDraft` (one `knowledge_artifact` row,
+  field-identical to the retired `WikifyArtifactDraft`) with a validator forcing `knowledge_kind` to
+  match the artifact type (facts are `source_backed`; summaries/concepts are `interpreted`), and
+  `DocExtractionResult` (the docify pipeline output). Document sources now run through Graphify's LLM
+  doc pipeline behind the `docify` adapter; the artifact ROW shapes are unchanged — only the producer
+  is.
+- `domain/graph_artifacts.py` — the canonical code shapes the Graphify adapter emits:
+  `CodeArtifactDraft` (symbolic `key`, optional snippet + 1-based inclusive `span_start`/`span_end`),
+  `CodeEdgeDraft` (symbolic from/to keys + `CodeEdgeType`), `GraphifyResult` (artifacts + edges).
 - `domain/link_records.py` — `LinkEdgeDraft` (UUID from/to, `LinkerEdgeType` ∈ documents |
   implements | requests | mentions, confidence, `strategy` ∈ deterministic | semantic). The
   docstring records the subject-verb-object direction convention.
@@ -179,7 +182,7 @@ local repo's `git log` / `git show` under the workspace root and emits one deter
 artifact per commit (`source_version` = full SHA, `source_uri` = `git:<sha>`). The rendering is
 subject + body + a delimited sorted changed-file list, so the same commit always hashes the same
 and is skipped on rerun. Commit sources are **zero-LLM**: the build runner branches on
-`source_type == "git_metadata"` to write one commit artifact (no wikify, no graphify, no
+`source_type == "git_metadata"` to write one commit artifact (no docify, no graphify, no
 `llm_calls`), still embedded and indexed via the shared deterministic paths. A non-repo workspace
 is valid — the connector returns no sources, never an error. The commit artifact's `acl_teams` is
 the **intersection** of the changed files' source ACLs (`acl-source-visibility.md`): a derivation
@@ -209,8 +212,8 @@ reviewed `sources.yaml` (contract: `docs/contracts/source-config.md`; pinned exa
 The heart of the platform. The product-facing entry point is `agentic_kb_builder/build.py`
 (ADR-0010) — `python -m agentic_kb_builder.build`. It wires connectors → extractors → linker →
 embed → index → validate → activate exactly as `BuildRunner` orchestrates; adopters never call the
-sub-steps. `default_collaborators` are no-cloud: `WikifyGenerator(ChatModelClient.from_env())`
-(local Ollama by default), the `GraphifyGraphifier` AST extractor, a `LocalHashEmbedder`, and the
+sub-steps. `default_collaborators` are no-cloud: `DocExtractor.from_env()` (docify — Graphify's LLM
+doc pipeline, local Ollama by default), the whole-tree Graphify extractor, a `LocalHashEmbedder`, and the
 in-memory `FakeSearchClient` projection. Flags: `--backend {local,production}` (default `local`;
 `production` selects the GitHub/ADO factory of §4), `--no-activate`, `--no-git-metadata`,
 `--allow-large-delta`, `--kb-version`, `--version`. The `git_metadata` connector is appended **last**
@@ -232,7 +235,7 @@ miss is resolved by the unique constraint — the loser aborts rather than doubl
 1. Insert the `kb_build_run` audit row and **commit it immediately** — a failed build still leaves
    an audit trail.
 2. Per source: compute hash → `_is_unchanged()` → skip entirely, or `_process_changed_source()`:
-   upsert `source_item` (on the natural-identity constraint) → `_wikify_gated` → `_graphify_gated`
+   upsert `source_item` (on the natural-identity constraint) → `_docify_gated` → `_graphify_gated`
    (github_code only) → `_embed_gated` per artifact → `indexer.upsert_documents` (a `SearchIndexer`
    Protocol; the real implementation is `agentic_kb_builder/indexing/upsert.py`'s `SearchDocUpserter`).
 3. `_write_pending_edges()` — graphify edges are held until all files in the run are flushed, so
@@ -274,45 +277,59 @@ authoritatively by the evals harness (service boundary), logged as a proxy here.
 **`write_commit.py`** (PR-26) — writes the single deterministic `commit` artifact per
 `git_metadata` source (zero LLM, zero graphify), embedded and indexed via the shared paths.
 
-## 6. Wikify (`services/kb-builder/src/agentic_kb_builder/wikify/`)
+## 6. Docify (`services/kb-builder/src/agentic_kb_builder/docify/`, ADR-0023)
 
-- `chunker.py` — deterministic paragraph-packing chunker, `MAX_CHUNK_CHARS = 4000`; any behavior
-  change must bump `CHUNKER_VERSION` because chunk output feeds the cache key.
-- `infrastructure/azure_openai/model_client.py` — the `ModelClient` Protocol (`model_name`,
-  `model_params_hash`, `generate_wikify(chunks, prompt_version) → WikifyGeneration`). No SDK
-  import anywhere.
-- `generate.py` — `WikifyGenerator.wikify(content)` → drafts. Seed scores: chunks 1.0, facts 0.8,
-  concepts 0.6, summaries 0.5 (authority — interpreted knowledge ranks below source-backed);
-  freshness 1.0 at build time. **Invariant-7 guard**: a `source_backed_fact` whose supporting
-  quote does not appear verbatim in the source text is dropped with a warning — inventions are
-  never stored.
-- `write.py` — `write_wikify_artifacts` inserts drafts as `knowledge_artifact` rows and flushes
+The hand-rolled prose-LLM `wikify` pipeline is retired and deleted. Document sources
+(`github_doc`/`azure_wiki`/`ado_card`) now run through **Graphify's LLM doc pipeline** behind a thin
+`docify` adapter, configured from the same `LLM_*` env as every other model call (Groq/Ollama). The
+artifact ROW shapes are unchanged — only the producer is.
+
+- `extract_fn.py` — `make_graphify_doc_extract(...)` registers the Graphify LLM backend in-process
+  (from the resolved `LLM_*` endpoint) and calls `graphify.llm.extract_files_direct`, returning
+  Graphify's raw doc output.
+- `extractor.py` — `DocExtractor` (with `DocExtractor.from_env()`): `extract(content) →
+  DocExtractionResult`; the runtime-facing seam the build engine injects.
+- `docify_backend.py` — `map_doc_extraction(...)`: a **pure, deterministic, I/O-free** mapper that
+  re-derives our trust contract from Graphify's raw output (it never copies Graphify's labels). A
+  concept whose supporting sentence is a **verbatim substring** of the source text (same
+  whitespace-normalization as the broker's L0 verifier — duplicated here because services may not
+  import each other) becomes a citable `source_backed_fact` carrying the quote; otherwise an
+  `interpreted` `concept`; the document node becomes an `interpreted` `summary`. Seed scores match
+  the retired wikify scores (facts 0.8, concepts 0.6, summaries 0.5 — interpreted ranks below
+  source-backed; freshness 1.0 at build time). **Artifacts only** — no concept→concept edges, because
+  generic relatedness is banned by the relation ontology (`relation-ontology.md`).
+- `write.py` — `write_doc_artifacts` inserts drafts as `knowledge_artifact` rows and flushes
   (ids assigned) but never commits; the runner owns the transaction and records the cache row
   *after* a successful write, so a failed write cannot leave a cache entry pointing at nothing.
 
-## 7. Graphify: the AST extractor + adapter (`services/kb-builder/src/agentic_kb_builder/graphify/`)
+The model call is generation-cache gated (`doc_extract_cache_key`, keyed on
+`DOC_EXTRACT_PROMPT_VERSION`), so an unchanged document makes no model call.
 
-Since PR-21 a real, deterministic Python **AST extractor** *produces* a `FileGraph` from source
-(symbols, imports, calls, endpoints, tests, spans) with zero LLM calls — the strongest leg of
-ADR-0010 / "Design A", and what the `build` CLI's `GraphifyGraphifier` runs. Earlier this package
-only *validated* a hand-written `FileGraph`; that adapter is still the persistence half:
+## 7. Graphify: whole-tree code extraction + adapter (`services/kb-builder/src/agentic_kb_builder/graphify/`)
 
-- `parse.py` — `parse_file_graph(raw)` validates against the `FileGraph` contract; fails loudly.
+Code structure is delegated to the **Graphify library** (ADR-0012/0018), run **whole-tree, once per
+repo** so it resolves cross-file imports/calls/uses natively (the per-file extractor + hand-rolled
+import linker were retired). Zero LLM calls. This package is the thin adapter that re-normalizes
+Graphify's output into our versioned, ACL'd artifacts/edges and re-derives trust ourselves (we never
+copy Graphify's `EXTRACTED` label):
+
+- `graphify_backend.py` — `graphify_tree(files)` materializes the repo's code files to a temp tree,
+  calls the library (`graphify.extract`, `cache_root=root`), and feeds the result to
+  `map_extraction` (pure, hermetically testable). Edge types emitted (all `EXTRACTED`): `defined_in`,
+  `calls`, `imports`, `inherits`, `uses`, `references`. Name-collision call sites are dropped, not
+  fabricated.
+- `span_recovery.py` — Graphify reports only a start line, so we recover each Python symbol's EXACT
+  span (decorators + docstring + body) with a deterministic `ast` pass for citable L2 evidence and a
+  keyword-searchable `search_text` (ADR-0018). Uses `str.split("\n")`, never `splitlines()`.
 - `keys.py` — symbolic keys (`file:{path}`, `sym:{path}::{name}`, `test:{path}::{name}`,
   `endpoint:{path}::{method} {route}`) and `parse_key` to invert them for DB lookup.
-- `to_artifacts.py` — symbols/tests carry the exact snippet and 1-based inclusive line span
-  (L2 evidence = precise text at a source version); `code_file` and `endpoint` are pointer-only
-  (`body_text=None`). Uses `str.split("\n")`, never `splitlines()` (form-feed/unicode separators
-  would corrupt spans).
-- `to_edges.py` — emits `imports`/`exposed_as` at confidence 1.0, `calls`/`tests` at 0.9 (dynamic
-  dispatch and indirect test relationships are less certain).
 - `write.py` — `write_code_artifacts` returns a `(repo, symbolic_key) → uuid` map (paths are
   repo-relative, so the repo is part of the key); `write_code_edges` resolves keys to UUIDs and
   drops unresolved edges with a warning, returning `(inserted, dropped)`.
 
 ## 8. Linker (`services/kb-builder/src/agentic_kb_builder/linker/`)
 
-Connects Wikify concepts to Graphify code. Precision-biased by design — over-linking is the
+Connects Docify concepts to Graphify code. Precision-biased by design — over-linking is the
 brief's explicit failure mode.
 
 - `records.py` — `LinkableArtifact` (the projection the linker works on) + artifact/source type
@@ -681,6 +698,6 @@ Without `--kb-version` it targets the active version. It is read-only over Postg
 3. `services/kb-builder/src/agentic_kb_builder/domain/` — the vocabulary.
 4. `services/kb-builder/src/agentic_kb_builder/application/build_runner.py` top-to-bottom — the
    spine everything hangs on.
-5. One enrichment layer end-to-end (suggest wikify: chunker → generate → write → its tests).
+5. One enrichment layer end-to-end (suggest docify: extract_fn → docify_backend → write → its tests).
 6. `services/kb-builder/tests/integration/test_build_engine.py` — the executable spec for the
    engine's guarantees.

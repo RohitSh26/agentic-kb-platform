@@ -12,7 +12,7 @@ orchestrator and subagent manifests. Not a thin search wrapper.
   service queries the registry through names pinned in
   `docs/contracts/postgres-knowledge-registry.md` and asserted by
   `tests/contract/test_registry_dependency.py`.
-- No build-plane code: no connectors, wikify, graphify, linker, or indexing.
+- No build-plane code: no connectors, docify, graphify, linker, or indexing.
 - Budgets, evidence levels, and request policy are enforced server-side in
   the broker, never by prompts (tool contracts:
   `docs/contracts/mcp-tools-contract.md`).

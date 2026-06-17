@@ -10,7 +10,7 @@
 A knowledge platform that helps AI coding agents plan and execute software work *without* each
 agent re-reading the world on every task. A nightly build ingests code, wikis, docs, and ADO cards
 into a **Postgres Knowledge Registry** (artifacts + graph edges), enriches them with LLM-generated
-semantic knowledge (**Wikify**) and code-structure knowledge (**Graphify**), links the two layers
+semantic knowledge (**Docify**) and code-structure knowledge (**Graphify**), links the two layers
 together (**Linker**), and projects the result into Azure AI Search for retrieval. At runtime, a
 remote **MCP Context Broker** serves that knowledge to a human-approved orchestrator and its
 subagents through one shared, budgeted **Evidence Pack**. The pattern is *not* "many agents with KB
@@ -24,7 +24,7 @@ Build units: `docs/pr-briefs/PR-01`–`PR-33`.
 
 | Plane | What it does | Where it lives | Status |
 |---|---|---|---|
-| **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation + publish gates | `services/kb-builder` | Implemented through PR-33: connectors (local-FS + production GitHub/ADO, ADR-0015) → build engine → wikify → graphify (real AST extractor) → linker (deterministic + cross-domain + candidate→LLM judge) → version-membership invalidation → search indexer → enforcing publish gates; a single `build` CLI (`python -m agentic_kb_builder.build`) drives it end to end |
+| **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation + publish gates | `services/kb-builder` | Implemented through PR-33: connectors (local-FS + production GitHub/ADO, ADR-0015) → build engine → docify (Graphify LLM doc extraction, ADR-0023) → graphify (whole-tree extractor) → linker (deterministic + cross-domain + candidate→LLM judge) → version-membership invalidation → search indexer → enforcing publish gates; a single `build` CLI (`python -m agentic_kb_builder.build`) drives it end to end |
 | **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, trust-aware graph traversal, the verifier ladder + signed receipts, client identity, intent-aware ranking, retrieval ledger | `services/mcp-server` | Implemented (PR-09 server base; PR-10 Context Broker; PR-11 agent manifests + output schemas; PR-13 security hardening: `team_acl_v1` filtering, injection flagging, audit logging; PR-23/24/30/31 the verifier ladder L0→L3 + signed receipts; PR-32 client/app identity + scopes; PR-33 temporal/intent ranking) |
 | **Benchmark layer** | Dev-only eval harness: runs the §13 benchmark cases through the real broker, computes token-cost + golden-query evidence-recall metrics, diffs against a committed baseline | `evals/` | Implemented (PR-12; golden queries PR-25; contracts in `docs/contracts/evals-report.md` + `golden-query-evals.md`) |
 
@@ -114,9 +114,8 @@ projection disagrees with the truth.
 
 **Artifacts** (`knowledge_artifact`) are typed units of knowledge:
 
-- From connectors/chunker: `chunk`
-- From Wikify (LLM): `concept`, `summary`, `source_backed_fact`
-- From Graphify (deterministic): `code_file`, `code_symbol`, `endpoint`, `test`
+- From Docify (Graphify LLM doc extraction, ADR-0023): `concept`, `summary`, `source_backed_fact`
+- From Graphify (deterministic whole-tree extractor): `code_file`, `code_symbol`, `endpoint`, `test`
 - From the MCP runtime (later): `evidence_card`
 
 Each carries `knowledge_kind`: **`interpreted`** (LLM-generated; must rank *below* source-backed
@@ -124,7 +123,7 @@ evidence at retrieval time — generated summaries are never treated as truth) o
 (extracted directly from a source at a version).
 
 **Edges** (`knowledge_edge`) connect artifacts with `edge_type`, `confidence`, `source`
-(wikify|graphify|linker|llm_judge|manual), a `trust_class` (below), `relation_schema_version`, an
+(graphify|linker|llm_judge|manual), a `trust_class` (below), `relation_schema_version`, an
 `evidence` pointer, and the `valid_from_seq`/`invalidated_at_seq` interval. Direction is
 subject-verb-object:
 
@@ -156,18 +155,27 @@ but **never** `EXTRACTED`. The buckets change broker behaviour:
 
 ## The three enrichment layers
 
-- **Wikify** (semantic layer): chunks docs/wiki/cards and asks the model for concepts, summaries,
-  and source-backed facts. Every call goes through the generation cache. Its output is
-  *interpreted* knowledge.
-- **Graphify** (code-structure layer): a real, deterministic Python **AST extractor** (PR-21)
-  parses code at a commit SHA into files, symbols, endpoints, tests, and structural edges — no LLM.
-  (Earlier the adapter only *validated* a hand-written `FileGraph`; the extractor that *produces* one
-  is the strongest leg of ADR-0010 / "Design A".) It is a navigation aid; final evidence is exact
-  snippets at a source version (`span_start`/`span_end` line spans on code artifacts).
+- **Docify** (semantic layer, ADR-0023): routes docs/wiki/cards through Graphify's LLM doc pipeline
+  (`graphify.llm.extract_files_direct`) behind a thin `docify` adapter, configured from the same
+  `LLM_*` env as every other model call. It produces the same artifact shapes as before — `summary`
+  (interpreted), `concept` (interpreted), `source_backed_fact` (source_backed); only the producer
+  changed (hand-rolled prose LLM → Graphify LLM). Trust is re-derived deterministically: a concept
+  whose supporting sentence is a verbatim substring of the source (same whitespace-normalization as
+  the broker's L0 verifier) becomes a citable `source_backed_fact`, otherwise an `interpreted`
+  concept; the document node becomes an interpreted `summary`. Every call goes through the generation
+  cache (no model call on unchanged docs); it writes **artifacts only** (no concept→concept edges —
+  generic relatedness is banned by the relation ontology).
+- **Graphify** (code-structure layer): the Graphify library runs **once per repo** (`graphify_tree`)
+  over code at a commit SHA, resolving cross-file imports/calls/uses natively and yielding files,
+  symbols, endpoints, tests, and structural edges (`defined_in`, `calls`, `imports`, `inherits`,
+  `uses`, `references` — all `EXTRACTED`, `source='graphify'`) — no per-file extractor, no hand-rolled
+  import linker (ADR-0012 / ADR-0018). We still recover exact symbol spans ourselves (Graphify reports
+  only a start line). It is a navigation aid; final evidence is exact snippets at a source version
+  (`span_start`/`span_end` line spans on code artifacts).
 - **Linker** (the bridge): three stages, all precision-biased because over-linking is the explicit
   failure mode.
   1. **Deterministic** (`linker/deterministic.py`): exact, word-boundary textual evidence connecting
-     Wikify concepts to Graphify code. `EXTRACTED`.
+     Docify concepts to Graphify code. `EXTRACTED`.
   2. **Cross-domain deterministic** (`linker/cross_domain.py`, PR-26): zero-LLM, explicit-reference
      only — commit→work-item (`AB#123`/`#123`/`GH-123`), commit→code_file (changed-file path), and
      doc→work-item. A bare incidental number never produces a link. The `commit` artifacts come from
@@ -201,7 +209,7 @@ Concept "User Embeddings"
 
 Contracts live in two layers. *Within* a service, build stages exchange **frozen pydantic
 models** (`extra="forbid"`, explicit `schema_version`), not loose dicts: connector output
-(`NormalizedContent`) and wikify/graphify/linker drafts (`*Draft` models) in
+(`NormalizedContent`) and docify/graphify/linker drafts (`*Draft` models) in
 `agentic_kb_builder/domain/`, and the MCP request/response schemas in
 `agentic_mcp_server/mcp/tool_schemas/`. *Between* the services, the contract is markdown:
 `docs/contracts/` records the registry tables, the search index shape, the Evidence Pack, the
@@ -214,7 +222,7 @@ written/confirmed first, then implemented against it.
 Nothing in the build or (future) tool code imports an Azure SDK directly. Every external dependency
 is a `Protocol` the caller owns:
 
-- `ModelClient` — Azure OpenAI (wikify generation)
+- `ModelClient` — chat model behind `LLM_*` env (docify doc extraction, relationship judge)
 - `Embedder` — embedding endpoint
 - `SearchIndexer` / `SearchClient` — Azure AI Search
   (`agentic_kb_builder/infrastructure/azure_search/azure_search_client.py` is the *only* module

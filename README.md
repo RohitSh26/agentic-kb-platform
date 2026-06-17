@@ -34,7 +34,7 @@ services/ evals/ infra/    Source layout the PRs fill in
 
 ```
 services/kb-builder        Nightly incremental build plane. OWNS the Postgres schema +
-                           Alembic migrations. Connectors, wikify, graphify, linker, indexing.
+                           Alembic migrations. Connectors, docify, graphify, linker, indexing.
 services/mcp-server        Remote MCP Context Broker runtime plane. Auth, telemetry, tool
                            contracts, health. NEVER runs migrations or build-plane code.
 ```
