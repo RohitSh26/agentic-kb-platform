@@ -12,7 +12,8 @@ sources:
     branch: main
     include:
       - "services/**/*.py"
-    exclude:
-      - "**/tests/**"
+      # Tests ARE indexed (no exclude): the BUILD lane (agent writes code) needs a
+      # target's OWN test file in the graph so change_pack can resolve it and run it.
+      # Still zero-LLM — code + test extraction is deterministic.
     auth:
       token_env: GITHUB_TOKEN   # ignored by --backend local (reads local files)

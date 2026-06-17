@@ -430,10 +430,14 @@ uv run --project services/mcp-server python scripts/agent_runner.py \
   "Add input validation to the GitHub connector"
 ```
 
-You approve each delegation (`[a]pprove / [e]dit / [r]eject / [x]abort`). It prints a `run_id` and a
-replay command at the end. The generated code is rough on purpose (small 8B model) — this exercises
-the *plumbing* (right-code retrieval, approval gates, trust, audit), which a stronger model improves
-with zero changes.
+You approve each delegation (`[a]pprove / [e]dit / [r]eject / [x]abort`), or pass `--auto-approve`
+to run unattended. It prints a `run_id` and a replay command at the end.
+
+> **Pick a strong model.** The default `llama-3.1-8b-instant` exercises the *plumbing* but writes
+> rough answers/code. For a real demo set a stronger Groq model first — `export
+> LLM_MODEL=llama-3.3-70b-versatile` — which noticeably sharpens both the cited answers and the
+> generated code, with zero other changes. The **write-code** lane needs the target's test file in
+> the KB, so build with the default `scripts/local-code-sources.yaml` (it indexes tests).
 
 ---
 
