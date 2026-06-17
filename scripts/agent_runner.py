@@ -116,6 +116,9 @@ _DEFAULT_BASE = next((u for k, u in _DEFAULT_BASE_URLS.items() if k in _PROVIDER
 LLM_BASE_URL: str | None = os.environ.get("LLM_BASE_URL") or _DEFAULT_BASE
 LLM_API_KEY: str | None = os.environ.get("LLM_API_KEY")
 LLM_MODEL: str = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
+# Generous completion cap: full-file output plus a reasoning model's <think> preamble needs
+# room, or the provider default truncates the reply before the file blocks land.
+LLM_MAX_TOKENS: int = int(os.environ.get("LLM_MAX_TOKENS", "16000"))
 DATABASE_URL: str | None = os.environ.get("DATABASE_URL")
 
 # ---------------------------------------------------------------------------
@@ -222,6 +225,9 @@ async def _llm_usage(
             {"role": "user", "content": user},
         ],
         temperature=0.3,
+        # Full-file output (and a reasoning model's <think> preamble) needs room — without an
+        # explicit cap the provider default truncates the reply before the file blocks appear.
+        max_tokens=LLM_MAX_TOKENS,
     )
     usage = response.usage
     prompt_tokens = usage.prompt_tokens if usage else 0
