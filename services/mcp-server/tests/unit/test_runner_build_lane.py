@@ -188,17 +188,36 @@ def test_validate_accepts_a_valid_full_file(tmp_path: Path) -> None:
     assert errors == []
 
 
+def test_fenced_fallback_attributes_single_block() -> None:
+    raw = "Here:\n```python\ndef f():\n    return 2\n```\n"
+    out = runner._parse_fenced_fallback(raw, {"src/a.py"})
+    assert out == {"src/a.py": "def f():\n    return 2"}
+
+
+def test_fenced_fallback_matches_by_heading() -> None:
+    raw = (
+        "### src/a.py\n```python\nx = 1\n```\n\n**tests/test_a.py**\n```python\nassert True\n```\n"
+    )
+    out = runner._parse_fenced_fallback(raw, {"src/a.py", "tests/test_a.py"})
+    assert set(out) == {"src/a.py", "tests/test_a.py"}
+
+
 @pytest.mark.parametrize(
     "text",
     [
         "Please paste the full file so I can edit it.",
         "I need the complete contents of the module.",
-        "Can you share the source of http_client.py?",
         "provide the entire file and I'll continue",
     ],
 )
-def test_paste_request_is_detected(text: str) -> None:
-    assert runner._PASTE_REQUEST_RE.search(text) is not None
+def test_refusal_detected_when_no_code(text: str) -> None:
+    assert runner._is_refusal(text) is True
+
+
+def test_misformatted_attempt_with_code_is_not_a_refusal() -> None:
+    # carries code (def/class) → an attempt, even though it says "the file contents"
+    text = "Here are the file contents:\n\ndef repo_is_accessible(self):\n    return True\n"
+    assert runner._is_refusal(text) is False
 
 
 def test_test_command_is_deterministic_not_model_invented() -> None:

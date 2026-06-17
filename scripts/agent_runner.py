@@ -696,12 +696,45 @@ _PLACEHOLDER_RE = re.compile(
 )
 
 
+_FENCE_RE = re.compile(r"```[A-Za-z0-9_+-]*\n(?P<body>.*?)\n?```", re.DOTALL)
+# code indicators: a reply that contains these is an ATTEMPT (possibly mis-formatted), not a
+# refusal — so we never classify it as a "paste the file" ask.
+_CODE_MARKER_RE = re.compile(r"(^|\n)\s*(def |class |import |from \w+ import|@pytest|async def )")
+
+
 def _parse_file_blocks(raw: str) -> dict[str, str]:
     """Parse ``<<<FILE path="...">\\n<content>\\n<<<END_FILE>>>`` blocks → {path: content}."""
     out: dict[str, str] = {}
     for m in _FILE_BLOCK_RE.finditer(raw):
         out[m.group("path").strip()] = m.group("body")
     return out
+
+
+def _parse_fenced_fallback(raw: str, writable: set[str]) -> dict[str, str]:
+    """Fallback when the model emits natural ```fenced blocks instead of the FILE protocol.
+
+    Attribute each fenced code block to a writable file whose path or basename appears in the
+    ~240 chars before the fence (a heading like ``### github_rest.py`` or ``**path**``). If there
+    is exactly one writable file and one fenced block, attribute it directly."""
+    fences = list(_FENCE_RE.finditer(raw))
+    out: dict[str, str] = {}
+    if len(fences) == 1 and len(writable) == 1:
+        return {next(iter(writable)): fences[0].group("body")}
+    for m in fences:
+        pre = raw[max(0, m.start() - 240) : m.start()]
+        for w in writable:
+            if w in pre or w.rsplit("/", 1)[-1] in pre:
+                out[w] = m.group("body")
+                break
+    return out
+
+
+def _is_refusal(raw: str) -> bool:
+    """A 'paste the file' ask is a refusal ONLY when the reply carries no code (judge rule #5).
+
+    Without the code guard, prose that merely mentions 'the file contents' false-fires and turns
+    a mis-formatted but real attempt into a spurious failure."""
+    return bool(_PASTE_REQUEST_RE.search(raw)) and not _CODE_MARKER_RE.search(raw)
 
 
 def _normalise_block_paths(blocks: dict[str, str], workspace: Path) -> dict[str, str]:
@@ -877,13 +910,36 @@ async def _build(
     prompt_tokens += p
     completion_tokens += c
 
-    blocks = _normalise_block_paths(_parse_file_blocks(raw), workspace)
+    def _extract(text: str) -> dict[str, str]:
+        # primary: the FILE protocol; fallback: natural ```fenced blocks attributed to writables
+        b = _normalise_block_paths(_parse_file_blocks(text), workspace)
+        return b or _normalise_block_paths(_parse_fenced_fallback(text, writable), workspace)
+
+    blocks = _extract(raw)
+    if not blocks and not _is_refusal(raw):
+        # The model emits correct CONTENT but is inconsistent about the block FORMAT (~1 in 3
+        # misses it). One terse reformat retry recovers the transient miss without a rescue pile.
+        print("  no FILE blocks parsed — one reformat retry")
+        retry_user = (
+            "Your previous reply was not in the required format. Re-emit your change using EXACTLY "
+            "the block protocol, nothing else:\n\n"
+            '<<<FILE path="<one of the writable paths>">\n<complete file content>\n'
+            "<<<END_FILE>>>\n\n"
+            f"WRITABLE files:\n{writable_list}\n\nYour previous reply:\n{raw[:6000]}"
+        )
+        raw, p, c = await _llm_usage(
+            llm_client, impl_system, retry_user, label="implementer.reformat"
+        )
+        prompt_tokens += p
+        completion_tokens += c
+        blocks = _extract(raw)
     if not blocks:
-        if _PASTE_REQUEST_RE.search(raw):
+        if _is_refusal(raw):
             print("\n  FAILURE: the model asked for file contents instead of writing files —")
             print("  context supply is the broker's job, so M1 did not hold. Aborting.")
         else:
             print("\n  FAILURE: the implementer returned no FILE blocks (format failure).")
+        print(textwrap.indent(f"model said (first 600 chars):\n{raw[:600]}", "    "))
         return 1
     blocks, errors = _validate_file_blocks(blocks, writable, workspace)
     for e in errors:
@@ -951,7 +1007,7 @@ async def _build(
             )
             prompt_tokens += p
             completion_tokens += c
-            nxt = _normalise_block_paths(_parse_file_blocks(raw), workspace)
+            nxt = _extract(raw)
             nxt, fix_errors = _validate_file_blocks(nxt, writable, workspace)
             for e in fix_errors:
                 print(f"  rejected {e}")
