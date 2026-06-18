@@ -14,7 +14,7 @@ from typing import Any
 from agentic_kb_builder.docify.docify_backend import map_doc_extraction
 from agentic_kb_builder.docify.extract_fn import (
     DocExtractFn,
-    make_graphify_doc_extract,
+    make_doc_extract,
     resolve_endpoint,
 )
 from agentic_kb_builder.domain import DocExtractionResult, NormalizedContent
@@ -88,7 +88,7 @@ class DocExtractor:
             return cls(
                 _deferred_failure_fn(error), model_name="docify-unavailable", model_params_hash=""
             )
-        extract_fn = make_graphify_doc_extract(endpoint)
+        extract_fn = make_doc_extract(endpoint)
         model_name = f"{endpoint.provider}:{endpoint.model}"
         model_params_hash = hashlib.sha256(
             f"{model_name}|temp=0|max_tokens={endpoint.max_tokens}|backend=graphify_doc".encode()

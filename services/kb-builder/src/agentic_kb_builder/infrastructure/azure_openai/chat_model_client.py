@@ -29,7 +29,6 @@ import re
 import time
 from typing import Any, cast
 
-import httpx
 from anthropic import AsyncAnthropicFoundry
 from json_repair import repair_json
 from openai import AsyncAzureOpenAI, AsyncOpenAI, BadRequestError
@@ -45,7 +44,10 @@ from agentic_kb_builder.domain.judge_records import (
     JUDGE_TRUST_BUCKETS,
     guard_quote,
 )
-from agentic_kb_builder.infrastructure.azure_openai.llm_endpoint import resolve_endpoint_from_env
+from agentic_kb_builder.infrastructure.azure_openai.llm_endpoint import (
+    llm_http_client,
+    resolve_endpoint_from_env,
+)
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
@@ -156,34 +158,6 @@ def _parse_judgment(raw: str) -> RelationshipJudgment:
         raise ValueError(f"judge JSON did not match the judgment schema: {error}") from error
 
 
-def _llm_http_client() -> httpx.AsyncClient | None:
-    """The httpx client the LLM SDKs should use, or None for the SDK's secure default.
-
-    Behind a corporate TLS-inspecting proxy (e.g. Zscaler) the provider cert chains to the
-    corporate CA, so the call fails with ``CERTIFICATE_VERIFY_FAILED``. The Anthropic / OpenAI
-    SDKs build their httpx client from ``certifi`` and do NOT read ``SSL_CERT_FILE``, so we must
-    pass the trust material EXPLICITLY:
-
-    1. ``LLM_SSL_VERIFY=false`` -> verification DISABLED (insecure; last resort).
-    2. else a CA bundle from ``LLM_CA_CERT`` / ``SSL_CERT_FILE`` / ``REQUESTS_CA_BUNDLE`` ->
-       ``verify=<that bundle>`` so the corporate CA (e.g. ZscalerRootCA.pem) is trusted. THIS is
-       the right fix.
-    3. else None -> the SDK's secure certifi default (TLS never weakened unless opted in).
-    """
-    if os.environ.get("LLM_SSL_VERIFY", "true").strip().lower() in ("0", "false", "no", "off"):
-        logger.warning("event=llm_ssl_verify_disabled msg=TLS-verification-OFF-insecure")
-        return httpx.AsyncClient(verify=False)
-    ca_bundle = (
-        os.environ.get("LLM_CA_CERT")
-        or os.environ.get("SSL_CERT_FILE")
-        or os.environ.get("REQUESTS_CA_BUNDLE")
-    )
-    if ca_bundle:
-        logger.info("event=llm_ca_cert_used path=%s", ca_bundle)
-        return httpx.AsyncClient(verify=ca_bundle)
-    return None
-
-
 class ChatModelClient:
     """ModelClient over an OpenAI-compatible (or Azure OpenAI) chat endpoint."""
 
@@ -221,7 +195,7 @@ class ChatModelClient:
         temperature = float(os.environ.get("LLM_TEMPERATURE", "0"))
         # Shared httpx client (None = SDK default). LLM_SSL_VERIFY=false disables TLS
         # verification for a corporate-proxy environment (insecure, opt-in).
-        http_client = _llm_http_client()
+        http_client = llm_http_client()
         client: AsyncOpenAI | AsyncAzureOpenAI | AsyncAnthropicFoundry
         if endpoint.is_azure:
             client = AsyncAzureOpenAI(

@@ -22,6 +22,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+import httpx
+
+from agentic_kb_builder.structured_logging import get_logger
+
+logger = get_logger(__name__)
+
 # provider -> (default base_url, default api_key, default model) for OpenAI-compatible providers.
 # Public so both the ChatModelClient and the docify adapter share ONE source of truth instead of
 # duplicating the map. ``azure`` is intentionally absent: it resolves via the AZURE_OPENAI_* env.
@@ -153,10 +159,39 @@ def resolve_endpoint_from_env(*, max_tokens_default: int, env_prefix: str = "LLM
     )
 
 
+def llm_http_client() -> httpx.AsyncClient | None:
+    """The httpx client every LLM SDK (OpenAI / Azure / Anthropic) should use, or None for
+    the SDK's secure default.
+
+    Behind a corporate TLS-inspecting proxy (e.g. Zscaler) the provider cert chains to the
+    corporate CA, so the call fails with ``CERTIFICATE_VERIFY_FAILED``. The SDKs build their
+    httpx client from ``certifi`` and do NOT read ``SSL_CERT_FILE``, so we thread the trust
+    material in EXPLICITLY:
+
+    1. ``LLM_SSL_VERIFY=false`` -> verification DISABLED (insecure; last resort).
+    2. else a CA bundle from ``LLM_CA_CERT`` / ``SSL_CERT_FILE`` / ``REQUESTS_CA_BUNDLE`` ->
+       ``verify=<that bundle>`` so the corporate CA (e.g. ZscalerRootCA.pem) is trusted.
+    3. else None -> the SDK's secure certifi default (TLS never weakened unless opted in).
+    """
+    if os.environ.get("LLM_SSL_VERIFY", "true").strip().lower() in ("0", "false", "no", "off"):
+        logger.warning("event=llm_ssl_verify_disabled msg=TLS-verification-OFF-insecure")
+        return httpx.AsyncClient(verify=False)
+    ca_bundle = (
+        os.environ.get("LLM_CA_CERT")
+        or os.environ.get("SSL_CERT_FILE")
+        or os.environ.get("REQUESTS_CA_BUNDLE")
+    )
+    if ca_bundle:
+        logger.info("event=llm_ca_cert_used path=%s", ca_bundle)
+        return httpx.AsyncClient(verify=ca_bundle)
+    return None
+
+
 __all__ = [
     "ANTHROPIC_FOUNDRY_PROVIDER",
     "AZURE_PROVIDER",
     "PROVIDER_DEFAULTS",
     "ModelEndpoint",
+    "llm_http_client",
     "resolve_endpoint_from_env",
 ]

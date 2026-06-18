@@ -140,6 +140,20 @@ tightenings folded into §3–§6 above (shared whitespace-normalization with th
 mapped rows; injectable extractor for hermetic tests; ACL from source_item only; doc edges
 `INFERRED_*`/`AMBIGUOUS` never `EXTRACTED`; idempotency + schema-frozen/no-migration).
 
+## Amendment (2026-06-17): `anthropic_foundry` docs bypass Graphify
+
+Claude hosted on **Azure AI Foundry** speaks the **Anthropic Messages API**, not OpenAI
+`chat/completions`. Graphify has no Anthropic backend and is mediated by the env-driven `BACKENDS`
+registry, so neither our custom provider nor our corporate-CA http client can reach a Foundry-Anthropic
+deployment through it. For the `anthropic_foundry` provider ONLY, `docify` therefore calls Claude
+directly via `AsyncAnthropicFoundry.messages.create` (`docify/extract_fn.py::_make_anthropic_foundry_doc_extract`),
+routed by `make_doc_extract`. The Anthropic path returns the **same node-dict shape** Graphify does, so
+`map_doc_extraction` re-derives trust identically (verbatim-substring ⇒ `source_backed_fact`, else
+`interpreted`); the document is wrapped in `<untrusted_source>` exactly as the Graphify prompt requires;
+and the shared cert-aware `llm_http_client()` carries the Zscaler CA. Every other provider still goes
+through Graphify unchanged. This is the "own a thin wrapper" choice over vendoring Graphify's internals
+(rejected as a maintenance burden).
+
 ## Follow-ups
 
 - Promote Graphify's concept→concept doc relations into the phase-3 candidate table so the LLM judge
