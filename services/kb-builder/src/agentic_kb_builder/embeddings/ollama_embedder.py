@@ -16,8 +16,8 @@ import os
 
 import httpx
 
-from agentic_kb_builder.application.build_runner import EmbeddingResult
 from agentic_kb_builder.domain.content_hasher import content_hash
+from agentic_kb_builder.domain.embedding_port import EmbeddingResult
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)

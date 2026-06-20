@@ -25,10 +25,13 @@ field, a source_uri/source_version/content_hash, or a log line. Retrieved page t
 untrusted content and never influences control flow.
 """
 
-import base64
 from typing import Any
 
-from agentic_kb_builder.connectors.http_client import AsyncHttpClient, HttpFetchError
+from agentic_kb_builder.connectors.http_client import (
+    AsyncHttpClient,
+    HttpFetchError,
+    ado_basic_auth_header,
+)
 from agentic_kb_builder.domain.source_config import AzureWikiSourceSpec
 from agentic_kb_builder.domain.source_records import SourceRef
 from agentic_kb_builder.structured_logging import get_logger
@@ -36,18 +39,6 @@ from agentic_kb_builder.structured_logging import get_logger
 logger = get_logger(__name__)
 
 _API_VERSION = "7.1"
-
-
-def _basic_auth_header(token: str | None) -> str | None:
-    """ADO PAT auth: HTTP Basic with empty username and the PAT as the password.
-
-    Returns ``Basic base64(":" + token)`` — the raw token is encoded here and only
-    here; it is never logged and never stored on a SourceRef.
-    """
-    if not token:
-        return None
-    encoded = base64.b64encode(f":{token}".encode()).decode("ascii")
-    return f"Basic {encoded}"
 
 
 class AdoWikiBackend:
@@ -81,7 +72,7 @@ class AdoWikiBackend:
     def _new_client(self) -> AsyncHttpClient:
         return AsyncHttpClient(
             base_url=self._base_url,
-            auth_header=_basic_auth_header(self._token),
+            auth_header=ado_basic_auth_header(self._token),
             transport=self._transport,
         )
 

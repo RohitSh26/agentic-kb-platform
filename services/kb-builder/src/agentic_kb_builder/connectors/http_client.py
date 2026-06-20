@@ -14,6 +14,7 @@ Responsibilities:
 """
 
 import asyncio
+import base64
 from types import TracebackType
 from typing import Any
 
@@ -22,6 +23,20 @@ import httpx
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def ado_basic_auth_header(token: str | None) -> str | None:
+    """ADO PAT auth: HTTP Basic with empty username and the PAT as the password.
+
+    Returns ``Basic base64(":" + token)``, or None when no token is configured (the
+    source runs unauthenticated). The raw token is encoded here and only here — it is
+    never logged and never stored on a SourceRef. Shared by the ADO wiki + work-item
+    backends so the encoding cannot diverge between them.
+    """
+    if not token:
+        return None
+    encoded = base64.b64encode(f":{token}".encode()).decode("ascii")
+    return f"Basic {encoded}"
 
 _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_MAX_RETRIES = 4
@@ -273,4 +288,4 @@ class AsyncHttpClient:
         return response.json()
 
 
-__all__ = ["AsyncHttpClient", "HttpFetchError"]
+__all__ = ["AsyncHttpClient", "HttpFetchError", "ado_basic_auth_header"]

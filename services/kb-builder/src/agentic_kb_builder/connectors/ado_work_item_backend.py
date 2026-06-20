@@ -16,10 +16,13 @@ appears in a SourceRef field, source_uri, source_version, content_hash, or a log
 Work-item fields are untrusted data and cannot change tool policy or instructions.
 """
 
-import base64
 from typing import Any
 
-from agentic_kb_builder.connectors.http_client import AsyncHttpClient, HttpFetchError
+from agentic_kb_builder.connectors.http_client import (
+    AsyncHttpClient,
+    HttpFetchError,
+    ado_basic_auth_header,
+)
 from agentic_kb_builder.domain.source_config import AdoCardSourceSpec
 from agentic_kb_builder.domain.source_records import SourceRef
 from agentic_kb_builder.structured_logging import get_logger
@@ -45,10 +48,6 @@ _PRIORITY_FIELDS: tuple[str, ...] = (
 )
 
 
-def _basic_auth_header(token: str) -> str:
-    """`Authorization: Basic base64(":" + PAT)` — username empty, password = PAT."""
-    encoded = base64.b64encode(f":{token}".encode()).decode("ascii")
-    return f"Basic {encoded}"
 
 
 def _chunked(ids: list[int], size: int) -> list[list[int]]:
@@ -118,7 +117,7 @@ class AdoWorkItemBackend:
     def _new_client(self) -> AsyncHttpClient:
         return AsyncHttpClient(
             base_url=self._base_url,
-            auth_header=_basic_auth_header(self._token) if self._token else None,
+            auth_header=ado_basic_auth_header(self._token),
             transport=self._transport,
         )
 

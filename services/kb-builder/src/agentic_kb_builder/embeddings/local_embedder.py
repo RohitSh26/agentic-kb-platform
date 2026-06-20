@@ -7,8 +7,8 @@ the same vector, on any machine. Real semantic vectors come from the Azure/Ollam
 in production; this keeps the local build cost-free and reproducible.
 """
 
-from agentic_kb_builder.application.build_runner import EmbeddingResult
 from agentic_kb_builder.domain.content_hasher import content_hash
+from agentic_kb_builder.domain.embedding_port import EmbeddingResult
 
 _DIMS = 8
 

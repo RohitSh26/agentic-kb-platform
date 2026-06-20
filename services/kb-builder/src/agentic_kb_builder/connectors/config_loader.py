@@ -87,17 +87,14 @@ def load_source_config(path: str | Path) -> SourceConfig:
     except ValidationError as exc:
         raise SourceConfigError(_format_validation_error(config_path, data, exc)) from exc
     counts = Counter(spec.type for spec in config.sources)
+    # Generic per-type breakdown: a new SourceType needs no edit here (Open/Closed).
+    by_type = " ".join(f"{t}={n}" for t, n in sorted(counts.items()))
     logger.info(
-        "event=source_config_loaded path=%s sources=%d enabled=%d "
-        "github_code=%d github_doc=%d azure_wiki=%d ado_card=%d git_metadata=%d",
+        "event=source_config_loaded path=%s sources=%d enabled=%d by_type=%s",
         config_path,
         len(config.sources),
         sum(1 for spec in config.sources if spec.enabled),
-        counts["github_code"],
-        counts["github_doc"],
-        counts["azure_wiki"],
-        counts["ado_card"],
-        counts["git_metadata"],
+        by_type or "none",
     )
     return config
 

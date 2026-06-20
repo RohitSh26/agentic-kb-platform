@@ -16,9 +16,9 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agentic_kb_builder.application.build_runner import Embedder, EmbeddingResult
 from agentic_kb_builder.application.cache_gates import EmbeddingCacheGate
 from agentic_kb_builder.domain.content_hasher import content_hash
+from agentic_kb_builder.domain.embedding_port import Embedder, EmbeddingResult
 from agentic_kb_builder.embeddings.ollama_embedder import OllamaEmbedder
 from agentic_kb_builder.infrastructure.postgres.models import KnowledgeArtifact
 from agentic_kb_builder.linker.semantic import ScoredArtifact

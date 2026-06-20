@@ -33,6 +33,7 @@ from agentic_kb_builder.domain import (
     NormalizedContent,
 )
 from agentic_kb_builder.domain.content_hasher import content_hash
+from agentic_kb_builder.domain.embedding_port import Embedder
 from agentic_kb_builder.domain.schema_versions import (
     DOC_EXTRACT_PROMPT_VERSION,
     OUTPUT_SCHEMA_VERSION,
@@ -65,21 +66,6 @@ class DocExtractor(Protocol):
     def model_params_hash(self) -> str: ...
 
     async def extract(self, content: NormalizedContent) -> DocExtractionResult: ...
-
-
-@dataclass(frozen=True)
-class EmbeddingResult:
-    """The vector is persisted in embedding_cache so the Search index stays
-    rebuildable from Postgres without re-embedding (invariant 1/4)."""
-
-    embedding_hash: str
-    vector: list[float]
-
-
-class Embedder(Protocol):
-    embedding_model: str
-
-    async def embed(self, text: str) -> EmbeddingResult: ...
 
 
 class SearchIndexer(Protocol):

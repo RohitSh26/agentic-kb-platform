@@ -6,8 +6,6 @@ from agentic_kb_builder.application.active_version import (
 from agentic_kb_builder.application.build_runner import (
     BuildRunner,
     DocExtractor,
-    Embedder,
-    EmbeddingResult,
     SearchIndexer,
 )
 from agentic_kb_builder.application.cache_gates import (
@@ -22,6 +20,7 @@ from agentic_kb_builder.application.publish_gates import (
     compose_gates,
     make_publish_gate_validator,
 )
+from agentic_kb_builder.domain.embedding_port import Embedder, EmbeddingResult
 
 __all__ = [
     "ALLOWED_EDGE_TYPES",
