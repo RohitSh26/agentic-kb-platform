@@ -86,7 +86,10 @@ SYSTEM_PROMPT = (
     "files. The KB points you at the right place; the file gives exact truth.\n\n"
     "You have a limited number of kb_search calls — make each one count, then proceed. "
     "When you cite, use the source path. Finish with a short, direct answer (and a Sources "
-    "line). Do not invent files, symbols, or APIs you have not seen."
+    "line). Do not invent files, symbols, or APIs you have not seen.\n\n"
+    "WHENEVER you create or edit code, run the `lint` tool on that file and fix anything it "
+    "reports (edit_file again) BEFORE you finish — this is the repo's pre-commit standard. Do not "
+    "end the task with lint issues outstanding."
 )
 
 # The baseline (--no-kb): a plain agent with native tools only and no knowledge base. Used to
@@ -232,6 +235,24 @@ def run_tests(path: str) -> str:
     return (proc.stdout + "\n" + proc.stderr).strip()[-2000:]
 
 
+def lint(path: str) -> str:
+    """Run ruff (the repo's pre-commit linter) with auto-fix on a file, then report what is left.
+
+    Auto-fixable issues (e.g. unused imports) are fixed in place; anything ruff cannot fix
+    automatically (e.g. a line too long) is reported so the agent must edit_file to fix it before
+    finishing. `ruff` is on PATH inside the project's uv venv that launches this agent."""
+    target = _safe(path)
+    proc = subprocess.run(
+        ["ruff", "check", "--fix", str(target)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    out = (proc.stdout + proc.stderr).strip()
+    return out[-2000:] if out else "ruff: clean (no issues remaining)"
+
+
 # --------------------------------------------------------------------------- tool schemas
 
 _FILE_TOOLS = [
@@ -285,6 +306,19 @@ _FILE_TOOLS = [
     {
         "name": "run_tests",
         "description": "Run `pytest <path> -q` and return the output tail.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "lint",
+        "description": (
+            "Run the repo linter (ruff, auto-fix) on a file you created or edited. Auto-fixable "
+            "issues are fixed; anything left is reported and you MUST edit_file to fix it. Always "
+            "lint code you wrote before finishing."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {"path": {"type": "string"}},
@@ -474,7 +508,7 @@ async def run_task(task: str, *, use_kb: bool = True) -> int:
                         file_reads += 1
                     fn = {"read_file": read_file, "read_full": read_full,
                           "list_files": list_files, "edit_file": edit_file,
-                          "run_tests": run_tests}[name]
+                          "run_tests": run_tests, "lint": lint}[name]
                     out = str(fn(**args))
                     print(f"  · {name}({', '.join(f'{k}={v!r}'[:60] for k, v in args.items())})")
             except Exception as exc:  # a bad tool call must inform the model, not crash the run
