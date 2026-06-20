@@ -205,15 +205,20 @@ def list_files(directory: str = ".") -> str:
 
 
 def edit_file(path: str, old_str: str, new_str: str) -> str:
+    """Replace old_str with new_str (old_str must match exactly once). An empty old_str writes
+    new_str as the whole file — which CREATES the file (and parent dirs) if it does not exist."""
     target = _safe(path)
     try:
         body = target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        body = ""  # creating a new file
     except OSError as exc:
         return f"error: {exc}"
     if old_str and body.count(old_str) != 1:
         return f"error: old_str must match exactly once (found {body.count(old_str)})."
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(body.replace(old_str, new_str) if old_str else new_str, encoding="utf-8")
-    return f"edited {path}"
+    return f"{'edited' if body else 'created'} {path}"
 
 
 def run_tests(path: str) -> str:
