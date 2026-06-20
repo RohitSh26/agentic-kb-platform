@@ -81,7 +81,7 @@ def _load_dotenv() -> None:
     once, at module load — loading .env later would leave them unset. Existing shell env wins
     (we never overwrite a key already present), and inline `# comments` and quotes are stripped.
     """
-    env_path = Path(__file__).parent.parent / ".env"
+    env_path = Path(__file__).resolve().parent.parent / ".env"
     if not env_path.exists():
         return
     for raw in env_path.read_text().splitlines():
@@ -135,15 +135,6 @@ DATABASE_URL: str | None = os.environ.get("DATABASE_URL")
 # Load agent manifests (system prompts) — strip YAML frontmatter
 # ---------------------------------------------------------------------------
 _AGENTS_DIR = Path(__file__).parent.parent / "agents"
-# Manifests whose instruction bodies the runner loads as system prompts. The BUILD lane
-# uses `implementation`; the EXPLAIN lane uses the orchestrator manifest.
-_KNOWN_SUBAGENTS = [
-    "delivery_planner",
-    "pr_planner",
-    "implementation",
-    "test_layer",
-    "code_reviewer",
-]
 _EXPAND_BUDGET = 4000
 _MAX_CARDS_IN_PROMPT = 40
 # EXPLAIN lane: open the top span from up to this many DISTINCT files (depth knob).
@@ -169,8 +160,10 @@ def _load_manifest(name: str) -> str:
     return raw
 
 
+# Only these two manifests are read: the orchestrator (EXPLAIN lane) and the implementation
+# specialist (BUILD lane). The other role manifests are loaded on demand if a lane ever needs them.
 _ORCHESTRATOR_PROMPT = _load_manifest("orchestrator")
-_SUBAGENT_PROMPTS: dict[str, str] = {name: _load_manifest(name) for name in _KNOWN_SUBAGENTS}
+_IMPLEMENTATION_PROMPT = _load_manifest("implementation")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -948,7 +941,9 @@ async def _build(
 
     files = resolved.all_files
     test_file = resolved.primary_test
-    assert test_file is not None  # missing_test guard above guarantees this
+    if test_file is None:  # missing_test guard guarantees this; explicit (asserts are -O-stripped)
+        print("\n  context_pack_failed: no test file resolved.")
+        return 1
     # Blast radius for WRITES: target + the primary test only. Dependencies are read-only context
     # (judge rule). The model sees deps but may not modify them.
     writable = set(resolved.target + resolved.test[:1])
@@ -957,7 +952,7 @@ async def _build(
     print(f"  writable (target + test): {sorted(writable)}")
 
     # --- 3. implementer returns COMPLETE updated files (full-file contract) ---------------
-    impl_system = _SUBAGENT_PROMPTS.get("implementation", "") + "\n" + _IMPLEMENTER_FILE_RULES
+    impl_system = _IMPLEMENTATION_PROMPT + "\n" + _IMPLEMENTER_FILE_RULES
     writable_list = "\n".join(f"  - {p}" for p in sorted(writable))
     impl_user = (
         f"Task: {task}\n\n"
