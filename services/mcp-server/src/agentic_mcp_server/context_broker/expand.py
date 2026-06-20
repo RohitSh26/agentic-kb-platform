@@ -26,6 +26,7 @@ import uuid
 from fastmcp.exceptions import ToolError
 
 from agentic_mcp_server.auth.rbac import Requester
+from agentic_mcp_server.context_broker.constants import MSG_NO_ACTIVE_VERSION, NO_RUN_SENTINEL
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.error_ledger import write_error_event
 from agentic_mcp_server.context_broker.retrieval import (
@@ -49,7 +50,6 @@ from agentic_mcp_server.telemetry.audit import audit_context_access
 logger = logging.getLogger(__name__)
 
 _TOOL_NAME = "context.expand"
-_NO_RUN_SENTINEL = "-"
 # Cap the number of connected cards returned, not just the token budget. BFS order is
 # closest-first, so the top _MAX_EXPAND_CARDS are the nearest neighbours — an agent needs
 # the immediate neighbourhood, not the whole 2-hop frontier (which bloated read_pack and
@@ -134,7 +134,7 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
             subject=requester.subject,
             query_text=str(request.seed_artifact_ids),
         )
-        raise ToolError("no active kb_version; the knowledge base has not been built yet")
+        raise ToolError(MSG_NO_ACTIVE_VERSION)
     kb_version = active.kb_version
     build_seq = active.build_seq
 
@@ -244,7 +244,7 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
     )
 
     # Determine run_id for ledger row.
-    run_id = pack.run_id if pack is not None else _NO_RUN_SENTINEL
+    run_id = pack.run_id if pack is not None else NO_RUN_SENTINEL
     pack_id_for_ledger = uuid.UUID(pack.context_pack_id) if pack is not None else None
 
     # Build observability details (best-effort).

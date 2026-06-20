@@ -12,6 +12,7 @@ import uuid
 from fastmcp.exceptions import ToolError
 
 from agentic_mcp_server.auth.rbac import Requester
+from agentic_mcp_server.context_broker.constants import MSG_NO_ACTIVE_VERSION
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.error_ledger import write_error_event
 from agentic_mcp_server.context_broker.retrieval import (
@@ -98,7 +99,7 @@ async def create_pack(
             run_id=request.run_id,
             query_text=query,
         )
-        raise ToolError("no active kb_version; the knowledge base has not been built yet")
+        raise ToolError(MSG_NO_ACTIVE_VERSION)
     kb_version = active.kb_version
 
     cards, _ = await retrieve_cards(

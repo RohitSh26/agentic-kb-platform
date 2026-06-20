@@ -5,7 +5,6 @@ exist at this boundary without a versioned schema.
 """
 
 import logging
-import os
 
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
@@ -15,7 +14,7 @@ from starlette.responses import JSONResponse
 
 from agentic_mcp_server.auth import select_verifier
 from agentic_mcp_server.auth.client_identity import ClientRegistry, parse_client_registry
-from agentic_mcp_server.config import SERVER_NAME, load_config
+from agentic_mcp_server.config import SERVER_NAME, env_flag, load_config
 from agentic_mcp_server.context_broker.budgets import BudgetPolicy, parse_agent_allowances
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps, BrokerSettings
 from agentic_mcp_server.health import health
@@ -94,7 +93,7 @@ def create_app() -> FastMCP:
     # entailment client (built from ENTAIL_LLM_* env, ollama by default). Unset ⇒ the server
     # stays LLM-free and an "L3" request is dropped from verifier_levels_run (provenance-only).
     entailment_client: EntailmentClient | None = None
-    if os.environ.get("MCP_ENABLE_ENTAILMENT", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if env_flag("MCP_ENABLE_ENTAILMENT"):
         from agentic_mcp_server.infrastructure.entailment.ollama_client import (
             OllamaEntailmentClient,
         )

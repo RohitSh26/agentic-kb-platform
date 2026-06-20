@@ -49,7 +49,7 @@ class ServerConfig:
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
-def _env_flag(name: str) -> bool:
+def env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUTHY
 
 
@@ -68,7 +68,7 @@ def load_config() -> ServerConfig:
         entra_audience=os.environ["MCP_ENTRA_AUDIENCE"],
         agent_allowances_json=os.environ.get("MCP_AGENT_ALLOWANCES"),
         client_registry_json=os.environ.get("MCP_CLIENT_REGISTRY"),
-        local_dev_auth=_env_flag("MCP_LOCAL_DEV_AUTH"),
+        local_dev_auth=env_flag("MCP_LOCAL_DEV_AUTH"),
         local_dev_subject=os.environ.get("MCP_LOCAL_DEV_SUBJECT", DEFAULT_LOCAL_DEV_SUBJECT)
         or DEFAULT_LOCAL_DEV_SUBJECT,
         local_dev_teams=os.environ.get("MCP_LOCAL_DEV_TEAMS", DEFAULT_LOCAL_DEV_TEAMS),

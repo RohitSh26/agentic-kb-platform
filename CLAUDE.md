@@ -104,6 +104,7 @@ When working in the matching area, the relevant rule file applies:
 - @.claude/rules/token-budgets.md — budget numbers (`services/mcp-server`, `evals`)
 - @.claude/rules/connectors.md — connectors & incremental build (`services/kb-builder`)
 - @.claude/rules/python.md — Python style & stack (all `src/`)
+- @.claude/rules/code-quality.md — SOLID/DRY/YAGNI charter & patterns (all `src/`)
 
 ## Definition of done (per PR)
 

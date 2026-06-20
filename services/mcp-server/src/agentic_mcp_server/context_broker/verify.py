@@ -49,6 +49,7 @@ from fastmcp.exceptions import ToolError
 from agentic_mcp_server.auth.client_identity import ClientIdentity
 from agentic_mcp_server.auth.rbac import Requester, acl_admits
 from agentic_mcp_server.context_broker.claim_ledger import adjudicate_typed_fact
+from agentic_mcp_server.context_broker.constants import MSG_NO_ACTIVE_VERSION, NO_RUN_SENTINEL
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.entailment import (
     REASON_ENTAILMENT_UNSUPPORTED,
@@ -82,9 +83,6 @@ from agentic_mcp_server.mcp.tool_schemas.verification import (
 logger = logging.getLogger(__name__)
 
 _TOOL_NAME = "context.verify_answer"
-# Verification is not run-scoped (it carries an answer_id, not a run_id), so it
-# uses the same non-run ledger sentinel as graph lookups.
-NO_RUN_SENTINEL = "-"
 
 # Stable failed_reason codes (ids/outcomes only — never answer/evidence text).
 REASON_NOT_FOUND = "evidence_not_found"
@@ -534,7 +532,7 @@ async def verify_answer(
                 subject=requester.subject,
                 query_text=request.answer_id,
             )
-            raise ToolError("no active kb_version; the knowledge base has not been built yet")
+            raise ToolError(MSG_NO_ACTIVE_VERSION)
         active_version = active.kb_version
 
         # null graph_version ⇒ active; a pinned version must equal the served

@@ -102,7 +102,7 @@ def _card_summary(body: str, max_chars: int = 280) -> str:
     return first_line[:max_chars]
 
 
-def _readable_path(source_uri: str) -> str:
+def readable_path(source_uri: str) -> str:
     """Best-effort repo-relative path from a source_uri, for a human citation.
 
     github://owner/repo/<path> -> <path>; other schemes fall back to the part after '://'.
@@ -121,7 +121,7 @@ def display_citation(artifact: ArtifactRow) -> str:
     handle) so a model never needs to surface a UUID in prose. Symbol-shaped artifacts get
     ``path:symbol``; files/docs get the path alone.
     """
-    path = _readable_path(artifact.source_uri)
+    path = readable_path(artifact.source_uri)
     title = (artifact.title or "").strip()
     if artifact.artifact_type in ("code_symbol", "endpoint") and title:
         return f"{path}:{title}" if path else title

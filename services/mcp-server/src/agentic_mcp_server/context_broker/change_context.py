@@ -20,8 +20,9 @@ import time
 import uuid
 
 from agentic_mcp_server.auth.rbac import Requester
+from agentic_mcp_server.context_broker.constants import MSG_NO_ACTIVE_VERSION
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
-from agentic_mcp_server.context_broker.retrieval import _readable_path
+from agentic_mcp_server.context_broker.retrieval import readable_path
 from agentic_mcp_server.domain.token_budget import estimate_tokens
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_version
 from agentic_mcp_server.infrastructure.postgres.artifacts import ArtifactRow, fetch_artifacts
@@ -103,7 +104,7 @@ def _path_proximity(target_path: str, candidate_path: str) -> int:
 
 def _file_of(artifact: ArtifactRow) -> str:
     """Repo-relative file path an artifact belongs to (its source file)."""
-    return _readable_path(artifact.source_uri)
+    return readable_path(artifact.source_uri)
 
 
 def _est_tokens_for_file(path: str, by_file_chars: dict[str, int]) -> int:
@@ -184,7 +185,7 @@ async def create_change_pack(
             test_files=[],
             dependency_files=[],
             relevant_symbols=[],
-            notes=["no active kb_version; the knowledge base has not been built yet"],
+            notes=[MSG_NO_ACTIVE_VERSION],
         )
     build_seq = active.build_seq
 

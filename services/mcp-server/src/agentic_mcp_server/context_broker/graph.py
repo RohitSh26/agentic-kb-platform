@@ -17,6 +17,7 @@ from typing import Literal
 from fastmcp.exceptions import ToolError
 
 from agentic_mcp_server.auth.rbac import Requester
+from agentic_mcp_server.context_broker.constants import MSG_NO_ACTIVE_VERSION, NO_RUN_SENTINEL
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
 from agentic_mcp_server.context_broker.error_ledger import write_error_event
 from agentic_mcp_server.context_broker.retrieval import authorization_decision
@@ -38,7 +39,6 @@ from agentic_mcp_server.telemetry.audit import audit_context_access
 logger = logging.getLogger(__name__)
 
 _TOOL_NAME = "graph.get_neighbors"
-NO_RUN_SENTINEL = "-"
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ async def get_neighbors(
                 subject=requester.subject,
                 query_text=str(request.artifact_id),
             )
-            raise ToolError("no active kb_version; the knowledge base has not been built yet")
+            raise ToolError(MSG_NO_ACTIVE_VERSION)
         kb_version = active.kb_version
         build_seq = active.build_seq
 
