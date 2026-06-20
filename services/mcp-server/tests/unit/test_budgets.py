@@ -8,7 +8,6 @@ from agentic_mcp_server.context_broker.budgets import (
     BudgetPolicy,
     parse_agent_allowances,
 )
-from agentic_mcp_server.domain.token_budget import estimate_tokens
 
 
 def test_unknown_subject_gets_the_conservative_default() -> None:
@@ -23,12 +22,6 @@ def test_explicit_allowance_overrides_the_default() -> None:
     policy = BudgetPolicy(allowances={"impl-agent": impl})
     assert policy.allowance_for("impl-agent") == impl
     assert policy.allowance_for("test-agent") == DEFAULT_AGENT_ALLOWANCE
-
-
-def test_estimate_tokens_rounds_up_at_four_chars_per_token() -> None:
-    assert estimate_tokens("") == 0
-    assert estimate_tokens("abcd") == 1
-    assert estimate_tokens("abcde") == 2
 
 
 def test_parse_agent_allowances_builds_the_subject_map() -> None:

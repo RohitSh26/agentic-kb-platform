@@ -85,6 +85,13 @@ class SearchDocUpserter:
             self._session, artifact_ids=[uuid.UUID(doc_id) for doc_id in stale_doc_ids]
         )
         upserted = await self._client.upsert_docs(docs)
+        if upserted != len(docs):
+            # Same contract as upsert_documents: a partial Azure write must fail loudly,
+            # not stamp every doc as indexed — otherwise _record_doc_ids marks rejected
+            # docs as present and the index stays silently incomplete past the gate.
+            raise RuntimeError(
+                f"search reconcile incomplete: {upserted}/{len(docs)} documents accepted"
+            )
         await self._record_doc_ids(docs)
         logger.info(
             "event=indexer_reconciled_missing missing_or_stale=%d upserted=%d",
