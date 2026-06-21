@@ -208,20 +208,31 @@ def list_files(directory: str = ".") -> str:
 
 
 def edit_file(path: str, old_str: str, new_str: str) -> str:
-    """Replace old_str with new_str (old_str must match exactly once). An empty old_str writes
-    new_str as the whole file — which CREATES the file (and parent dirs) if it does not exist."""
+    """Replace old_str with new_str (old_str must match exactly once). An empty old_str ONLY
+    CREATES a brand-new file — it will NOT overwrite an existing one. To ADD code to an existing
+    file, pass a unique nearby line as old_str and include it in new_str."""
     target = _safe(path)
     try:
         body = target.read_text(encoding="utf-8")
     except FileNotFoundError:
-        body = ""  # creating a new file
+        body = ""
     except OSError as exc:
         return f"error: {exc}"
-    if old_str and body.count(old_str) != 1:
+    if not old_str:
+        # Empty old_str is create-only. Refusing to overwrite an existing file is the guardrail:
+        # the model used to wipe whole modules by passing old_str="" to "add" a function.
+        if body:
+            return (
+                "error: file already exists and is non-empty — empty old_str will NOT overwrite "
+                "it. To add code, pass a unique existing line as old_str and repeat it in new_str."
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(new_str, encoding="utf-8")
+        return f"created {path}"
+    if body.count(old_str) != 1:
         return f"error: old_str must match exactly once (found {body.count(old_str)})."
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(body.replace(old_str, new_str) if old_str else new_str, encoding="utf-8")
-    return f"{'edited' if body else 'created'} {path}"
+    target.write_text(body.replace(old_str, new_str), encoding="utf-8")
+    return f"edited {path}"
 
 
 def run_tests(path: str) -> str:
@@ -292,7 +303,12 @@ _FILE_TOOLS = [
     },
     {
         "name": "edit_file",
-        "description": "Replace old_str with new_str in a file (old_str must match exactly once).",
+        "description": (
+            "Replace old_str with new_str in a file (old_str must match exactly once). To ADD code "
+            "to an EXISTING file, set old_str to a unique nearby line and repeat that line in "
+            "new_str. Empty old_str ONLY creates a brand-new file; it will NOT overwrite an "
+            "existing one (that would wipe the file)."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
