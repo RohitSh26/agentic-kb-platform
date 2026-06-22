@@ -7,6 +7,12 @@
 >
 > The runtime plane never builds and never migrates — it only *serves* the last successful active
 > `kb_version` (invariant 5). Building is doc 04; this is using.
+>
+> Note: the worked path below is the **governed** broker path — the one to use when an answer must be
+> citation-grade (provenance receipt). It is no longer the *only* way an agent reads code. Under
+> KB-first/file-fallback (ADR-0025) agents consult the budgeted `kb_search` first and read specific
+> files directly when the KB falls short, with code arriving skeleton-first (ADR-0026). See
+> [07 — What "MCP ready" means](07-what-mcp-ready-means.md) for that model.
 
 The one thing to internalise up front: **auth is fail-closed Entra ID and there is no auth-off
 switch** (CLAUDE.md invariant 6; ADR-0001). Starting the server is trivial; *calling a tool*

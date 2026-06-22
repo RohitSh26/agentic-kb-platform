@@ -6,9 +6,12 @@
 
 ## In one line
 
-The agent now has a **smart librarian** for the codebase. Instead of opening and reading
-whole files (slow, expensive, hit-or-miss), the agent *asks the librarian* for exactly the
-right pieces — and gets back precise, **connected**, **cited** snippets within a token budget.
+The agent now has a **smart librarian** for the codebase. It **asks the librarian first** for
+exactly the right pieces — precise, **connected**, **cited** snippets within a token budget —
+and only opens specific files itself when the librarian comes up short. It keeps its own hands
+(`read`/`grep`/`glob`); the KB is a fast, budgeted helper, **not a gate** (ADR-0025). And when it
+does read code, the code arrives **skeleton-first** — signatures kept, bodies elided — so reading is
+cheap, with the exact body one `read_full` away (ADR-0026).
 
 ## The capabilities (the agent's toolkit)
 
@@ -25,6 +28,18 @@ the token limit), **permission-checked** (only what this agent may see), and **l
 
 (`graph.get_neighbors` and `ledger.list_retrievals` round out the surface: walk one edge of
 the graph, and inspect the audit trail.)
+
+### KB-first, file-fallback (ADR-0025)
+
+These tools are a **preference, not a cage**. For any task the agent asks the KB first; if the KB
+answers (or pins exactly which files matter), it uses and cites it and does **not** re-read what the
+KB supplied. If the KB is missing, partial, or stale — or exact current code is needed for an edit —
+the agent reads those **specific** files directly with its native tools. The one hard rule is a
+budget: `kb_search` carries a per-task call+token cap enforced **in the tool, not the prompt**; spend
+it and the tool says "work with what you have, or read the specific files you still need." Every
+file-fallback is logged as a **KB-gap signal** — a precise pointer to where the KB should improve. The
+governed `create_pack → open_evidence → verify_answer` path (below) stays available for when a claim
+must be citation-grade.
 
 ## Example: an agent gets a real task
 
@@ -52,13 +67,16 @@ The flow — exactly what was verified live:
 
 ## Why this matters (with vs without MCP)
 
-| | Without MCP | With MCP (now) |
+| | Plain agent (grep only) | With the KB (now) |
 |---|---|---|
-| How it gets context | reads/greps whole files, guesses | asks for the exact connected pieces |
-| Token cost | huge (dumps files into the prompt) | small + bounded (~4k for the connected neighborhood, capped at 30 cards) |
-| Did it find the right code? | maybe | follows real `defined_in` / `calls` / `imports` links |
-| Trust | claims may be invented | every claim cited + receipt-verified |
-| Audit | none | every step written to the retrieval ledger |
+| How it gets context | greps/reads whole files, guesses | asks the KB first for the exact connected pieces; reads files only on fallback |
+| Token cost | huge (whole files into the prompt) | small + bounded (~4k for the connected neighborhood, capped at 30 cards); fallback reads arrive skeleton-first (~41% smaller) |
+| Did it find the right code? | maybe | follows real `defined_in` / `calls` / `imports` links — including cross-repo a grep can't reach |
+| Trust | claims may be invented | every claim cited + receipt-verified (on the governed path) |
+| Audit | none | every step written to the retrieval ledger; KB gaps surfaced by fallback logging |
+
+The agent never *loses* its native tools — the KB just makes the common case faster and cheaper, and
+compression makes the fallback read cheap too.
 
 ## So "MCP ready, verified" means
 

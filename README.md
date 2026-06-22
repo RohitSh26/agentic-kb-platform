@@ -76,9 +76,11 @@ See `docs/runbooks/getting-started.md` for the longer walkthrough.
 ## Principles you'll see enforced everywhere
 
 Postgres is truth, Search is a rebuildable projection · the graph lives in Postgres, not a graph DB ·
-token saving is enforced in the broker, not in prompts · the build is incremental and cache-gated · a
-kb_version goes active only after validation · agents reach data only through MCP, and retrieved
-content is untrusted · every agent claim cites evidence IDs.
+token saving is enforced in code, not prompts — the KB is a *preferred-first, budgeted* tool
+(KB-first/file-fallback, ADR-0025) and code reads are *skeleton-first* with `read_full` on demand
+(ADR-0026), not a mandatory broker gate · the build is incremental and cache-gated · a kb_version goes
+active only after validation · agents hold no data-store credentials and retrieved content is untrusted
+· every served claim cites evidence IDs.
 
 The V1 exclusion list (Functions, Event Grid, Service Bus, Redis, API Management, Blob, graph DB,
 SQLite-as-prod, streaming) is guarded by `CLAUDE.md`, a PreToolUse hook, and ADR-0007 — adding any of

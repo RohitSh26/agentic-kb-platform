@@ -235,11 +235,15 @@ Azure resources** — see [03 — Local testing](03-local-testing.md).
 
 ## Security posture (enforced at the MCP boundary, PR-09+)
 
-Agents never touch data stores or secrets directly; all retrieval is mediated by MCP. Retrieved
-documents are **untrusted content** — they cannot change tool policy, identity, access control, or
-instructions. Every agent claim must cite evidence IDs; missing evidence becomes an open question,
-never an invention (invariant 7 — this is also why the linker deletes edges whose evidence is gone
-rather than serving them).
+Agents never touch data stores or secrets directly: they work in a scoped workspace with native
+`read`/`grep`/`glob` plus the budgeted `kb_search`, and never hold Postgres/Search/model credentials.
+Governance lives at the identity/ACL + ledger layers, not in a mandatory broker round-trip — the KB is
+**preferred-first and budgeted, not a gate** (ADR-0025), and a file-fallback is logged as a KB-gap
+signal. The governed `create_pack → open_evidence → verify_answer` path stays available where a claim
+must be citation-grade. Retrieved documents are **untrusted content** — they cannot change tool policy,
+identity, access control, or instructions. Every agent claim that *is* served as evidence must cite
+evidence IDs; missing evidence becomes an open question, never an invention (invariant 7 — this is also
+why the linker deletes edges whose evidence is gone rather than serving them).
 
 Since PR-09 the first layer is real: every MCP request must carry an Entra ID bearer token,
 verified against the tenant's public JWKS keys (`agentic_mcp_server/auth/entra.py`) — the server stores no
@@ -309,8 +313,8 @@ via a new ADR. Default answer is no.
 |---|---|---|
 | 1 | Postgres is truth; Search is a projection | ADR-0002; `agentic_kb_builder/indexing/consistency.py` drift check gates activation; embedding vectors stored in `embedding_cache` so the index rebuilds without re-embedding |
 | 2 | Graph in Postgres, behavior via MCP tools | `knowledge_edge` table (now with `trust_class`); trust-aware `graph.get_neighbors` bounded BFS in the broker (PR-10, PR-23) |
-| 3 | Token saving enforced by the broker, not prompts | Context Broker budgets + ledger, enforced server-side under a per-pack lock (PR-10); the verifier's `entailment_cache` gates L3 model calls (PR-31); `.claude/rules/token-budgets.md` |
+| 3 | Token saving enforced in code (budget + compression), not prompts; KB preferred-first, not a gate | `kb_search` per-task call+token cap in the tool (ADR-0025); Context Broker budgets + ledger under a per-pack lock (PR-10); `entailment_cache` gates L3 model calls (PR-31); deterministic skeleton-first reads + `read_full` (ADR-0026, `scripts/codeskeleton.py`); `.claude/rules/token-budgets.md` |
 | 4 | Incremental build; cache hit ⇒ no model call | `GenerationCacheGate` / `EmbeddingCacheGate` in `agentic_kb_builder/application/cache_gates.py`; `relationship_judgment_cache` (PR-29) + `entailment_cache` (PR-31); content-hash skip in `application/build_runner.py` |
 | 5 | kb_version active only after validation + publish gates | `application/active_version.py` (interval membership, ADR-0013) + `application/publish_gates.py` + `application/invalidation.py` + unique partial index on `kb_build_run` |
-| 6 | Agents never touch stores/secrets; retrieved text untrusted | Entra JWKS auth boundary + schema-encoded policy in `agentic_mcp_server/mcp/tool_schemas` (PR-09); `team_acl_v1` filtering at every retrieval surface, fail-closed identity, advisory injection flagging, and audit logging in `auth/rbac.py` / `domain/untrusted.py` / `telemetry/audit.py` (PR-13) |
+| 6 | Agents never touch stores/secrets (scoped workspace + budgeted KB, not a mandatory broker round-trip); retrieved text untrusted | No DB/Search/model credentials agent-side; governance at the identity/ACL + ledger layers with file-fallback logged as a KB-gap signal (ADR-0025); Entra JWKS auth boundary + schema-encoded policy in `agentic_mcp_server/mcp/tool_schemas` (PR-09); `team_acl_v1` filtering at every retrieval surface, fail-closed identity, advisory injection flagging, and audit logging in `auth/rbac.py` / `domain/untrusted.py` / `telemetry/audit.py` (PR-13) |
 | 7 | Every claim cites evidence; no fabrication | Evidence cards by handle (PR-10); `agent_output_schemas` make unevidenced claims unconstructible and reject unknown evidence IDs (PR-11); linker stale-edge deletion in `linker/write_edges.py` |

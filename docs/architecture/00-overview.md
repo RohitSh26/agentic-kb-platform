@@ -21,6 +21,66 @@ justifies them (see ADR-0007).
   ⇄ MCP Context Broker ⇄ {Postgres truth, Azure AI Search projection, model endpoint}.
 - **Build plane** — refreshes the KB nightly and activates a new `kb_version` only after validation.
 
+### End-to-end flow (at a glance)
+
+The build plane runs nightly and incrementally; the runtime plane serves the last good `kb_version`.
+KB-first/file-fallback (ADR-0025) and code-skeleton compression (ADR-0026) shape the runtime read path.
+
+```
+══════════════ BUILD PLANE (services/kb-builder, nightly, incremental) ══════════════
+
+  SOURCES  github_code · github_doc · azure_wiki · ado_card · git_metadata
+     │  connectors (deterministic: same source state ⇒ same content_hash)
+     ▼
+  1. CONNECT   capture source_uri + source_version + content_hash
+     │            hash unchanged?  ── yes ──▶ SKIP (no LLM, no embed)
+     │ changed only
+     ▼
+  2. DOCIFY    summaries / concepts / source-backed facts (LLM)
+     │            generation_cache hit ⇒ reuse, no LLM call
+     ▼
+  3. GRAPHIFY  code AST → files · symbols · endpoints · imports · calls · tests
+     │            runs only for changed code files
+     ▼
+  4. LINK      structural edges (defined_in, imports) + semantic (embeddings);
+     │            candidate → LLM judge → keep / drop; edges carry trust_class
+     ▼
+  5. EMBED + INDEX   embedding_cache gates every vector
+     ▼
+  POSTGRES (SOURCE OF TRUTH) ───────────▶ Azure AI Search (derived, rebuildable projection)
+  source_item · knowledge_artifact ·       (never truth)
+  knowledge_edge · *_cache · kb_build_run · retrieval_event
+     │
+     ▼
+  6. PUBLISH GATE   validate index/retrieval parity
+                      fail  ──▶ keep serving last good kb_version
+                      pass  ──▶ mark new kb_version ACTIVE
+     │  active kb_version
+═════════════════ RUNTIME PLANE (services/mcp-server) ═══════════════════════════════
+     ▼
+  MCP CONTEXT BROKER   auth + ACL filter · search_text / graph.expand / open_evidence
+                       per-run & per-agent TOKEN BUDGETS · dedupe + rerank → 3–5 cards
+                       writes a retrieval_event for every call
+     │  Evidence Pack (L0/L1 cards first; raw L2+ text only by handle)
+     ▼
+  AGENTS (orchestrator + subagents)   served in VS Code / Copilot / Claude Code
+     triage → route → EXPLAIN or BUILD lane
+     KB-FIRST, FILE-FALLBACK (ADR-0025):
+        ① ask KB → enough?  ─ yes → answer / write code
+                            └ no  → read the specific file (logged as a KB-gap signal)
+     │  any code read (KB span OR fallback file)
+     ▼
+  COMPRESSION — code-skeleton (ADR-0026)   deterministic · reversible · ~41% fewer tokens
+     read_file  ─▶ SKELETON (signatures + types + docstrings kept; bodies "… N lines elided")
+     read_full  ─▶ exact original text (one call away; for verbatim quotes / exact edits)
+     │  orient on skeletons, pull only the bodies it touches
+     ▼
+  VERIFY   context.verify_answer — L0 provenance check + receipt; every claim cites evidence IDs
+```
+
+Two distinct cost levers, kept separate: **broker budgets** (ADR-0025) bound *how much* an agent may
+retrieve; **skeleton compression** (ADR-0026) bounds *how cheaply* each thing it reads is represented.
+
 ## 3. Developer experience
 
 Developers install nothing about the KB. They need: an AI coding client, agent markdown files in the
@@ -28,9 +88,16 @@ repo, MCP config to the remote server, company SSO, and a local repo checkout. N
 DB, Graphify, Search keys, or model keys on developer machines.
 
 Flow: ask orchestrator → orchestrator drafts a plan (goal, subagents, context needed, retrieval
-budget) → human approves/edits → orchestrator calls `context.create_pack` → MCP builds a shared
-Evidence Pack → subagents get role-specific views → subagents request justified deltas within budget
-→ orchestrator synthesizes a phased PR plan with evidence IDs, risks, open questions.
+budget) → human approves/edits → orchestrator seeds a shared Evidence Pack → subagents get
+role-specific views → subagents work **KB-first, file-fallback** (ADR-0025): ask the KB first, and
+only read specific files directly when the KB is missing/partial/stale → orchestrator synthesizes a
+phased PR plan with evidence IDs, risks, open questions.
+
+The KB is a **budgeted helper, not a gate** (ADR-0025): specialists keep their native `read`/`grep`/
+`glob` tools; `kb_search` carries a per-task token/call cap enforced in the tool, not the prompt. Code
+the agent reads arrives **skeleton-first** (ADR-0026) — signatures and types kept, bodies elided — with
+the exact body one `read_full` away. The full broker pipeline (`context.create_pack → open_evidence →
+verify_answer`) remains available as the *governed* path, but is no longer the only way to read code.
 
 ## 4. Knowledge Base design
 
@@ -156,20 +223,46 @@ open_questions. Each evidence card has id, type, title, summary, confidence, aut
 - L3: full source chunk/file excerpt → rare, exact detail only.
 - L4: cross-source synthesized section → orchestrator final synthesis.
 
-## 10. Token-saving controls (enforced in the broker)
+## 10. Token-saving controls
 
-Shared Evidence Pack · evidence cards first · per-run budget · per-agent budget · exact query cache ·
-semantic query cache · role-specific views · evidence IDs/handles · precomputed summaries ·
-AST/symbol extraction · compression cache. Budgets: see `.claude/rules/token-budgets.md`.
+Two independent levers (see ADR-0025 and ADR-0026):
 
-Token policy: subagents may not "think by retrieving." Read the pack first, then request only missing
-context with a reason and an expected decision. A bare `{"query": "..."}` is rejected.
+- **Budget — bound *how much* an agent retrieves (in code, not the prompt).** `kb_search` carries a
+  per-task call + token cap; when the cap is hit the tool stops answering and tells the agent to work
+  with what it has or read the specific files it still needs. The broker also enforces per-run and
+  per-agent budgets, dedupe, and a 3–5 card cap. Supporting mechanisms: shared Evidence Pack · evidence
+  cards first · exact + semantic query cache · role-specific views · evidence IDs/handles · precomputed
+  summaries · AST/symbol extraction. Budgets: see `.claude/rules/token-budgets.md`.
+- **Compression — bound *how cheaply* each read is represented (ADR-0026).** Code the agent reads is
+  returned **skeleton-first**: a deterministic, reversible compressor keeps imports, signatures, type
+  hints, and the docstring, and elides function bodies (`… # N lines elided`) — ~41% fewer tokens
+  overall, 60–80% on large files. The exact original is one `read_full` away. Skeletons are for
+  **thinking, never citing**; verbatim quotes always read the reversible original.
+
+Token policy (ADR-0025): the KB is **preferred-first, not mandatory**. An agent asks the KB first and
+does not re-read what the KB already supplied; it reads specific files directly only when the KB is
+missing, partial, or stale, or exact current code is needed. The cap — not the prompt — guarantees the
+agent stays efficient. (The older "may not think by retrieving / a bare `{\"query\": \"…\"}` is
+rejected" rule still governs the *broker* `context.request_more` path, which requires a justified
+question, but it is no longer the only way to read code.)
 
 ## 11. Agent design (product runtime)
 
-Markdown agent files behave like manifests, not just prompts; server-side MCP policy enforces limits
-even if a prompt fails. Roles: Orchestrator, Implementation, Test Layer, Code Reviewer, Delivery
-Planner, PR Planner. Manifests live in `agents/` with strict output schemas and evidence rules.
+Markdown agent files behave like manifests, not just prompts; server-side policy still enforces the
+real limits even if a prompt fails. Roles: Orchestrator, Implementation, Test Layer, Code Reviewer,
+Delivery Planner, PR Planner. Manifests live in `agents/` with strict output schemas and evidence
+rules (canon, with `.copilot`/`.opencode` renderings kept at parity).
+
+**KB-first, file-fallback (ADR-0025).** Specialists keep their native `read`/`grep`/`glob` tools (and
+`edit` for implementers); the KB is an **optional, budgeted tool**, never a gate that removes the
+model's hands. Each manifest expresses the preference: ask the KB first (`kb_search` / structural
+lookups), use and cite it when it suffices, and read specific files directly only when the KB is
+missing/partial/stale or exact current code is needed. The single enforced restriction is the
+`kb_search` budget (in the tool, not the prompt). A **file-fallback is logged as a KB-gap signal** —
+a precise pointer to where the KB should improve. Code reads are **skeleton-first** (ADR-0026), with
+`read_full` for exact bodies. Server-side budgets, ACL filtering, and the retrieval ledger remain the
+backstop; the broker's governed `create_pack → open_evidence → verify_answer` path stays available for
+when citation-grade provenance is required.
 
 ## 12. Security & access control
 

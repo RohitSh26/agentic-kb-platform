@@ -34,8 +34,9 @@ Onboarding documentation for engineers joining the Agentic KB Platform.
   (happy path = Parts 1–8; the architecture explanation = the Appendix).
 - [07 — What "MCP ready" means](07-what-mcp-ready-means.md): a plain-language explainer (with a worked
   example prompt) of the agent's context toolkit — create_pack, context.expand, open_evidence,
-  verify_answer — and why an agent gets the full connected context cheaply and cited instead of
-  reading whole files.
+  verify_answer — and the **KB-first/file-fallback** model (ADR-0025): the KB is a fast, budgeted helper
+  the agent consults first, not a gate; it keeps its native `read`/`grep` tools, and code reads arrive
+  **skeleton-first** (ADR-0026) with the exact body one `read_full` away.
 - [08 — Run the whole system from scratch](08-run-everything-from-scratch.md): **merged into
   [00](00-getting-started.md)** (real GitHub + ADO sources = Part 9; multi-agent runner = Part 10).
 - [09 — GitHub Copilot CLI against the broker](09-copilot-cli-end-to-end.md): wire the **real
