@@ -46,12 +46,16 @@ from agentic_kb_builder.connectors.config_validator import (
 from agentic_kb_builder.connectors.local_fs import local_fs_backend_factory
 from agentic_kb_builder.connectors.production_factory import production_backend_factory
 from agentic_kb_builder.docify import DocExtractor as RealDocExtractor
+from agentic_kb_builder.domain.durable_output_port import DurableOutputCache
 from agentic_kb_builder.embeddings import LocalHashEmbedder
 from agentic_kb_builder.embeddings.ollama_embedder import OllamaEmbedder
 from agentic_kb_builder.indexing import SearchDocUpserter, make_consistency_validator
 from agentic_kb_builder.infrastructure.azure_openai.chat_model_client import ChatModelClient
 from agentic_kb_builder.infrastructure.azure_search.search_client import SearchClient
 from agentic_kb_builder.infrastructure.local_search import LocalFileSearchClient
+from agentic_kb_builder.infrastructure.postgres.durable_output_cache import (
+    make_durable_output_cache,
+)
 from agentic_kb_builder.infrastructure.postgres.models import KbBuildRun
 from agentic_kb_builder.infrastructure.postgres.session import create_engine, create_session_factory
 from agentic_kb_builder.linker.embedding_similarity import EmbeddingSimilarityProvider
@@ -120,6 +124,7 @@ async def run_build(
     allow_large_delta: bool = False,
     git_metadata: bool = True,
     backend: str = "local",
+    durable_cache: DurableOutputCache | None = None,
 ) -> KbBuildRun:
     """Run one build into Postgres; activate the new kb_version if every publish
     gate passes (docs/contracts/publish-gates.md). allow_large_delta overrides the
@@ -147,6 +152,7 @@ async def run_build(
         indexer=collaborators.indexer,
         similarity=collaborators.similarity,
         judge=collaborators.judge,
+        durable_cache=durable_cache,
     )
     run = await runner.run(connectors)
     logger.info(
@@ -261,6 +267,9 @@ async def _main(args: argparse.Namespace) -> int:
     )
     engine = create_engine()
     factory = create_session_factory(engine)
+    # Crash-durable model-output cache on its OWN engine/connection (ADR-0027), so its
+    # side-commits are independent of the build transaction and survive a build rollback.
+    durable_cache = make_durable_output_cache()
     collaborators: Collaborators | None = None
     try:
         async with factory() as session:
@@ -276,6 +285,7 @@ async def _main(args: argparse.Namespace) -> int:
                 allow_large_delta=args.allow_large_delta,
                 git_metadata=not args.no_git_metadata,
                 backend=args.backend,
+                durable_cache=durable_cache,
             )
             active = await get_active_kb_version(session)
     finally:
@@ -283,6 +293,7 @@ async def _main(args: argparse.Namespace) -> int:
             collaborators.similarity, EmbeddingSimilarityProvider
         ):
             await collaborators.similarity.aclose()
+        await durable_cache.aclose()
         await engine.dispose()
     # Structured log on the build path (rule: no silent build paths); the prints
     # below are the CLI's human-readable summary to stdout, not the audit record.

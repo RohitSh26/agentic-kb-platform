@@ -195,6 +195,14 @@ embedding_cache miss, upsert changed docs to Search. 7. Validate retrieval/index
 - Code graph: `repo + commit_sha + file_path + file_content_hash + graphify_version +
   parser_config_version`.
 
+### Crash durability (ADR-0027)
+The build is one transaction committed at the end, so the artifact-coupled `generation_cache` /
+`embedding_cache` are only as durable as that final commit — a mid-build crash rolls them back and the
+re-run re-pays the model. A **side-committed, content-keyed model-output cache** (`doc_extraction_output`,
+`embedding_output`) persists the *raw* model outputs the moment they are produced, decoupled from
+build-scoped artifacts, so a crashed-and-restarted build re-maps them into a fresh `build_seq` with
+**zero model calls**. Activation stays atomic; the durable cache is pure derived data, never served.
+
 ## 8. MCP Context Broker
 
 The broker is the policy/retrieval/dedupe/evidence/budget layer. Tools:

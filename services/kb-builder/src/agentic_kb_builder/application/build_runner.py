@@ -33,6 +33,7 @@ from agentic_kb_builder.domain import (
     NormalizedContent,
 )
 from agentic_kb_builder.domain.content_hasher import content_hash
+from agentic_kb_builder.domain.durable_output_port import DurableOutputCache
 from agentic_kb_builder.domain.embedding_port import Embedder
 from agentic_kb_builder.domain.schema_versions import (
     DOC_EXTRACT_PROMPT_VERSION,
@@ -125,6 +126,7 @@ class BuildRunner:
         indexer: SearchIndexer,
         similarity: SimilarityProvider | None = None,
         judge: RelationshipJudge | None = None,
+        durable_cache: DurableOutputCache | None = None,
     ) -> None:
         self._session = session
         self._kb_version = kb_version
@@ -134,6 +136,12 @@ class BuildRunner:
         self._embedder = embedder
         self._indexer = indexer
         self._similarity = similarity
+        # Crash-durable model-output cache (ADR-0027). None ⇒ legacy behaviour (paid work
+        # is only as durable as the build's single end-commit). When present, doc-extraction
+        # and embedding outputs are side-committed so a crashed-and-restarted build re-maps
+        # them with zero model calls. The artifact-coupled generation_cache / embedding_cache
+        # gates below are unchanged — this layer sits BENEATH them.
+        self._durable_cache = durable_cache
         # The phase-3B relationship judge (PR-29). None ⇒ no judging this build
         # (candidate generation still runs so the audit set stays current).
         self._judge = judge
@@ -639,8 +647,26 @@ class BuildRunner:
                 empty_event="docify_cache_hit_empty_mapping",
                 source_uri=fetched.source.source_uri,
             )
-        result = await self._doc_extractor.extract(fetched)
-        counters.llm_calls += 1
+        # generation_cache missed in THIS build (a prior crashed build's rows were rolled
+        # back). Before paying the model, try the crash-durable output cache (ADR-0027): a
+        # side-committed extraction output survives a rollback, so a re-run re-maps it with
+        # no LLM call. llm_calls is incremented ONLY on an actual extract.
+        result = None
+        if self._durable_cache is not None:
+            result = await self._durable_cache.get_doc_extraction(cache_key)
+        if result is None:
+            result = await self._doc_extractor.extract(fetched)
+            counters.llm_calls += 1
+            if self._durable_cache is not None:
+                await self._durable_cache.put_doc_extraction(
+                    cache_key=cache_key,
+                    input_hash=fetched.content_hash,
+                    prompt_version=DOC_EXTRACT_PROMPT_VERSION,
+                    model_name=self._doc_extractor.model_name,
+                    model_params_hash=self._doc_extractor.model_params_hash,
+                    output_schema_version=OUTPUT_SCHEMA_VERSION,
+                    result=result,
+                )
         # write_doc_artifacts flushes BEFORE the cache row is recorded (same transaction)
         # so a cache row can never exist without its output artifacts. Docify writes no
         # edges (relation-ontology) — artifacts only.
@@ -678,12 +704,27 @@ class BuildRunner:
         )
         if hit is not None:
             return
-        result = await self._embedder.embed(artifact.body_text)
-        counters.embedding_calls += 1
+        model = self._embedder.embedding_model
+        # embedding_cache missed in THIS build; try the crash-durable vector cache (ADR-0027),
+        # keyed by (text_hash, model) only — the vector is a pure function of text + model, so a
+        # side-committed vector is reusable across builds and artifact identities with no
+        # re-embed. embedding_calls is incremented ONLY on an actual embed.
+        result = None
+        if self._durable_cache is not None:
+            result = await self._durable_cache.get_embedding(
+                text_hash=text_hash, embedding_model=model
+            )
+        if result is None:
+            result = await self._embedder.embed(artifact.body_text)
+            counters.embedding_calls += 1
+            if self._durable_cache is not None:
+                await self._durable_cache.put_embedding(
+                    text_hash=text_hash, embedding_model=model, result=result
+                )
         await self._embedding_gate.record(
             artifact_id=artifact_id,
             text_hash=text_hash,
-            embedding_model=self._embedder.embedding_model,
+            embedding_model=model,
             embedding_hash=result.embedding_hash,
             embedding=result.vector,
         )

@@ -54,8 +54,10 @@ served graph"** (build-scoped, must commit atomically at activation).
      the durability key; the vector is a pure function of text + model). The artifact-scoped
      `embedding_cache` row stays in the main transaction for in-build replay — two keys by design.
    - **judge outputs** — the `relationship_judgment_cache` verdict (relation_type, trust_bucket,
-     supporting_quote, reason) is **already a durable, build-scope-free row**; the only change is to
-     **side-commit its writes**. No new judgment table.
+     supporting_quote, reason) is **already a durable, build-scope-free row**; making it crash-durable
+     needs only that its writes be **side-committed**. **Deferred to a follow-up** (see Follow-ups):
+     PR-35 lands docify + embeddings — the dominant token spend and the longest crash window — while the
+     judge is optional and runs at the very end (smallest exposure). No new judgment table either way.
 
    **Identity-input invariant:** a durable hit is honored only when *every* model-identity input matches
    — `model_name`, `prompt_version`, `model_params_hash`, `output_schema_version` — using the **identical
@@ -118,8 +120,10 @@ served graph"** (build-scoped, must commit atomically at activation).
 
 ## Follow-ups
 
-- PR-35: migration + side-commit cache writer; wire docify, embed, and judge to read/write the durable
-  output-cache; tests for the crash→re-run "zero model calls" guarantee and for activation atomicity.
+- PR-35 (landed): migration + side-commit cache writer; wire **docify + embeddings** to read/write the
+  durable output-cache; tests for the crash→re-run "zero model calls" guarantee and activation atomicity.
+- Follow-up: side-commit the `relationship_judgment_cache` writes so the optional Phase-3B judge is also
+  crash-durable (deferred from PR-35; the judge runs at the very end, so its crash window is small).
 - Update `docs/architecture/00-overview.md` §7/§10 and the invariant-4 enforcement note once landed.
 - Consider a `(model, prompt_version)` pruning job for superseded output-cache rows.
 - Optional later: a per-source progress marker to also skip re-*fetching* unchanged sources on resume.

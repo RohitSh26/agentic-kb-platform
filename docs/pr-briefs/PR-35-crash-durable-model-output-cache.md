@@ -22,10 +22,12 @@ re-run makes zero model calls for already-processed work — while activation st
     created_at, PRIMARY KEY(text_hash, embedding_model))` — **artifact-agnostic** durable vector keyed by
     text+model only. The existing `embedding_cache` row (keyed by `artifact_id, text_hash, model`) stays
     written in the main tx for in-build replay — two keys by design.
-  - **Judge: no new table.** `relationship_judgment_cache` already stores the full verdict durably with
-    no FK into build-scoped tables; the only change is to **side-commit its writes**
-    (`linker/judgment_cache.py` `record(...)` currently writes on the main session).
   - Forward + rollback; idempotent inserts (`ON CONFLICT DO NOTHING`).
+  - **Judge durability is OUT of scope for this PR (deferred follow-up).** `relationship_judgment_cache`
+    already stores the verdict durably with no FK into build-scoped tables; making it crash-durable needs
+    only that its writes be side-committed (`linker/judgment_cache.py` `record(...)` writes on the main
+    session today). Deferred because the judge is optional and runs at the very end (smallest crash
+    window); docify + embeddings are the dominant spend. Tracked as a follow-up task.
 - **Side-commit cache writer** (`application/durable_cache.py`): a small writer with its **own
   `AsyncSession`** (separate engine/connection from the build session) that upserts an output row and
   commits it immediately, so a durable-cache write never depends on the main build transaction and
@@ -71,7 +73,8 @@ re-run makes zero model calls for already-processed work — while activation st
 - [ ] Side-commit writer persists outputs on its own session, independent of the build transaction,
       and disposes the side session/engine in a `finally` (no leaked connection on crash).
 - [ ] Durable keys use the identical model-identity composition as `doc_extract_cache_key`; a
-      prompt/model/schema bump is a guaranteed miss (test). Judge change is side-commit only — no new table.
+      prompt/model/schema bump is a guaranteed miss (test).
+- [ ] Judge durability deferred to a follow-up task (out of this PR's scope, recorded in the ADR).
 - [ ] docify / embed / judge are read-through + write-through against the durable cache.
 - [ ] Crash-after-side-commit test: main tx rolled back (no active version), **and** re-run makes zero
       model calls for already-processed sources (counted).

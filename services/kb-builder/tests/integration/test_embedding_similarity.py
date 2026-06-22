@@ -14,7 +14,7 @@ from alembic.config import Config
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from agentic_kb_builder.application.build_runner import EmbeddingResult
+from agentic_kb_builder.application import EmbeddingResult
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.infrastructure.postgres.models import (
     EmbeddingCache,
