@@ -84,13 +84,14 @@ class SearchIndexer(Protocol):
 
 @dataclass(frozen=True)
 class _CodeUnit:
-    """One current code file collected for the whole-tree graphify pass."""
+    """One current code file collected for the whole-tree graphify pass. The source_item is NOT
+    upserted until the graphify pass, so its content_hash advance commits ATOMICALLY with its
+    artifacts — a failed code write strands nothing (no advanced-hash-without-artifacts)."""
 
+    fetched: NormalizedContent
     path: str
-    text: str
-    source_id: uuid.UUID
-    acl: list[str]
     repo: str
+    changed: bool
 
 
 def _path_of_code_key(key: str) -> str:
@@ -150,9 +151,13 @@ class BuildRunner:
         self._embedding_gate = EmbeddingCacheGate(session)
 
     async def run(self, connectors: Sequence[Connector]) -> KbBuildRun:
-        """Execute one build. The runner owns the session's transactions: the run
-        row is committed up front so the audit record survives a failed build;
-        per-source work is committed only when the whole build succeeds."""
+        """Execute one build. The runner owns the session's transactions: the run row is committed
+        up front (audit survives a failed build), then EACH source's knowledge is committed the
+        moment it is ready (so a crash never discards completed work), and finally the graph
+        finalize + run-completion are committed together. Only ACTIVATION is atomic — a version is
+        served all-or-nothing — so committed-but-unactivated rows from an interrupted build are
+        simply finalized and activated by the next build (the linker/centrality run over all live
+        artifacts)."""
         build_id = await self._start_run()
         # Connector plan up front so a watcher sees the build's shape before the first
         # fetch (count + the source types in play). Additive; cheap — just the configured
@@ -172,8 +177,9 @@ class BuildRunner:
             await self._finish_run(build_id, counters, status="completed")
             await self._session.commit()
         except Exception as error:
-            # discard partial work, then record the failure in a fresh transaction
-            # so the audit row is never lost (no silent failures).
+            # roll back only the UNCOMMITTED tail (the graph finalize); every source already
+            # committed above persists. Then record the failure in a fresh transaction so the
+            # audit row is never lost (no silent failures). The next build finalizes + activates.
             await self._session.rollback()
             error_summary = f"{type(error).__name__}: {error}"
             await self._finish_run(build_id, counters, status="failed", error_summary=error_summary)
@@ -254,25 +260,15 @@ class BuildRunner:
                 fetched = await connector.fetch(ref)
                 counters.sources_seen += 1
                 if fetched.source.source_type == "github_code" and ref.path:
-                    # Code is graphified as ONE whole tree (Graphify resolves cross-file edges
-                    # only when it sees all files), so a single changed file means the whole
-                    # graph is rebuilt; if NOTHING changed the prior graph stands (idempotent).
+                    # Code is graphified as ONE whole tree (Graphify resolves cross-file edges only
+                    # when it sees all files), so a single changed file rebuilds the whole graph; if
+                    # NOTHING changed the prior graph stands (idempotent). Only COLLECT here — the
+                    # source_item is upserted inside the graphify pass so its hash advance and its
+                    # artifacts commit together (an interrupted code write strands nothing).
                     changed = not await self._is_unchanged(fetched)
-                    source_id = (
-                        await self._upsert_source_item(fetched)
-                        if changed
-                        else await self._touch_last_seen(fetched)
-                    )
-                    if source_id is None:
-                        continue
-                    seen_source_ids.add(source_id)
                     code_units.append(
                         _CodeUnit(
-                            path=ref.path,
-                            text=fetched.text,
-                            source_id=source_id,
-                            acl=list(fetched.source.acl_teams),
-                            repo=ref.repo or "",
+                            fetched=fetched, path=ref.path, repo=ref.repo or "", changed=changed
                         )
                     )
                     if changed:
@@ -295,36 +291,46 @@ class BuildRunner:
                     ref.source_uri,
                     fetched.source.source_version,
                 )
-                # Resilience: a single source's failure (e.g. an LLM timeout) must NOT abort the
-                # whole build. Process each changed source inside a SAVEPOINT; on failure roll back
-                # JUST that source so every source already completed stays committed, count the
-                # failure, keep the source's prior generation, and leave its content_hash unadvanced
-                # so the next build retries it (mirrors the per-repo resilience graphify has).
+                # Persist each source's knowledge the MOMENT it is ready: commit per source so a
+                # crash never discards work already done. The end-of-build linker/centrality run
+                # over ALL live artifacts, so a later build finalizes anything an interrupted build
+                # already committed; only ACTIVATION stays atomic (a version serves all-or-nothing).
+                # A failed source is rolled back to the last commit (only that source is lost),
+                # counted, its prior generation kept, and its hash left unadvanced so the next build
+                # retries it — everything already committed stays in the database.
                 try:
-                    async with self._session.begin_nested():
-                        changed_id = await self._process_changed_source(counters, fetched)
+                    changed_id = await self._process_changed_source(counters, fetched)
+                    await self._session.commit()
                     counters.sources_changed += 1
                     seen_source_ids.add(changed_id)
                     changed_source_ids.add(changed_id)
                 except Exception as error:
+                    await self._session.rollback()
                     counters.extractor_failures += 1
                     logger.error(
                         "event=build_source_failed source_uri=%s error=%s",
                         ref.source_uri,
                         f"{type(error).__name__}: {error}",
                     )
-                    # Keep the source SEEN (so the deletion sweep keeps its prior generation)
-                    # without advancing content_hash → it is retried on the next build.
                     prior_id = await self._touch_last_seen(fetched)
                     if prior_id is not None:
+                        await self._session.commit()
                         seen_source_ids.add(prior_id)
         if code_units and any_code_changed:
-            # the whole code graph is regenerated: mark every code source changed so the
-            # supersession sweep retires the prior generation (no duplicate served edges).
+            # The whole code graph is regenerated. graphify upserts each file's source_item (so the
+            # hash advance commits with the artifacts), populates seen/changed (every code file is
+            # superseded since the whole tree is rewritten), then we commit the code graph at once.
+            await self._graphify_code_tree(
+                counters, code_units, code_key_map, seen_source_ids, changed_source_ids
+            )
+            await self._session.commit()  # persist the code graph as soon as it is built
+        elif code_units:
+            # Nothing changed: the prior code graph stands. Keep every code source SEEN (so the
+            # deletion sweep does not retire it) without re-graphifying.
             for unit in code_units:
-                changed_source_ids.add(unit.source_id)
-            counters.sources_changed += len(code_units)
-            await self._graphify_code_tree(counters, code_units, code_key_map)
+                sid = await self._touch_last_seen(unit.fetched)
+                if sid is not None:
+                    seen_source_ids.add(sid)
         return seen_source_ids, changed_source_ids
 
     async def _finalize_graph(
@@ -515,6 +521,8 @@ class BuildRunner:
         counters: _Counters,
         code_units: list[_CodeUnit],
         code_key_map: dict[tuple[str, str], uuid.UUID],
+        seen_source_ids: set[uuid.UUID],
+        changed_source_ids: set[uuid.UUID],
     ) -> None:
         """Build the WHOLE code graph in one Graphify pass (ADR-0012, the way the library is
         meant to be used): run Graphify over every current code file together so it resolves
@@ -528,7 +536,9 @@ class BuildRunner:
         for unit in code_units:
             units_by_repo.setdefault(unit.repo, []).append(unit)
         for repo, units in sorted(units_by_repo.items()):
-            await self._graphify_one_repo(counters, repo, units, code_key_map)
+            await self._graphify_one_repo(
+                counters, repo, units, code_key_map, seen_source_ids, changed_source_ids
+            )
 
     async def _graphify_one_repo(
         self,
@@ -536,9 +546,11 @@ class BuildRunner:
         repo: str,
         units: list[_CodeUnit],
         code_key_map: dict[tuple[str, str], uuid.UUID],
+        seen_source_ids: set[uuid.UUID],
+        changed_source_ids: set[uuid.UUID],
     ) -> None:
         try:
-            result = graphify_tree([(u.path, u.text) for u in units])
+            result = graphify_tree([(u.path, u.fetched.text) for u in units])
             logger.info(
                 "event=code_graph_built repo=%s units=%d artifacts=%d edges=%d",
                 repo, len(units), len(result.artifacts), len(result.edges),
@@ -552,6 +564,23 @@ class BuildRunner:
                 f"{type(error).__name__}: {error}",
             )
             return
+        # Upsert each file's source_item NOW, in the same (uncommitted) transaction as the
+        # artifacts below — so the hash advance and the artifacts commit together. The whole tree
+        # is rewritten, so every file (changed or not) is marked seen+changed: its prior generation
+        # is superseded by the invalidation pass (no duplicate served edges).
+        unit_source_ids: dict[str, uuid.UUID] = {}
+        for unit in units:
+            sid = (
+                await self._upsert_source_item(unit.fetched)
+                if unit.changed
+                else await self._touch_last_seen(unit.fetched)
+            )
+            if sid is None:
+                continue
+            unit_source_ids[unit.path] = sid
+            seen_source_ids.add(sid)
+            changed_source_ids.add(sid)
+            counters.sources_changed += 1
         unit_by_path = {u.path: u for u in units}
         drafts_by_path: dict[str, list] = {}
         for draft in result.artifacts:
@@ -559,14 +588,15 @@ class BuildRunner:
         artifact_ids: list[uuid.UUID] = []
         for path, drafts in drafts_by_path.items():
             unit = unit_by_path.get(path)
-            if unit is None:
-                continue  # an artifact for a path we did not collect (defensive)
+            source_id = unit_source_ids.get(path)
+            if unit is None or source_id is None:
+                continue  # an artifact for a path we did not collect/upsert (defensive)
             key_to_id = await write_code_artifacts(
                 self._session,
-                source_id=unit.source_id,
+                source_id=source_id,
                 kb_version=self._kb_version,
                 valid_from_seq=self._build_seq,
-                acl_teams=unit.acl,
+                acl_teams=list(unit.fetched.source.acl_teams),
                 drafts=drafts,
             )
             counters.artifacts_created += len(key_to_id)

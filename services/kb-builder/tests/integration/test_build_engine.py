@@ -391,6 +391,64 @@ async def test_one_source_failure_is_skipped_not_fatal_and_others_persist(
     assert code
 
 
+class _FailOnSecondDocExtractor(SpyDocExtractor):
+    """Succeeds on the first document, raises on the second — to prove the first is already
+    committed (persisted) by the time the second fails."""
+
+    async def extract(self, content: NormalizedContent) -> DocExtractionResult:
+        self.calls += 1
+        if self.calls >= 2:
+            raise RuntimeError("model timeout on the second doc")
+        return DocExtractionResult(
+            artifacts=(
+                DocArtifactDraft(
+                    artifact_type="summary",
+                    knowledge_kind="interpreted",
+                    title=f"summary of {content.source.path}",
+                    body_text=f"Summary of {content.source.source_uri}",
+                    authority_score=0.5,
+                    freshness_score=1.0,
+                ),
+            )
+        )
+
+
+@requires_db
+async def test_earlier_source_is_persisted_when_a_later_one_fails(session: AsyncSession) -> None:
+    """Incremental persistence: knowledge is committed AS each source completes, so when a later
+    source fails the earlier one is already in the database — not discarded."""
+    uri_a = "https://github.com/o/r/blob/sha1/docs/a.md"
+    uri_b = "https://github.com/o/r/blob/sha1/docs/b.md"
+    refs = [
+        SourceRef(source_type="github_doc", source_uri=uri_a, source_version="sha1",
+                  repo="o/r", path="docs/a.md"),
+        SourceRef(source_type="github_doc", source_uri=uri_b, source_version="sha1",
+                  repo="o/r", path="docs/b.md"),
+    ]
+    texts = {uri_a: "First doc.\n", uri_b: "Second doc.\n"}
+    connector = GitHubDocConnector(FakeBackend(refs, texts))
+    runner = BuildRunner(
+        session,
+        kb_version="v-test.1",
+        doc_extractor=_FailOnSecondDocExtractor(),
+        embedder=SpyEmbedder(),
+        indexer=SpyIndexer(),
+    )
+    run = await runner.run([connector])
+    await session.commit()
+
+    assert run.status == "completed"
+    assert run.extractor_failures == 1
+    # the FIRST doc is persisted (committed before the second was even attempted)...
+    persisted = (
+        await session.execute(select(SourceItem.source_uri).where(SourceItem.is_deleted == False))  # noqa: E712
+    ).scalars().all()
+    assert uri_a in persisted
+    # ...and the SECOND (failed) doc left nothing and is retried next build.
+    assert uri_b not in persisted
+    assert await _count(session, KnowledgeArtifact) >= 1  # the first doc's summary survived
+
+
 class MultiDraftDocExtractor(SpyDocExtractor):
     async def extract(self, content: NormalizedContent) -> DocExtractionResult:
         self.calls += 1
