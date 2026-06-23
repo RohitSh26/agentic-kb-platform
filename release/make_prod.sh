@@ -55,6 +55,14 @@ cp "$STAGE/gitignore" .gitignore
 # --- 3. scrub internal references from every remaining file ---
 python3 "$STAGE/scrub.py" .
 
+# safety gate: the scrub must never break Python syntax.
+if ! python3 -m compileall -q services >/dev/null 2>&1; then
+  echo "error: scrub produced invalid Python — aborting (prod not committed)." >&2
+  python3 -m compileall -q services 2>&1 | grep -i error | head >&2
+  git checkout -fq "$START_BRANCH"
+  exit 1
+fi
+
 # --- 4. commit the generated release ---
 # Stage tracked changes (scrub edits + the dev-path deletions) and the curated files only.
 # NEVER `git add -A`: that would sweep in untracked local cruft (index files, agent state) that

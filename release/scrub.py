@@ -58,9 +58,12 @@ _TIDY = (
 
 
 def _tidy(line: str) -> str:
+    # Preserve leading indentation (collapsing it would break Python); tidy only the content.
+    stripped = line.lstrip(" \t")
+    indent = line[: len(line) - len(stripped)]
     for pat, repl in _TIDY:
-        line = pat.sub(repl, line)
-    return line
+        stripped = pat.sub(repl, stripped)
+    return indent + stripped
 
 
 def _scrub_text(text: str, *, is_markdown: bool) -> str:
