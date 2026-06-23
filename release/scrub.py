@@ -85,15 +85,15 @@ def scrub_file(path: Path) -> bool:
 _SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".ruff_cache", ".pytest_cache"}
 
 
+def _is_scrubbable(path: Path) -> bool:
+    if any(part in _SKIP_DIRS for part in path.parts) or not path.is_file():
+        return False
+    return path.suffix in _TEXT_SUFFIXES or path.name == "Dockerfile"
+
+
 def main(root: str) -> int:
     base = Path(root)
-    changed = 0
-    for path in sorted(base.rglob("*")):
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        if path.is_file() and (path.suffix in _TEXT_SUFFIXES or path.name == "Dockerfile"):
-            if scrub_file(path):
-                changed += 1
+    changed = sum(1 for p in sorted(base.rglob("*")) if _is_scrubbable(p) and scrub_file(p))
     print(f"scrubbed {changed} files under {root}")
     return 0
 
