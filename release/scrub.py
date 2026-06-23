@@ -82,7 +82,9 @@ def scrub_file(path: Path) -> bool:
     return False
 
 
-_SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".ruff_cache", ".pytest_cache"}
+_SKIP_DIRS = {
+    ".git", ".venv", "venv", "node_modules", "__pycache__", ".ruff_cache", ".pytest_cache",
+}
 
 
 def _is_scrubbable(path: Path) -> bool:
