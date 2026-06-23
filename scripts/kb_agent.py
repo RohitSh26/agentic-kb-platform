@@ -73,6 +73,9 @@ _load_dotenv()
 
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", Path(__file__).resolve().parent.parent)).resolve()
 SEARCH_BUDGET = int(os.environ.get("KB_SEARCH_BUDGET", "4"))
+# ADR-0025 section 4: the one enforced restriction is "call count + token budget". The token cap
+# bounds total KB bytes pulled even if each call is cheap (token-budgets.md: 3k-4k for impl agent).
+KB_TOKEN_BUDGET = int(os.environ.get("KB_SEARCH_TOKEN_BUDGET", "3000"))
 MAX_STEPS = int(os.environ.get("KB_AGENT_MAX_STEPS", "20"))
 _TOP = 6
 
@@ -156,9 +159,25 @@ async def kb_search(sessions: async_sessionmaker, build_seq: int, query: str) ->
 
 def _safe(path: str) -> Path:
     target = (REPO_ROOT / path).resolve()
-    if not str(target).startswith(str(REPO_ROOT)):
+    # is_relative_to (not string startswith): a string prefix check lets a sibling dir whose
+    # name starts with REPO_ROOT (e.g. "<root>-secrets/") escape the sandbox.
+    if target != REPO_ROOT and not target.is_relative_to(REPO_ROOT):
         raise ValueError(f"path escapes REPO_ROOT: {path}")
     return target
+
+
+def _truncate(body: str, cap: int) -> str:
+    """Cap a file read, marking the cut so a truncated read is never mistaken for the whole file
+    (ADR-0026: read_full is the exact/citation path — silent truncation could misquote)."""
+    if len(body) <= cap:
+        return body
+    return body[:cap] + f"\n# ...truncated at {cap} chars; file continues — read in ranges."
+
+
+def _kb_budget_open(searches_left: int, kb_tokens_left: int) -> bool:
+    """The kb_search tool is offered AND honored only while BOTH caps remain — the single
+    source of truth for ADR-0025 §4's one enforced restriction (call count + token budget)."""
+    return searches_left > 0 and kb_tokens_left > 0
 
 
 # Compression state (ADR-0026). COMPRESS is toggled off by --no-compress for the A/B baseline.
@@ -186,14 +205,14 @@ def read_file(path: str) -> str:
                 f"# SKELETON of {path} ({result.saved_pct:.0f}% smaller; "
                 f"call read_full for the exact body of anything you edit)\n{result.text}"
             )
-    return raw[:_READ_CHAR_CAP]
+    return _truncate(raw, _READ_CHAR_CAP)
 
 
 def read_full(path: str) -> str:
     """Return the EXACT, full text of a file (the reversible original) — for the body the model
     will actually edit or must quote precisely. No compression."""
     try:
-        return _safe(path).read_text(encoding="utf-8")[: 2 * _READ_CHAR_CAP]
+        return _truncate(_safe(path).read_text(encoding="utf-8"), 2 * _READ_CHAR_CAP)
     except OSError as exc:
         return f"error: {exc}"
 
@@ -486,10 +505,13 @@ async def run_task(task: str, *, use_kb: bool = True) -> int:
         messages = [{"role": "user", "content": task}]
 
     searches_left = SEARCH_BUDGET if use_kb else 0
+    kb_tokens_left = KB_TOKEN_BUDGET if use_kb else 0
     in_tok = out_tok = steps = kb_calls = file_reads = 0
 
     for _step in range(MAX_STEPS):
-        tools = list(_FILE_TOOLS) + ([_KB_TOOL] if searches_left > 0 else [])
+        # offer kb_search only while BOTH caps (call count AND token budget) remain (ADR-0025 §4)
+        kb_open = _kb_budget_open(searches_left, kb_tokens_left)
+        tools = list(_FILE_TOOLS) + ([_KB_TOOL] if kb_open else [])
         try:
             native, answer, tool_uses, di, do = _model_step(
                 client, provider, model, system, tools, messages)
@@ -513,12 +535,21 @@ async def run_task(task: str, *, use_kb: bool = True) -> int:
             name, args = tu["name"], tu["args"]
             try:
                 if name == "kb_search":
-                    searches_left -= 1
-                    kb_calls += 1
-                    out = await kb_search(sessions, active.build_seq, args.get("query", ""))
-                    if searches_left <= 0:
-                        out += "\n\n(KB budget spent — read the specific files you still need.)"
-                    print(f"  · kb_search({args.get('query', '')!r})  [{searches_left} left]")
+                    # gate INSIDE the loop: one assistant turn can emit several kb_search calls,
+                    # so re-check both caps per call or a parallel burst overruns the budget.
+                    if not _kb_budget_open(searches_left, kb_tokens_left):
+                        out = ("KB budget spent — work with what you have, or read the specific "
+                               "files you still need.")
+                        print("  · kb_search blocked (budget spent)")
+                    else:
+                        searches_left -= 1
+                        kb_calls += 1
+                        out = await kb_search(sessions, active.build_seq, args.get("query", ""))
+                        kb_tokens_left -= codeskeleton.estimate_tokens(out)
+                        if searches_left <= 0 or kb_tokens_left <= 0:
+                            out += "\n\n(KB budget spent — read the specific files you still need.)"
+                        left = f"{max(searches_left, 0)} calls, ~{max(kb_tokens_left, 0)} tok"
+                        print(f"  · kb_search({args.get('query', '')!r})  [{left} left]")
                 else:
                     if name in ("read_file", "read_full", "list_files"):
                         file_reads += 1
