@@ -21,14 +21,18 @@ import sys
 from pathlib import Path
 
 _TEXT_SUFFIXES = {".py", ".md", ".toml", ".yaml", ".yml", ".sh", ".cfg", ".ini", ".txt"}
+_TEXT_NAMES = {".gitignore", ".editorconfig"}  # extensionless config files worth scrubbing
 
-# Reference tokens that only ever appear in prose/comments — safe to delete globally.
+# Reference tokens / dev-process file pointers that only ever appear in prose, comments, and
+# docstrings — never in executable code — so deleting the token in place is safe.
 _REF_TOKEN = re.compile(
     r"""\(?\b(?:ADR|PR)-\d{1,4}[a-z]?\b   # ADR-0028 / PR-36 / PR-7
         (?:[^)\n]*?\))?                    # optional trailing "...)" of a parenthetical
     """,
     re.VERBOSE,
 )
+# Pointers at internal development files (the agent build tooling, project memory, rule files).
+_DEV_FILE = re.compile(r"\(?\b(?:CLAUDE\.md|\.claude/[^\s)]+)\b[^)\n]*?\)?")
 _PHASE = re.compile(r"\bPhase\s+\d[AB]?\b")
 # Whole comment/markdown lines mentioning the internal build process get dropped.
 _PROCESS_WORDS = re.compile(
@@ -55,6 +59,7 @@ def _scrub_text(text: str, *, is_markdown: bool) -> str:
     out: list[str] = []
     for raw in text.splitlines():
         line = _REF_TOKEN.sub("", raw)
+        line = _DEV_FILE.sub("", line)
         line = _PHASE.sub("", line)
         is_comment = bool(_COMMENT_LINE.match(line))
         # Drop a comment / markdown-prose line that still names the internal build process.
@@ -90,7 +95,7 @@ _SKIP_DIRS = {
 def _is_scrubbable(path: Path) -> bool:
     if any(part in _SKIP_DIRS for part in path.parts) or not path.is_file():
         return False
-    return path.suffix in _TEXT_SUFFIXES or path.name == "Dockerfile"
+    return path.suffix in _TEXT_SUFFIXES or path.name in _TEXT_NAMES or path.name == "Dockerfile"
 
 
 def main(root: str) -> int:
