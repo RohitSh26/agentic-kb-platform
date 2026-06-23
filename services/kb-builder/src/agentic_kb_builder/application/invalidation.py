@@ -125,7 +125,7 @@ async def _supersession_sweep(
 ) -> int:
     """Invalidate the PRIOR generation of a content-changed source's artifacts.
 
-    A content change re-wikifies/re-graphifies the source, writing NEW artifacts
+    A content change re-extracts/re-graphifies the source, writing NEW artifacts
     at this build_seq. The previous generation (valid_from_seq < build_seq, still
     live) must leave the KB this build so the new version serves only the new
     generation — but stays a member of every prior version (immutability). Edges

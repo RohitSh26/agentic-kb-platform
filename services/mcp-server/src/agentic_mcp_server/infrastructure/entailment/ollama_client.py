@@ -1,7 +1,7 @@
 """Ollama-first EntailmentClient over any OpenAI-compatible chat endpoint (PR-31).
 
 mcp-server's own copy of the provider-agnostic chat pattern kb-builder uses for
-wikify/judge (services never share code — CLAUDE.md). It defaults to a local
+extraction and judging (services never share code). It defaults to a local
 **Ollama** server (no cloud, no spend; `gemma3:4b` for L3 dev/tests) and repoints
 to **Groq**, **OpenAI**, or **Azure OpenAI** by environment variables alone. The
 `openai` SDK is confined to this module; the rest of the broker depends only on the

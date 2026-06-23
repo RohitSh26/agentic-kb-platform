@@ -1,6 +1,6 @@
 """Persist docify drafts as knowledge_artifact rows (Postgres is truth).
 
-Mirrors wikify.write.write_wikify_artifacts. Docify produces ARTIFACTS ONLY — no edges
+Writes document artifacts. Docify produces ARTIFACTS ONLY — no edges
 (ADR-0023, relation-ontology): Graphify's concept->concept relations are generic
 relatedness, which the relation ontology bans as an edge. Artifacts carry valid_from_seq
 and participate in supersession via the existing invalidation pass (a changed source

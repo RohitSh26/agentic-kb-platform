@@ -622,7 +622,7 @@ class BuildRunner:
     async def _docify_gated(
         self, counters: _Counters, fetched: NormalizedContent, source_id: uuid.UUID
     ) -> list[uuid.UUID]:
-        """Cache-gated document extraction (ADR-0023). Mirrors the retired _wikify_gated
+        """Cache-gated document extraction (ADR-0023). Mirrors the prior gated extractor
         exactly for caching: a hit replays the MAPPED artifact rows from
         generation_cache_artifact (no LLM call); a miss runs the extractor, writes
         artifacts, and records the cache. Docify produces artifacts only — no edges

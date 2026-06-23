@@ -1,6 +1,6 @@
 """Docify output shapes: the artifacts Graphify's LLM doc extraction maps to.
 
-ADR-0023 retires the hand-rolled wikify prose pipeline and routes document sources
+ADR-0023 routes document sources
 (github_doc / azure_wiki / ado_card) through Graphify's LLM doc extractor. The mapper
 (docify.docify_backend.map_doc_extraction) re-derives our trust contract from Graphify's
 raw output rather than copying its labels:
@@ -11,13 +11,13 @@ raw output rather than copying its labels:
   can confirm — emitted ONLY when the concept's supporting sentence is a verbatim
   substring of the source text.
 
-Docify produces ARTIFACTS ONLY — no edges (parity with the wikify it replaces, which
+Docify produces ARTIFACTS ONLY — no edges (the relation ontology, which
 wrote none). Graphify's concept->concept relations are generic relatedness, which the
 relation ontology bans as an edge (docs/contracts/relation-ontology.md: "no generic
 related_to ... it becomes a candidate ... never an edge"). Promoting them to candidates
 for the phase-3 judge is a tracked follow-up (ADR-0023).
 
-The artifact ROW shape is FROZEN identical to the retired wikify drafts (types,
+The artifact ROW shape is FROZEN and stable (types,
 knowledge_kind, authority/freshness scores, citable body) so the broker/verifier/Search
 projection are unaffected and no Alembic migration is required (ADR-0023 §5).
 """
@@ -28,7 +28,7 @@ from pydantic import Field, model_validator
 
 from agentic_kb_builder.domain.artifact_model import ArtifactModel
 
-# The frozen artifact-row vocabulary (identical to the retired wikify types): a
+# The frozen artifact-row vocabulary : a
 # document yields an interpreted ``summary``; each concept yields either an
 # interpreted ``concept`` or a verbatim-anchored ``source_backed_fact``.
 DocArtifactType = Literal["summary", "concept", "source_backed_fact"]
@@ -44,7 +44,7 @@ _KNOWLEDGE_KIND_BY_TYPE: dict[str, DocKnowledgeKind] = {
 class DocArtifactDraft(ArtifactModel):
     """One knowledge_artifact row to be written by the docify pipeline.
 
-    Field-identical to the retired ``WikifyArtifactDraft`` so the registry row shape is
+    A frozen row shape so the registry row shape is
     unchanged (ADR-0023 §5)."""
 
     artifact_type: DocArtifactType

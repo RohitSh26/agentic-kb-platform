@@ -1,8 +1,8 @@
 """Persist one deterministic `commit` knowledge_artifact per git commit (PR-26).
 
-Mirrors write_wikify_artifacts' shape but is zero-LLM: a commit produces exactly
+Mirrors the artifact-writer shape but is zero-LLM: a commit produces exactly
 one artifact (artifact_type='commit', body_text = the connector's normalized
-rendering). No wikify, no graphify, no generation-cache row — the rendering is
+rendering). No extraction, no graphify, no generation-cache row — the rendering is
 fully deterministic from git, so re-running on an unchanged commit is gated by
 the build runner's content_hash skip.
 

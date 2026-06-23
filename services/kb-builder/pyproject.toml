@@ -1,7 +1,7 @@
 [project]
 name = "agentic-kb-builder"
 version = "0.1.0"
-description = "Nightly incremental KB build plane: connectors, wikify, graphify, linker, indexing. Owns the Postgres Knowledge Registry schema and migrations."
+description = "Nightly incremental KB build plane: connectors, docify, graphify, linker, indexing. Owns the Postgres Knowledge Registry schema and migrations."
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.7",

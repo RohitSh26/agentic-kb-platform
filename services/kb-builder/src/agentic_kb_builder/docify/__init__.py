@@ -1,9 +1,9 @@
 """Docify pipeline (ADR-0023): Graphify LLM doc extraction -> doc artifacts (artifacts-only).
 
-Replaces the retired wikify prose pipeline. Document sources (github_doc / azure_wiki /
+The prose extraction pipeline. Document sources (github_doc / azure_wiki /
 ado_card) route through Graphify's LLM doc extractor; the trust-sensitive normalization is
 the pure ``map_doc_extraction`` mapper. Produces ARTIFACTS ONLY — no edges (parity with the
-wikify it replaces, relation-ontology). Cache-gated by the build runner (a hit makes no LLM
+the relation ontology). Cache-gated by the build runner (a hit makes no LLM
 call); the Graphify extraction function is injectable for hermetic tests.
 """
 

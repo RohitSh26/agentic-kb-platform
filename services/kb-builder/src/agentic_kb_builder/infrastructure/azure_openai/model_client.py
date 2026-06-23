@@ -2,7 +2,7 @@
 
 Builders depend on this Protocol, never on the SDK, so tests stay hermetic and
 the model backend stays swappable (rule: python.md). After ADR-0023 retired the
-hand-rolled wikify prose pipeline (document extraction now goes through Graphify's
+prior prose pipeline (document extraction now goes through Graphify's
 LLM pipeline behind the ``docify`` adapter), the only build-plane LLM use behind this
 door is the phase-3B relationship judge.
 """

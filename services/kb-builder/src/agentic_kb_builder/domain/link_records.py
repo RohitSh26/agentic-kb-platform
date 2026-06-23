@@ -1,4 +1,4 @@
-"""Linker edge shapes: Wikify knowledge connected to Graphify code.
+"""Linker edge shapes: document knowledge connected to Graphify code.
 
 Direction convention is subject-verb-object, matching graphify edges
 ("test tests symbol", "symbol exposed_as endpoint"):

@@ -3,7 +3,7 @@
 Mirrors graphify.graphify_backend.map_extraction: a pure, deterministic, I/O-free function
 that re-normalizes Graphify's raw doc output into our trust contract, hermetically testable
 against a captured fixture. Docify produces ARTIFACTS ONLY — no edges (parity with the
-wikify it replaces, which wrote none). Graphify's concept->concept relations are generic
+the relation ontology, which wrote none). Graphify's concept->concept relations are generic
 relatedness, which the relation ontology bans as an edge
 (docs/contracts/relation-ontology.md: "no generic related_to ... it becomes a candidate ...
 never an edge"); ``mentions`` is contractually reserved for verbatim-identifier EXTRACTED
@@ -30,7 +30,7 @@ from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
 
-# V1 seed scores (identical to the retired wikify scores so the registry row shape is
+# V1 seed scores (stable seed scores so the registry row shape is
 # frozen, ADR-0023 §5). Interpreted knowledge (summary/concept) sits strictly below the
 # source-backed quote so the broker can never rank a paraphrase as final truth.
 FACT_AUTHORITY = 0.8

@@ -1,4 +1,4 @@
-"""Linker: connects Wikify knowledge to Graphify code with confidence-scored edges."""
+"""Linker: connects document knowledge to Graphify code with confidence-scored edges."""
 
 from agentic_kb_builder.linker.candidates import (
     CANDIDATE_FAN_OUT_K,
