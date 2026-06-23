@@ -10,6 +10,7 @@ Writes are idempotent (on-conflict-do-nothing). The engine MUST be disposed via
 """
 
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agentic_kb_builder.domain.docify_artifacts import DocExtractionResult
@@ -33,6 +34,22 @@ class PostgresDurableOutputCache:
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
         self._factory = create_session_factory(engine)
+        # The durable cache is an OPTIMIZATION, never load-bearing for build success. If its
+        # storage is unavailable (tables not migrated, transient DB error), the build must still
+        # complete — it just won't cache model outputs for crash-resume. We log one loud,
+        # actionable warning and then degrade silently for the rest of the run.
+        self._degraded = False
+
+    def _degrade(self, op: str, exc: Exception) -> None:
+        if not self._degraded:
+            self._degraded = True
+            logger.warning(
+                "event=durable_cache_unavailable op=%s error=%s — the build will COMPLETE but "
+                "model outputs are NOT being cached for crash-resume. Run 'alembic upgrade head' "
+                "to create the durable cache tables and enable token-free re-runs.",
+                op,
+                f"{type(exc).__name__}: {exc}",
+            )
 
     @classmethod
     def from_url(cls, url: str | None = None) -> "PostgresDurableOutputCache":
@@ -43,13 +60,17 @@ class PostgresDurableOutputCache:
         await self._engine.dispose()
 
     async def get_doc_extraction(self, cache_key: str) -> DocExtractionResult | None:
-        async with self._factory() as session:
-            row = await session.get(DocExtractionOutput, cache_key)
-            if row is None:
-                return None
-            # read the column inside the session so the result never depends on a
-            # detached/expired instance after the block exits.
-            output_json = row.output_json
+        try:
+            async with self._factory() as session:
+                row = await session.get(DocExtractionOutput, cache_key)
+                if row is None:
+                    return None
+                # read the column inside the session so the result never depends on a
+                # detached/expired instance after the block exits.
+                output_json = row.output_json
+        except SQLAlchemyError as exc:
+            self._degrade("get_doc_extraction", exc)
+            return None  # treat as a miss; the caller pays the model (build still proceeds)
         logger.info("event=durable_doc_extraction_hit cache_key=%s", cache_key)
         return DocExtractionResult.model_validate(output_json)
 
@@ -77,20 +98,30 @@ class PostgresDurableOutputCache:
             )
             .on_conflict_do_nothing(index_elements=["cache_key"])
         )
-        async with self._factory() as session:
-            await session.execute(statement)
-            await session.commit()
+        try:
+            async with self._factory() as session:
+                await session.execute(statement)
+                await session.commit()
+        except SQLAlchemyError as exc:
+            self._degrade("put_doc_extraction", exc)
+            return  # the build's own transaction is untouched (separate connection)
         logger.info("event=durable_doc_extraction_put cache_key=%s", cache_key)
 
     async def get_embedding(
         self, *, text_hash: str, embedding_model: str
     ) -> EmbeddingResult | None:
-        async with self._factory() as session:
-            row = await session.get(EmbeddingOutput, (text_hash, embedding_model))
-            if row is None:
-                return None
-            # read the columns inside the session (see get_doc_extraction).
-            result = EmbeddingResult(embedding_hash=row.embedding_hash, vector=list(row.embedding))
+        try:
+            async with self._factory() as session:
+                row = await session.get(EmbeddingOutput, (text_hash, embedding_model))
+                if row is None:
+                    return None
+                # read the columns inside the session (see get_doc_extraction).
+                result = EmbeddingResult(
+                    embedding_hash=row.embedding_hash, vector=list(row.embedding)
+                )
+        except SQLAlchemyError as exc:
+            self._degrade("get_embedding", exc)
+            return None
         logger.info(
             "event=durable_embedding_hit text_hash=%s model=%s", text_hash, embedding_model
         )
@@ -109,9 +140,13 @@ class PostgresDurableOutputCache:
             )
             .on_conflict_do_nothing(index_elements=["text_hash", "embedding_model"])
         )
-        async with self._factory() as session:
-            await session.execute(statement)
-            await session.commit()
+        try:
+            async with self._factory() as session:
+                await session.execute(statement)
+                await session.commit()
+        except SQLAlchemyError as exc:
+            self._degrade("put_embedding", exc)
+            return
         logger.info(
             "event=durable_embedding_put text_hash=%s model=%s", text_hash, embedding_model
         )
