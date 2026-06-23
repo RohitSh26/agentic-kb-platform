@@ -1,7 +1,7 @@
-"""`build` — the one product entry point for a local KB build (ADR-0010).
+"""`build` — the one product entry point for a local KB build.
 
 Wires connectors + a local-filesystem fetch backend + the real extractors (Graphify for
-code AND docs — docify, ADR-0023) + a local embedder + the local Search indexer into the
+code AND docs — docify, + a local embedder + the local Search indexer into the
 existing BuildRunner, and runs one incremental build into Postgres — no cloud, no spend.
 
 Usage (from services/kb-builder, with a migrated DATABASE_URL set):
@@ -74,7 +74,7 @@ class Collaborators:
     embedder: Embedder
     indexer: SearchIndexer
     search_client: SearchClient  # backs the activation consistency validator
-    similarity: SimilarityProvider | None = None  # semantic linker; None ⇒ skipped (ADR-0019)
+    similarity: SimilarityProvider | None = None # semantic linker; None ⇒ skipped
     judge: RelationshipJudge | None = None  # Phase-3B relationship judge; None ⇒ candidates only
 
 
@@ -83,24 +83,24 @@ def default_collaborators(session: AsyncSession, *, index_path: Path) -> Collabo
     default), Graphify code extraction, deterministic local embeddings, and a PERSISTENT
     local Search projection.
 
-    The projection is file-backed (ADR-0017) so it survives across build invocations the
+    The projection is file-backed so it survives across build invocations the
     same way the Azure index does — an incremental rebuild that upserts nothing still
     validates against the carried-forward membership.
 
     When EMBEDDINGS_PROVIDER is set, a real (Ollama) embedding-similarity provider is wired
-    into the linker so the prose<->code semantic pass runs (ADR-0019); otherwise it stays
+    into the linker so the prose<->code semantic pass runs; otherwise it stays
     None and that pass is skipped, keeping the default build offline + deterministic."""
     client = LocalFileSearchClient(index_path)
     model = ChatModelClient.from_env()
     similarity: SimilarityProvider | None = None
     if os.environ.get("EMBEDDINGS_PROVIDER"):
         similarity = EmbeddingSimilarityProvider(session, OllamaEmbedder.from_env())
-    # The relationship judge (Phase 3B) promotes candidates — including the new
+    # The relationship judge promotes candidates — including the new
     # embedding-similarity ones — into trusted cross-domain edges. It costs one LLM
     # call per UNCACHED candidate (cached by content+prompt+model version), so it is
     # opt-in via RELATIONSHIP_JUDGE; without it candidates are generated but not judged.
     judge: RelationshipJudge | None = model if os.environ.get("RELATIONSHIP_JUDGE") else None
-    # Documents go through Graphify's LLM doc extractor (ADR-0023), configured from the
+    # Documents go through Graphify's LLM doc extractor, configured from the
     # same LLM_* env as ChatModelClient. The Graphify backend is registered in-process.
     return Collaborators(
         doc_extractor=RealDocExtractor.from_env(),
@@ -130,7 +130,7 @@ async def run_build(
     gate passes (docs/contracts/publish-gates.md). allow_large_delta overrides the
     symbol-count-delta gate only (recorded on kb_build_run, logged). `backend`
     selects the fetch backend: `local` (workspace files) or `production` (real
-    GitHub/ADO sources via the production factory, ADR-0015)."""
+    GitHub/ADO sources via the production factory,."""
     config = load_source_config(sources_path)
     factory: BackendFactory
     if backend == "production":
@@ -139,7 +139,7 @@ async def run_build(
         factory = local_fs_backend_factory(Path(workspace), version=version)
     connectors = connectors_from_config(config, factory)
     if git_metadata:
-        # Cross-domain phase 2 (PR-26): deterministic, zero-LLM commit artifacts
+        # Cross-domain phase 2: deterministic, zero-LLM commit artifacts
         # from the local workspace git history. Appended last so its commit
         # artifacts can resolve changed-file → code edges against code artifacts
         # produced earlier in the same build.
@@ -198,7 +198,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         choices=("local", "production"),
         default="local",
         help="fetch backend: 'local' reads --workspace files (default); 'production' fetches "
-        "real GitHub/ADO sources via the production factory (ADR-0015)",
+        "real GitHub/ADO sources via the production factory ",
     )
     parser.add_argument(
         "--index-path",
@@ -267,7 +267,7 @@ async def _main(args: argparse.Namespace) -> int:
     )
     engine = create_engine()
     factory = create_session_factory(engine)
-    # Crash-durable model-output cache on its OWN engine/connection (ADR-0027), so its
+    # Crash-durable model-output cache on its OWN engine/connection, so its
     # side-commits are independent of the build transaction and survive a build rollback.
     durable_cache = make_durable_output_cache()
     collaborators: Collaborators | None = None

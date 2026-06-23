@@ -25,7 +25,7 @@ class KbBuildRun(Base):
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
     kb_version: Mapped[str] = mapped_column(Text, nullable=False)
-    # Monotonic build sequence (docs/contracts/version-membership.md, ADR-0013):
+    # Monotonic build sequence (docs/contracts/version-membership.md,:
     # assigned once at run start from the kb_build_seq SEQUENCE. The active build's
     # build_seq is the served interval-membership cutoff S. UNIQUE.
     build_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -51,7 +51,7 @@ class KbBuildRun(Base):
         Integer, nullable=False, server_default=text("0")
     )
     error_summary: Mapped[str | None] = mapped_column(Text)
-    # Publish-gate bookkeeping (docs/contracts/publish-gates.md, PR-25).
+    # Publish-gate bookkeeping (docs/contracts/publish-gates.md,.
     # extractor_failures backs the extractor-error-rate gate; allow_large_delta is
     # the symbol-count-delta override flag; failed_gate + gate_measured_value record
     # which gate blocked activation and its measured value (NULL on a clean publish).

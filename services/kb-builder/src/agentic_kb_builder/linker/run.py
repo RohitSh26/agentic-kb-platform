@@ -30,7 +30,7 @@ async def run_linker(
     """Compute and persist linker edges; return (inserted, refreshed, deleted).
 
     valid_from_seq stamps newly inserted linker edges (interval membership,
-    ADR-0013); a refreshed edge keeps its original valid_from_seq.
+    ; a refreshed edge keeps its original valid_from_seq.
     """
     artifacts = await _load_linkable_artifacts(session)
     drafts = find_deterministic_links(artifacts)

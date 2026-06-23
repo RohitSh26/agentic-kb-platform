@@ -1,4 +1,4 @@
-"""Relationship-judgment cache key + gate (PR-29, phase 3B).
+"""Relationship-judgment cache key + gate.
 
 Lives in the linker (not application) so the judge step has no dependency on the
 application package — keeping it free of the build_runner import cycle. It mirrors

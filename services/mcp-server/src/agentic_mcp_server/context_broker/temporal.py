@@ -1,4 +1,4 @@
-"""Deterministic temporal semantics for evidence (PR-33, ADR-0010/0011 phase 4).
+"""Deterministic temporal semantics for evidence.
 
 A unified graph mixes CURRENT code, possibly-stale docs, and historical
 cards/PRs/ADRs. Without temporal awareness the broker can answer "how does X
@@ -10,10 +10,10 @@ query intent (docs/contracts/golden-query-evals.md `intent`).
 Two notions of "stale" are deliberately INDEPENDENT and must stay so:
 
   * L0 `not_stale` (context_broker/verify.py) — a binary provenance check: the
-    cited source is superseded/deleted in the ACTIVE version. PR-33 NEVER touches
+    cited source is superseded/deleted in the ACTIVE version. NEVER touches
     it: a doc this module downranks for a `how` query still PASSES L0 as long as
     its source is in-version.
-  * PR-33 staleness — a RANKING/LABELLING signal: a doc that contradicts the
+  * staleness — a RANKING/LABELLING signal: a doc that contradicts the
     current code structure (references a removed/absent symbol) is downranked and
     flagged for `how_does_x_work` intents and surfaced as a routing hint, NOT as
     primary evidence. It can never promote a contradicting doc into claim support
@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 
 # The query intents the golden set tags (golden-query-evals.md). Mirrors
 # evals/harness/golden.py GoldenIntent — duplicated, not imported, across the
-# service boundary (ADR-0008). None ⇒ no intent supplied ⇒ neutral weighting.
+# service boundary. None ⇒ no intent supplied ⇒ neutral weighting.
 Intent = Literal[
     "how_does_x_work",
     "why_was_x_changed",
@@ -163,7 +163,7 @@ _INTENT_KIND_WEIGHT: dict[Intent, dict[SourceKind, float]] = {
 # State multiplier: a superseded artifact is downranked but NEVER removed
 # (the "why" trail needs history — weight, don't delete). Tunable; coarse.
 _SUPERSEDED_WEIGHT = 0.6
-# A doc flagged PR-33-stale for a `how` intent is pushed below any primary
+# A doc flagged -stale for a `how` intent is pushed below any primary
 # evidence so it can only ever be a routing hint, not the headline.
 _STALE_DOC_WEIGHT = 0.25
 

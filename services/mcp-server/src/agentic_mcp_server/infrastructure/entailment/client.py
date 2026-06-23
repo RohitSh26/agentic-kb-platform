@@ -1,4 +1,4 @@
-"""EntailmentClient Protocol + verdict DTO for the L3 verifier (PR-31).
+"""EntailmentClient Protocol + verdict DTO for the L3 verifier.
 
 L3 asks ONE question per deterministically-unresolved claim: *do the cited,
 resolved evidence texts ENTAIL the claim?* The answer is a single bool + a terse

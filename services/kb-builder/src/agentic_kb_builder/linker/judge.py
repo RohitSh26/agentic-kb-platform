@@ -1,4 +1,4 @@
-"""Phase-3B LLM relationship judge over bounded candidates (PR-29, ADR-0010/0011).
+"""Phase-3B LLM relationship judge over bounded candidates.
 
 The FIRST place the LLM rules on relationships. It reads ONLY the candidates the
 cheap generator surfaced (relationship-candidates.md) — never a global sweep — and
@@ -8,7 +8,7 @@ for each pair asks the ModelClient for a verdict under the closed relation ontol
 - ``INFERRED_HIGH`` / ``INFERRED_LOW`` -> an edge with ``source='llm_judge'``,
   ``trust_class`` = the bucket, ``evidence`` = the quoted-span pointer,
   ``relation_schema_version``, and ``valid_from_seq`` = this build's ``build_seq``
-  (interval membership, ADR-0013) so the broker actually serves it (as a labelled
+  (interval membership, so the broker actually serves it (as a labelled
   routing hint, never claim support).
 - ``AMBIGUOUS`` -> an edge with ``trust_class='AMBIGUOUS'``; the broker excludes it
   from default traversal (trust-buckets.md), but it is retained for audit.
@@ -92,7 +92,7 @@ async def run_judge(
     """Judge this build's candidates and reconcile the judge edges; return stats.
 
     valid_from_seq stamps newly inserted judge edges (interval membership); a
-    refreshed edge keeps its original valid_from_seq (immutability, ADR-0013)."""
+    refreshed edge keeps its original valid_from_seq (immutability,."""
     gate = RelationshipJudgmentCacheGate(session)
     candidates = await _load_candidates(session, kb_version=kb_version)
     model_version = judge.model_name + "|" + judge.model_params_hash
@@ -312,7 +312,7 @@ async def _invalidate_stale(
 ) -> int:
     """Soft-invalidate live judge edges no longer produced this run (a candidate
     dropped, or a pair re-judged REJECTED). Sets invalidated_at_seq rather than
-    deleting (ADR-0013 §1): the edge leaves the active version but stays a member
+    deleting: the edge leaves the active version but stays a member
     of every prior version.
 
     Scans all live llm_judge edges irrespective of kb_version — correct under the

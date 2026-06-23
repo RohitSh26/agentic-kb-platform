@@ -1,8 +1,8 @@
-"""Request/response schemas for context.verify_answer (ADR-0011).
+"""Request/response schemas for context.verify_answer.
 
 The verifier is the trust boundary: an answer is platform-trusted iff it
 carries a valid receipt (docs/contracts/verification-receipt.md). L0 (phase 1)
-runs the deterministic, mandatory provenance checks. Phase 4 adds the
+runs the deterministic, mandatory provenance checks. adds the
 deterministic L1 (citation coverage + span caps) and L2 (typed-fact) levels;
 both are additive — a phase-1 caller (no ``quote``/``assertion``, default
 ``verifier_levels=["L0"]``) is byte-for-byte unchanged. The receipt reserves
@@ -18,7 +18,7 @@ from pydantic import Field, field_validator
 
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
 
-#: Verifier levels available now. L3 (LLM entailment, cached) is PR-31: it runs
+#: Verifier levels available now. L3 (LLM entailment, cached) is: it runs
 #: ONLY for claims L0-L2 could not adjudicate deterministically (cost guard).
 VerifierLevel = Literal["L0", "L1", "L2", "L3"]
 
@@ -132,7 +132,7 @@ class ClaimChecks(McpModel):
     L1_coverage: bool | None = None
     # L2: the claim's typed assertion matches a deterministic ledger unit.
     L2_typed_fact: bool | None = None
-    # L3 (PR-31): the cited evidence ENTAILS the claim (cached LLM check). Present
+    # L3: the cited evidence ENTAILS the claim (cached LLM check). Present
     # ONLY for a claim L0-L2 could not adjudicate deterministically AND that has
     # resolvable cited evidence; absent (None) otherwise — L3 never runs on an
     # L2-resolved claim (cost discipline).
@@ -150,7 +150,7 @@ class ClaimReceipt(McpModel):
     failed_reasons: list[str] = Field(default_factory=list)
 
 
-#: Outcome of the official-client platform-trust gate (ADR-0011 §6, phase 4). A
+#: Outcome of the official-client platform-trust gate. A
 #: ``verification_required`` client is platform-trusted ONLY with a valid,
 #: client-matched receipt; otherwise the broker returns a STRUCTURED denial (no
 #: silent pass). A client that did not opt into ``verification_required`` is
@@ -196,7 +196,7 @@ class VerificationReceipt(McpModel):
     # Null when no client identity was resolved (e.g. an L0-only internal call).
     client_id: str | None = None
     # HMAC-SHA256 over (answer_hash + graph_version + claim_results); null until a
-    # signing key is configured (PR-31). A host validates it statelessly via
+    # signing key is configured. A host validates it statelessly via
     # context_broker.receipt_signing.verify_receipt_signature.
     signature: str | None = None
     # Non-secret fingerprint of the signing key (tells a host WHICH key signed,

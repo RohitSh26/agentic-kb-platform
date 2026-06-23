@@ -1,4 +1,4 @@
-"""Read-only provenance facts for the L0 verifier (ADR-0011, phase 1).
+"""Read-only provenance facts for the L0 verifier.
 
 Raw SQL with pinned names, same pattern as artifacts.py: no ORM model crosses
 the service boundary; docs/contracts/postgres-knowledge-registry.md is the
@@ -17,7 +17,7 @@ KNOWLEDGE_ARTIFACT_TABLE = "knowledge_artifact"
 SOURCE_ITEM_TABLE = "source_item"
 KNOWLEDGE_EDGE_TABLE = "knowledge_edge"
 
-# Per cited id within the served version (by interval membership, ADR-0013):
+# Per cited id within the served version (by interval membership,:
 # existence, ACL set, source state (is_deleted ⇒ superseded/deleted ⇒ stale), and
 # whether at least one incident edge is claim-supporting (EXTRACTED). The artifact
 # and both edge subqueries filter by the SAME membership predicate against the
@@ -62,7 +62,7 @@ _EXISTS_ANY_VERSION_QUERY = text(
 )
 
 # Body text of cited units that are MEMBERS of the active build_seq, for the L1
-# quote-substring guard (invariant 7, ADR-0011): the quote a claim relies on must
+# quote-substring guard (invariant 7,: the quote a claim relies on must
 # be a verbatim span of one of its cited units' text. Same membership predicate as
 # fetch_provenance — NO ACL/retrieval filtering here; the caller restricts the id
 # set to the claim's already-resolvable (in-version, ACL-visible, requester-

@@ -1,4 +1,4 @@
-"""Context Broker: policy, retrieval, dedupe, evidence, and budget layer (ADR-0005).
+"""Context Broker: policy, retrieval, dedupe, evidence, and budget layer.
 
 Tool I/O lives in mcp/tool_schemas; this package implements the behavior the
 contract promises: budgets enforced server-side, evidence by handle, reuse

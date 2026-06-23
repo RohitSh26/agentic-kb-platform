@@ -1,6 +1,6 @@
-"""Add trust_class to knowledge_edge — the trust-bucket vocabulary (ADR-0011).
+"""Add trust_class to knowledge_edge — the trust-bucket vocabulary.
 
-PR-23 (end-to-end trust contract, phase 1): every edge carries a trust bucket
+: every edge carries a trust bucket
 from {EXTRACTED, INFERRED_HIGH, INFERRED_LOW, AMBIGUOUS, REJECTED}
 (docs/contracts/trust-buckets.md). The deterministic producers (AST extractor,
 linker) may only ever assign EXTRACTED, so the server default backfills every

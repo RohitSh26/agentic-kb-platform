@@ -47,7 +47,7 @@ def _temporal_signals(artifact: ArtifactRow) -> TemporalSignals:
     )
 
 
-# ADR-0028: graph-centrality prior weight. A small multiplicative lift on the relevance term so a
+#: graph-centrality prior weight. A small multiplicative lift on the relevance term so a
 # structurally-central node outranks an equally-keyword-matching leaf, WITHOUT overriding the
 # provenance (source_backed) or authority tiers. NULL/0 centrality gives a 1.0 factor (no change).
 _CENTRALITY_BETA = 0.25
@@ -62,7 +62,7 @@ def _rank_key(
     score (TRANSPARENT, logged factors — never a hidden reranker); the source_backed and authority
     tiers and the artifact_id tie-break are unchanged so ordering stays stable for equal inputs. A
     neutral temporal weight (intent=None) is 1.0 and a NULL/0 centrality is a 1.0 factor, so the
-    ordering is identical to the pre-PR-33/PR-36 ranker."""
+    ordering is identical to the pre-/ ranker."""
     source_backed = 1 if artifact.knowledge_kind == "source_backed" else 0
     authority = artifact.authority_score or 0.0
     base_score = scores.get(artifact.artifact_id, 0.0)
@@ -123,7 +123,7 @@ def readable_path(source_uri: str) -> str:
 
 
 def display_citation(artifact: ArtifactRow) -> str:
-    """Human-readable citation (``file:symbol``) from artifact metadata (ADR-0022).
+    """Human-readable citation (``file:symbol``) from artifact metadata.
 
     This is the user-facing reference; it is distinct from ``evidence_id`` (the UUID audit
     handle) so a model never needs to surface a UUID in prose. Symbol-shaped artifacts get
@@ -209,7 +209,7 @@ async def retrieve_cards(
     membership against `build_seq` (version-membership.md); `kb_version` is the
     label carried into the audit log only.
 
-    When `intent` is supplied (PR-33), evidence is re-weighted by the temporal
+    When `intent` is supplied, evidence is re-weighted by the temporal
     semantics for that intent — current code lifted for `how`/structure queries,
     cards/PRs/ADRs lifted for `why`, superseded + stale docs downranked. The
     weighting is TRANSPARENT and LOGGED (event=temporal_weight*), deterministic,
@@ -276,7 +276,7 @@ async def retrieve_cards(
         len(allowed),
         len(ranked),
         stale_count,
-        # ranked artifacts carrying a non-zero centrality prior (ADR-0028, transparent factor)
+        # ranked artifacts carrying a non-zero centrality prior
         sum(1 for a in ranked if (a.centrality_score or 0.0) > 0.0),
         ",".join(str(card.artifact_id) for card in cards),
     )

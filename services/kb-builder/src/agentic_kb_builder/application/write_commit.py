@@ -1,4 +1,4 @@
-"""Persist one deterministic `commit` knowledge_artifact per git commit (PR-26).
+"""Persist one deterministic `commit` knowledge_artifact per git commit.
 
 Mirrors the artifact-writer shape but is zero-LLM: a commit produces exactly
 one artifact (artifact_type='commit', body_text = the connector's normalized

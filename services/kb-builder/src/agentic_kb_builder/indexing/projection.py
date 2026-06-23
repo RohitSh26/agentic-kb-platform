@@ -1,4 +1,4 @@
-"""Project registry artifacts into SearchDocs (architecture §6, ADR-0002).
+"""Project registry artifacts into SearchDocs (architecture §6,.
 
 The projection is a pure read of Postgres: artifact + source pointer +
 cached embedding vector. Given the same registry state it always produces the
@@ -7,7 +7,7 @@ meaningful. Only PROJECTABLE_ARTIFACT_TYPES with body_text OR search_text are
 projected; purely pointer-only code artifacts (no body_text, no search_text)
 are reachable through graph edges, not search.
 
-ADR-0018 Phase 2: code_symbol artifacts are projectable when they have either
+ : code_symbol artifacts are projectable when they have either
 body_text (exact span) or search_text (deterministic retrieval surface) or both.
 """
 
@@ -44,8 +44,8 @@ async def load_search_docs(
         .where(
             SourceItem.is_deleted.is_(False),
             KnowledgeArtifact.artifact_type.in_(sorted(PROJECTABLE_ARTIFACT_TYPES)),
-            # An artifact is projectable when it has body_text OR search_text (ADR-0018
-            # Phase 2): a code_symbol with only search_text (e.g. a span-less symbol
+            # An artifact is projectable when it has body_text OR search_text
+            # ): a code_symbol with only search_text (e.g. a span-less symbol
             # that still has identifier/docstring words) is keyword-findable via
             # search_text even though its raw body is not yet recoverable.
             (KnowledgeArtifact.body_text.is_not(None) | KnowledgeArtifact.search_text.is_not(None)),
@@ -63,7 +63,7 @@ async def load_search_docs(
     for artifact, source_type, source_uri in rows:
         body_text = artifact.body_text
         # body_text may be None when search_text is the sole retrieval surface
-        # (ADR-0018 Phase 2 code_symbol with no recovered span). The embedding key
+        #. The embedding key
         # falls back to search_text so the embedding cache join still works.
         embed_text = body_text if body_text is not None else artifact.search_text
         embedding_row = (

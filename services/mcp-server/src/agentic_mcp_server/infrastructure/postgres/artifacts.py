@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 KNOWLEDGE_ARTIFACT_TABLE = "knowledge_artifact"
 SOURCE_ITEM_TABLE = "source_item"
 
-# Membership predicate (version-membership.md, ADR-0013): a row is served iff it is
+# Membership predicate (version-membership.md,: a row is served iff it is
 # a MEMBER of the active build's build_seq, NOT iff its label equals the active
 # kb_version. valid_from_seq <= S AND (invalidated_at_seq IS NULL OR > S).
 _FETCH_ARTIFACTS_QUERY = text(
@@ -34,7 +34,7 @@ _FETCH_ARTIFACTS_QUERY = text(
     """
 )
 
-# Current code-symbol titles that are MEMBERS of the active build_seq. PR-33's
+# Current code-symbol titles that are MEMBERS of the active build_seq. 's
 # stale-doc signal compares a doc's referenced symbols against this set: a doc
 # that names a symbol absent here references a removed/absent symbol and is
 # downranked for `how_does_x_work` (a routing hint, never primary). Derived from
@@ -67,14 +67,14 @@ class ArtifactRow:
     source_uri: str
     # empty = org-public; non-empty = requester team set must intersect
     acl_teams: tuple[str, ...] = ()
-    # Temporal-derivation inputs (PR-33). All already-stored; no new generation.
+    # Temporal-derivation inputs. All already-stored; no new generation.
     # source_type drives the source KIND; invalidated_at_seq + source_is_deleted
     # drive the current/superseded state. These are RANKING signals only and do
     # not affect membership (the WHERE clause already enforced membership).
     source_type: str | None = None
     invalidated_at_seq: int | None = None
     source_is_deleted: bool = False
-    # Normalized [0,1] graph-centrality prior (ADR-0028); None ⇒ no graph signal (ranks as before).
+    # Normalized [0,1] graph-centrality prior; None ⇒ no graph signal (ranks as before).
     # Defaulted so existing constructors stay valid; fetch_artifacts sets it by keyword.
     centrality_score: float | None = None
 
@@ -131,7 +131,7 @@ async def fetch_artifacts(
 async def fetch_current_symbol_titles(session: AsyncSession, build_seq: int) -> set[str]:
     """Titles of code symbols/files that are MEMBERS of the active `build_seq`.
 
-    The reference set PR-33's stale-doc signal compares doc references against: a
+    The reference set 's stale-doc signal compares doc references against: a
     doc that names a symbol NOT in this set references a removed/absent symbol.
     Read-only over already-stored data (no LLM); membership-filtered like
     fetch_artifacts so a symbol removed by a later build is not counted current.

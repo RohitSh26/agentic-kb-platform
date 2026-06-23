@@ -1,7 +1,7 @@
 """Request/response schemas for the context.* Context Broker tools.
 
 Schema-first per docs/contracts/mcp-tools-contract.md: these models are the
-contract the PR-10 broker implements against; until then they are registered
+contract the broker implements against; until then they are registered
 on stub tools. extra="forbid" plus required justification fields is what
 rejects a bare {"query": "..."} at the schema layer — the broker never sees it.
 """
@@ -23,9 +23,9 @@ from agentic_mcp_server.mcp.tool_schemas.evidence import (
 RUN_ID_PATTERN = r"^[A-Za-z0-9._-]{1,128}$"
 
 
-# Query intent (PR-33, golden-query-evals.md `intent`): drives the broker's
+# Query intent: drives the broker's
 # transparent temporal re-weighting (current code first for `how`, cards/PRs/ADRs
-# for `why`). Optional + additive — omitting it ⇒ neutral (pre-PR-33) ranking. It
+# for `why`). Optional + additive — omitting it ⇒ neutral (pre- ranking. It
 # is a RANKING hint only; it never changes ACL, membership, or the L0 verifier.
 QueryIntent = Literal[
     "how_does_x_work",

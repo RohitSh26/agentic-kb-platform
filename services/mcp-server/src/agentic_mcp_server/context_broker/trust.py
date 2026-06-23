@@ -1,4 +1,4 @@
-"""Trust-bucket vocabulary + read-time admission (ADR-0011, trust-buckets.md).
+"""Trust-bucket vocabulary + read-time admission.
 
 The broker enforces trust at read time. Producers assign a bucket at build
 time; this module decides which buckets a traversal may surface given a

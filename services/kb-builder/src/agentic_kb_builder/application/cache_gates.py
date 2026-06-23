@@ -38,7 +38,7 @@ def doc_extract_cache_key(
     model_params_hash: str,
     output_schema_version: str,
 ) -> str:
-    """Generation-cache key for one document's LLM extraction (ADR-0023 §4).
+    """Generation-cache key for one document's LLM extraction.
 
     Keyed by (content_hash, doc_extract_prompt_version, model, params, output_schema) so an
     unchanged document is a cache hit and makes no LLM call. The cache stores the MAPPED

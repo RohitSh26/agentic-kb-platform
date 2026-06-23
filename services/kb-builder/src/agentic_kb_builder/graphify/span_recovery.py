@@ -1,4 +1,4 @@
-"""Deterministic exact-span recovery for code symbols (ADR-0018 phase 1).
+"""Deterministic exact-span recovery for code symbols.
 
 The external Graphify extractor emits only a symbol's START line (kind/label/imports),
 never an end position, so its `code_symbol` artifacts have no citable body. This module
@@ -12,13 +12,13 @@ reports as `source_location` (verified: Graphify uses `ast.lineno`, the def/clas
 NOT the decorator line). The bare symbol name is carried alongside so a caller can
 disambiguate the rare case of several symbols starting on one physical line.
 
-Phase 2 (ADR-0018): each SymbolSpan also carries `search_text` — a deterministic,
+ : each SymbolSpan also carries `search_text` — a deterministic,
 deduped, sorted concatenation of words derived from the symbol's identifier, docstring,
 signature, decorators, called names, and imported names within the span. This is the
 retrieval surface for concept-word queries that don't appear verbatim in the raw body.
 Python-first; non-Python symbols have search_text=None.
 
-Python-first by design (ADR-0018): non-Python suffixes return no spans, so those symbols
+Python-first by design: non-Python suffixes return no spans, so those symbols
 stay graph-only (body_text=None) until per-language recovery lands. No fabricated spans.
 """
 
@@ -173,7 +173,7 @@ class SymbolSpan:
     is decorator-inclusive (<= def_line) so the body text captures decorators; the
     leading docstring is already inside `span_start..span_end`.
 
-    `search_text` (ADR-0018 Phase 2) is the deterministic retrieval surface: split
+    `search_text` is the deterministic retrieval surface: split
     identifier words + docstring words + signature + decorators + called names +
     imported names. None for non-Python symbols (populated only by the AST pass).
     """

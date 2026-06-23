@@ -1,4 +1,4 @@
-"""Deterministic graph centrality (PageRank) over the live knowledge graph (ADR-0028).
+"""Deterministic graph centrality (PageRank) over the live knowledge graph.
 
 The broker ranks retrieval by keyword overlap; this adds a *structural* prior — how central a node
 is in the code+knowledge graph — which is the relevance signal a plain grep agent cannot compute
@@ -10,7 +10,7 @@ anywhere shifts global centrality, so it is recomputed every build that touches 
 deterministic: sorted node + adjacency order and a fixed damping/iteration/tolerance make the result
 bit-identical run to run, independent of input row order.
 
-Read scope: the ADR-0013 interval-membership predicate for the active build_seq — NOT only this
+Read scope: the interval-membership predicate for the active build_seq — NOT only this
 build's new edges (an incremental build rewrites one source; the live graph still includes valid
 prior-build edges, so ranking over new edges alone would zero almost every score).
 """
@@ -77,7 +77,7 @@ def pagerank(edges: list[tuple[str, str]], nodes: set[str]) -> dict[str, float]:
 
 
 def _is_member(model: type[KnowledgeArtifact] | type[KnowledgeEdge], build_seq: int):
-    """ADR-0013 interval membership for the active build_seq (mirrors export_obsidian)."""
+    """."""
     return (model.valid_from_seq <= build_seq) & (
         model.invalidated_at_seq.is_(None) | (model.invalidated_at_seq > build_seq)
     )

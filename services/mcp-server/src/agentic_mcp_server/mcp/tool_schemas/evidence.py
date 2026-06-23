@@ -51,14 +51,14 @@ class EvidenceCard(McpModel):
     source_uri: str | None = None
     # Human-readable citation (file:symbol) derived in CODE from artifact metadata. This is
     # the reference a user-facing answer should show, so raw evidence_id UUIDs never need to
-    # appear in prose (ADR-0022, two-identifier rule). evidence_id stays the audit handle.
+    # appear in prose. evidence_id stays the audit handle.
     display_citation: str = ""
     confidence: float = Field(ge=0.0, le=1.0)
     authority_score: float = Field(ge=0.0, le=1.0)
     tokens_if_expanded: int = Field(ge=0)
     injection_flagged: bool = False
     injection_signals: list[str] = Field(default_factory=list)
-    # Temporal semantics (PR-33, ADR-0010/0011 phase 4). Deterministically derived
+    # Temporal semantics. Deterministically derived
     # at read time from already-stored data — ranking/labelling signals only, never
     # a trust gate. source_kind = code/doc/card/pr/adr/other; temporal_state =
     # current/superseded; stale_for_intent = the card references a removed/absent

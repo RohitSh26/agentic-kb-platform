@@ -1,4 +1,4 @@
-"""Ollama-first EntailmentClient over any OpenAI-compatible chat endpoint (PR-31).
+"""Ollama-first EntailmentClient over any OpenAI-compatible chat endpoint.
 
 mcp-server's own copy of the provider-agnostic chat pattern kb-builder uses for
 extraction and judging (services never share code). It defaults to a local
@@ -35,7 +35,7 @@ from agentic_mcp_server.structured_logging import get_logger
 
 logger = get_logger(__name__)
 
-#: Bump on any prompt change so the entailment cache re-keys (CLAUDE.md invariant 4).
+#: Bump on any prompt change so the entailment cache re-keys invariant 4).
 ENTAILMENT_PROMPT_VERSION = "entail-v1"
 
 # Small local models occasionally emit malformed JSON; resample a few times.

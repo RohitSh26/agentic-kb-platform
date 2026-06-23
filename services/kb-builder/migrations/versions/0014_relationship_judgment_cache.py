@@ -1,4 +1,4 @@
-"""relationship_judgment_cache table (PR-29, ADR-0010/0011 phase 3B).
+"""relationship_judgment_cache table.
 
 The phase-3B LLM judge rules on candidate pairs from relationship_candidate. Every
 judge call is GATED by this cache (architecture invariant 4): a hit returns the

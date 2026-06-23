@@ -1,4 +1,4 @@
-"""Azure AI Search implementation of the SearchClient Protocol (ADR-0006).
+"""Azure AI Search implementation of the SearchClient Protocol.
 
 The only module allowed to import the azure-search-documents SDK. Everything
 else — build indexer, future consumers — depends on the SearchClient Protocol

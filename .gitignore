@@ -2,42 +2,21 @@
 __pycache__/
 *.py[cod]
 .venv/
-.uv/
+venv/
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
-.pyright/
+.mypy_cache/
 
-# Env & secrets — never commit
+# Environment / secrets
 .env
 .env.*
-.env.mcp
-*.pem
-**/secrets/
-# templates carry no secrets and document required configuration
 !.env.example
 
-# Build / OS
-dist/
-/build/
+# Local build artifacts
+*.log
 .DS_Store
 
-# Claude Code session state
-.claude/cadence/
-.claude/scheduled_tasks.lock
-.claude/worktrees/
-
-# Generated eval output (baseline.json IS committed)
-evals/report.json
-
-# Local dev search index projection (ADR-0017) — rebuildable from Postgres, never truth
-.kb-local-search-index.json
-*.kb-local-search-index.json
-
-# Local BUILD-lane working index (scripts/agent_runner) — generated, not truth
-.kb-buildlane-index.json
-
-# Real-source build run logs (local artifact, not committed)
-build-run*.md
-
-# Exported Obsidian vault (generated from Postgres, rebuildable, never committed)
-vault/
+# Editor
+.idea/
+*.swp

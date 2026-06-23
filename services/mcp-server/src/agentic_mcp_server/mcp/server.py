@@ -80,7 +80,7 @@ def create_app() -> FastMCP:
 
     Auth defaults to fail-closed Entra. ``select_verifier`` swaps in the opt-in
     local-dev verifier ONLY when ``MCP_LOCAL_DEV_AUTH`` is set and its guardrails
-    hold (ADR-0016); production with the flag unset is unchanged.
+    hold; production with the flag unset is unchanged.
     """
     configure_logging()
     config = load_config()

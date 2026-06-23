@@ -1,4 +1,4 @@
-"""Graphify-backed code extractor (ADR-0012).
+"""Graphify-backed code extractor.
 
 Wraps Graphify's (`graphifyy`) public AST API and re-normalizes its output into our
 canonical code artifacts/edges. Graphify gives multi-language tree-sitter extraction;
@@ -10,7 +10,7 @@ we keep our trust contract by:
 - DROPPING any call site that resolves to more than one target (a syntactic name
   collision, not a resolved semantic call) instead of fabricating a `calls` edge.
 
-Graphify emits only a start line per node. ADR-0018 recovers each Python symbol's
+Graphify emits only a start line per node. recovers each Python symbol's
 EXACT source span with a deterministic `ast` pass (span_recovery.py) so `code_symbol`
 artifacts carry a real, citable `body_text` (start..end incl. decorators/docstring) and
 become keyword-searchable with NO LLM. Non-Python symbols stay span-less (body_text=None,
@@ -111,7 +111,7 @@ def map_extraction(
     `graph.json`. `known_paths` is the set of repo-relative paths the whole-tree pass
     extracted (Graphify reports `source_file` repo-relative under its cache_root); nodes
     whose source_file is NOT one of them are EXTERNAL references (builtins/stdlib/third-party)
-    and are dropped. `spans_by_file` (ADR-0018) is the per-file deterministic ast span map
+    and are dropped. `spans_by_file` is the per-file deterministic ast span map
     keyed by def-line; a matched symbol gets its EXACT body.
     """
     nodes = cast("list[Mapping[str, Any]]", list(data.get("nodes", [])))
@@ -145,7 +145,7 @@ def map_extraction(
     node_key: dict[str, str] = {}
     node_is_file: dict[str, str] = {}  # id -> source_file (file nodes only)
     # (symbol key, file path) for every symbol whose file node exists in this extraction,
-    # so we can emit a deterministic symbol->file `defined_in` edge below (ADR-0020).
+    # so we can emit a deterministic symbol->file `defined_in` edge below.
     symbol_files: list[tuple[str, str]] = []
     artifacts: list[CodeArtifactDraft] = []
     for node in nodes:
@@ -171,10 +171,10 @@ def map_extraction(
         file_spans = spans_by_file.get(path) if spans_by_file is not None else None
         span = _match_span(file_spans, start_line, node.get("label"))
         if span is not None:
-            # ADR-0018: exact deterministic source span (incl. decorators/docstring) is
+            # is
             # the symbol's citable body_text — no LLM, keyword-searchable. span_start is
             # decorator-inclusive so it may precede Graphify's reported def line.
-            # Phase 2: search_text carries the deterministic retrieval surface.
+            #: search_text carries the deterministic retrieval surface.
             artifacts.append(
                 CodeArtifactDraft(
                     key=key,
@@ -217,7 +217,7 @@ def map_extraction(
             )
         )
 
-    # defined_in -> symbol->file (ADR-0020). A symbol is defined in its file: a pure,
+    # defined_in -> symbol->file. A symbol is defined in its file: a pure,
     # deterministic AST fact (the file is the symbol's own key), highest trust. This gives
     # every file a role (a hub of its symbols) so traversal can hop symbol<->file<->sibling
     # symbols and pull only the relevant spans instead of reading the whole file.
@@ -292,12 +292,12 @@ def graphify_tree(files: Sequence[tuple[str, str]]) -> GraphifyResult:
     path_prefix), so the edges resolve against the per-file code artifacts the build wrote.
     Deterministic, zero-LLM. Returns empty when there are no files.
     """
-    from graphify.extract import extract  # declared dependency (ADR-0012)
+    from graphify.extract import extract # declared dependency
 
     files = list(files)
     if not files:
         return GraphifyResult(artifacts=(), edges=())
-    # Recover exact symbol spans per file (ADR-0018) so code_symbol artifacts carry real,
+    # Recover exact symbol spans per file so code_symbol artifacts carry real,
     # citable body_text — keyed by repo-relative path since line numbers collide across files.
     spans_by_file = {
         rel: recover_spans(file_text=text, suffix=Path(rel).suffix or ".py", path=rel)

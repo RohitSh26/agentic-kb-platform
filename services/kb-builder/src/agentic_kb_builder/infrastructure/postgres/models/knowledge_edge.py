@@ -42,7 +42,7 @@ class KnowledgeEdge(Base):
     # so pre-existing graphify/linker edges are untouched; the cross-domain
     # linker populates it for every edge it writes.
     evidence: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    # Interval membership (docs/contracts/version-membership.md, ADR-0013): same
+    # Interval membership (docs/contracts/version-membership.md,: same
     # predicate as knowledge_artifact. valid_from_seq is the introducing build_seq;
     # invalidated_at_seq is set when the edge leaves the KB (an endpoint deleted or
     # renamed away). NULL while live.
@@ -69,7 +69,7 @@ class KnowledgeEdge(Base):
             unique=True,
             postgresql_where=text("source = 'linker'"),
         ),
-        # Idempotency for phase-3B judge edges (PR-29): one row per logical
+        # Idempotency for phase-3B judge edges: one row per logical
         # (from, to, edge_type) judged link, so a rebuild refreshes in place
         # instead of accreting a copy per build.
         Index(

@@ -1,4 +1,4 @@
-"""Persistent, file-backed SearchClient for the local development loop (ADR-0017).
+"""Persistent, file-backed SearchClient for the local development loop.
 
 Azure AI Search persists the index across builds; the in-memory FakeSearchClient
 does not. Running the documented incremental rebuild as a fresh process therefore

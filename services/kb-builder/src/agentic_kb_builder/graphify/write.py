@@ -46,7 +46,7 @@ async def write_code_artifacts(
     Flushes so ids are assigned but does not commit — the build runner owns the
     transaction and records the generation-cache row after this returns.
 
-    valid_from_seq stamps the introducing build (interval membership, ADR-0013);
+    valid_from_seq stamps the introducing build (interval membership,;
     acl_teams propagates the code source's ACL onto the derived artifact (closes
     the acl-propagation TODO for newly written rows; the invalidation pass
     propagates ACL onto cache-hit-carried rows whose source ACL changed).

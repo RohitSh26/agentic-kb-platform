@@ -30,7 +30,7 @@ from agentic_mcp_server.infrastructure.search.search_client import SearchHit
 
 _MAX_QUERY_TOKENS = 12
 
-# Membership predicate (version-membership.md, ADR-0013): a candidate row must be a
+# Membership predicate (version-membership.md,: a candidate row must be a
 # MEMBER of the active build_seq, not merely labelled with its kb_version.
 _MEMBER = (
     "valid_from_seq <= :build_seq "
@@ -65,7 +65,7 @@ def _build_query(token_count: int) -> str:
     # weight is deliberately several times the body weight so an artifact whose name IS the
     # query term outranks one that only mentions it in prose, even when the prose row stacks
     # multiple incidental matches (the "BudgetPolicy vs ChangeContext*" failure). search_text
-    # (PR-34) is the deterministic retrieval surface for code symbols (split identifiers,
+    # is the deterministic retrieval surface for code symbols (split identifiers,
     # docstring words, signatures, called names) — it carries the concept words a task names
     # that a raw span misses, so it scores ABOVE body_text but below title. NULL search_text
     # (non-code / span-less) simply never matches (ELSE 0.0). Each token's field score is

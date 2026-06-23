@@ -116,7 +116,7 @@ def find_deterministic_links(artifacts: Sequence[LinkableArtifact]) -> list[Link
             if _matches(code_matcher, body, body_lower):
                 add(doc, code_matcher.artifact, "mentions", DOC_LINK_CONFIDENCE)
 
-    # Cross-domain deterministic rules (PR-26): commit→work-item implements,
+    # Cross-domain deterministic rules: commit→work-item implements,
     # commit→code_file mentions, and doc→work-item mentions. They carry an
     # evidence pointer; merge them through the same (from,to,edge_type) dedupe so
     # a logical link is never emitted twice.

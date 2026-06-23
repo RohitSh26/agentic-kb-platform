@@ -1,6 +1,6 @@
 """Docify output shapes: the artifacts Graphify's LLM doc extraction maps to.
 
-ADR-0023 routes document sources
+ routes document sources
 (github_doc / azure_wiki / ado_card) through Graphify's LLM doc extractor. The mapper
 (docify.docify_backend.map_doc_extraction) re-derives our trust contract from Graphify's
 raw output rather than copying its labels:
@@ -15,11 +15,11 @@ Docify produces ARTIFACTS ONLY — no edges (the relation ontology, which
 wrote none). Graphify's concept->concept relations are generic relatedness, which the
 relation ontology bans as an edge (docs/contracts/relation-ontology.md: "no generic
 related_to ... it becomes a candidate ... never an edge"). Promoting them to candidates
-for the phase-3 judge is a tracked follow-up (ADR-0023).
+for the phase-3 judge is a tracked follow-up.
 
 The artifact ROW shape is FROZEN and stable (types,
 knowledge_kind, authority/freshness scores, citable body) so the broker/verifier/Search
-projection are unaffected and no Alembic migration is required (ADR-0023 §5).
+projection are unaffected and no Alembic migration is required.
 """
 
 from typing import Literal, Self
@@ -45,7 +45,7 @@ class DocArtifactDraft(ArtifactModel):
     """One knowledge_artifact row to be written by the docify pipeline.
 
     A frozen row shape so the registry row shape is
-    unchanged (ADR-0023 §5)."""
+    unchanged."""
 
     artifact_type: DocArtifactType
     knowledge_kind: DocKnowledgeKind

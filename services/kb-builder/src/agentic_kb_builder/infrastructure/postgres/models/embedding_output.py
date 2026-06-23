@@ -8,7 +8,7 @@ from agentic_kb_builder.infrastructure.postgres.models.base import Base
 
 
 class EmbeddingOutput(Base):
-    """Crash-durable cache of one embedding vector (ADR-0027).
+    """Crash-durable cache of one embedding vector.
 
     The artifact-scoped ``embedding_cache`` ((artifact_id, text_hash, model)) is committed
     only in the build's single end-transaction, so a mid-build crash rolls it back and the

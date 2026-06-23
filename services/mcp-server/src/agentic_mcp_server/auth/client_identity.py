@@ -1,4 +1,4 @@
-"""Client/app identity + scopes + per-client verification policy (ADR-0011 phase 4).
+"""Client/app identity + scopes + per-client verification policy.
 
 Per-user bearer identity (``Requester``) cannot enforce "platform-trusted" against
 agents we do not control. The enforceable boundary needs a registered **client/app

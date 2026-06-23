@@ -1,4 +1,4 @@
-"""Add relation_schema_version + evidence to knowledge_edge (PR-26, ADR-0010 phase 2).
+"""Add relation_schema_version + evidence to knowledge_edge.
 
 The deterministic cross-domain linker writes edges that carry (a) the relation
 ontology version they were produced under and (b) an evidence pointer — the

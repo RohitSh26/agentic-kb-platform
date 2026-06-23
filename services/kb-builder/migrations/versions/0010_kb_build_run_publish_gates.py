@@ -1,4 +1,4 @@
-"""Record publish-gate outcomes on kb_build_run (PR-25).
+"""Record publish-gate outcomes on kb_build_run.
 
 The publish gates (docs/contracts/publish-gates.md) gate kb_version activation:
 a failed, non-overridden gate leaves the new version inactive and records WHICH

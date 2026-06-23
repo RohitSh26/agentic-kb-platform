@@ -1,6 +1,6 @@
 """Relationship-judge shapes: the LLM verdict over ONE bounded candidate pair.
 
-Phase 3B of ADR-0010 / ADR-0011. The judge looks ONLY at candidates the cheap
+ of /. The judge looks ONLY at candidates the cheap
 generator surfaced (relationship-candidates.md) and rules on whether the pair is a
 real relationship, under the closed relation ontology (relation-ontology.md) and
 trust buckets (trust-buckets.md).

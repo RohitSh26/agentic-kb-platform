@@ -1,4 +1,4 @@
-"""Postgres adapter for the crash-durable model-output cache (ADR-0027).
+"""Postgres adapter for the crash-durable model-output cache.
 
 Owns its OWN engine + session factory, separate from the build session, so each write is
 committed on its own connection the moment the model returns — independent of the build

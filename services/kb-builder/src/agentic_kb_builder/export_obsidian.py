@@ -9,9 +9,9 @@ Usage (from services/kb-builder, with a migrated DATABASE_URL set):
     uv run python -m agentic_kb_builder.export_obsidian --out ./vault [--kb-version X]
 
 Without `--kb-version` the exporter targets the active kb_version. Artifacts and
-edges are scoped by ADR-0013 interval membership — a row belongs to a version iff
+edges are scoped by interval membership — a row belongs to a version iff
 `valid_from_seq <= S < invalidated_at_seq` where S is that run's `build_seq` — NOT
-by label equality. (Label equality is wrong post-ADR-0013: an unchanged source's
+by label equality. (Label equality is wrong post-: an unchanged source's
 artifacts keep the label of the build that first wrote them, while later builds
 advance the active label, so a label filter silently drops the carried-over nodes
 and edges.) Output is deterministic (stable ordering + stable slugs), so re-running
@@ -248,14 +248,14 @@ async def _resolve_target(session: AsyncSession, kb_version: str | None) -> tupl
 def _is_member(
     model: type[KnowledgeArtifact] | type[KnowledgeEdge], build_seq: int
 ) -> ColumnElement[bool]:
-    """ADR-0013 interval-membership predicate: live at cutoff S=build_seq."""
+    """ interval-membership predicate: live at cutoff S=build_seq."""
     return (model.valid_from_seq <= build_seq) & (
         model.invalidated_at_seq.is_(None) | (model.invalidated_at_seq > build_seq)
     )
 
 
 async def _load_artifacts(session: AsyncSession, build_seq: int) -> list[KnowledgeArtifact]:
-    # Scope by ADR-0013 interval membership at cutoff S=build_seq (see module docstring).
+    # Scope by.
     # Stable order: artifact_type then title then id, so re-runs are identical.
     result = await session.execute(
         select(KnowledgeArtifact)

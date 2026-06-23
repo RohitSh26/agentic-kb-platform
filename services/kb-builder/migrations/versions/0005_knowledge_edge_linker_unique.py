@@ -1,6 +1,6 @@
 """Add partial unique index backing linker edge idempotency.
 
-PR-07 (linker): uq_knowledge_edge_linker is the ON CONFLICT target that
+: uq_knowledge_edge_linker is the ON CONFLICT target that
 lets the linker upsert edges idempotently on re-runs. One row per logical
 link — kb_version is deliberately NOT part of the key, so nightly rebuilds
 refresh the existing row instead of accreting a copy per version. It is

@@ -1,4 +1,4 @@
-"""Pure mapper: Graphify LLM doc extraction -> our doc artifacts (ADR-0023, artifacts-only).
+"""Pure mapper: Graphify LLM doc extraction -> our doc artifacts.
 
 Mirrors graphify.graphify_backend.map_extraction: a pure, deterministic, I/O-free function
 that re-normalizes Graphify's raw doc output into our trust contract, hermetically testable
@@ -8,7 +8,7 @@ relatedness, which the relation ontology bans as an edge
 (docs/contracts/relation-ontology.md: "no generic related_to ... it becomes a candidate ...
 never an edge"); ``mentions`` is contractually reserved for verbatim-identifier EXTRACTED
 matches, not LLM concept relations. Promoting these relations to phase-3 candidates is a
-tracked follow-up (ADR-0023).
+tracked follow-up.
 
 The mapper re-derives the artifact trust axis (axis A) — it never copies Graphify's labels:
 
@@ -31,7 +31,7 @@ from agentic_kb_builder.structured_logging import get_logger
 logger = get_logger(__name__)
 
 # V1 seed scores (stable seed scores so the registry row shape is
-# frozen, ADR-0023 §5). Interpreted knowledge (summary/concept) sits strictly below the
+# frozen,. Interpreted knowledge (summary/concept) sits strictly below the
 # source-backed quote so the broker can never rank a paraphrase as final truth.
 FACT_AUTHORITY = 0.8
 CONCEPT_AUTHORITY = 0.6
@@ -46,7 +46,7 @@ def _normalize_whitespace(value: str) -> str:
     DUPLICATED from the broker's L0 verifier (`verify._normalize_whitespace`,
     services/mcp-server) — services may not import each other, so the rule is duplicated,
     NOT diverged. The two layers MUST share one normalization so an artifact promoted to
-    ``source_backed`` at build time cannot fail L0 grounding at read time (ADR-0023 §3a).
+    ``source_backed`` at build time cannot fail L0 grounding at read time.
     """
     return " ".join(value.split())
 
@@ -77,7 +77,7 @@ def map_doc_extraction(
     from (the grounding corpus for axis A). ``known_doc_path`` is the repo-relative doc
     path; nodes whose ``source_file`` is some OTHER file are external references and are
     dropped (never an artifact for a file we did not extract). Concept->concept relations
-    are NOT materialized as edges (ADR-0023, relation-ontology).
+    are NOT materialized as edges.
     """
     nodes = cast("list[Mapping[str, Any]]", list(data.get("nodes", [])))
 

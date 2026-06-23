@@ -1,4 +1,4 @@
-"""Cross-domain relationship candidate generator (PR-28, ADR-0010 phase 3A).
+"""Cross-domain relationship candidate generator.
 
 The cheap, deterministic, ZERO-LLM stage of candidate-then-judge
 (docs/contracts/relationship-candidates.md). For cross-domain artifact pairs that
@@ -41,7 +41,7 @@ logger = get_logger(__name__)
 CANDIDATE_FAN_OUT_K = 10
 
 # Signal score floors. A signal below its floor does not fire (its key is absent
-# from `signals`). The embedding floor was raised 0.70 -> 0.80 (ADR-0019 tuning): at
+# from `signals`). The embedding floor was raised 0.70 -> 0.80: at
 # 0.70, weak code_symbol↔concept pairs reached the judge and were labelled INFERRED_LOW
 # at ~50% precision (the dominant noise source); 0.80 keeps only strong nomic matches,
 # cutting that noise without losing the high-confidence cross-domain links.

@@ -1,4 +1,4 @@
-"""Real semantic embedder behind the Embedder Protocol (ADR-0019).
+"""Real semantic embedder behind the Embedder Protocol.
 
 Calls an OpenAI-compatible / Ollama embeddings endpoint so the linker's
 SimilarityProvider can find prose<->code matches by MEANING — the cross-domain
@@ -7,7 +7,7 @@ to local Ollama `nomic-embed-text` (768-dim), free and offline; point it at a
 hosted endpoint by setting EMBEDDINGS_BASE_URL/-_MODEL/-_API_KEY with no code change.
 
 Embedding a code span here is a deterministic vector lookup with NO generated
-tokens, so it does not violate ADR-0018 (code is never summarised by a chat model).
+tokens, so it does not violate.
 The vector is cached in embedding_cache by content hash (invariant 4): unchanged
 text is never re-embedded.
 """

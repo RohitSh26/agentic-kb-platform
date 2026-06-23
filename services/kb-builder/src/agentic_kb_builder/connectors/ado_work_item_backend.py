@@ -1,4 +1,4 @@
-"""Azure DevOps Work Items FetchBackend (ADR-0015).
+"""Azure DevOps Work Items FetchBackend.
 
 Over the ADO REST API with HTTP Basic auth (`Authorization: Basic base64(":" + PAT)`):
   - list_sources: run a WIQL query (optionally filtered by `area_path`) to get the
@@ -142,7 +142,7 @@ class AdoWorkItemBackend:
         # so a duplicate id never produces two SourceRefs for one card.
         ids = list(dict.fromkeys(int(row["id"]) for row in rows))
         if len(ids) >= _WIQL_ID_CAP:
-            # Known limitation (ADR-0015): WIQL caps at ~20000 ids; the listing is partial.
+            # Known limitation: WIQL caps at ~20000 ids; the listing is partial.
             logger.warning(
                 "event=ado_work_item_wiql_capped org=%s project=%s ids=%d "
                 "msg=partial-listing-wiql-id-cap-see-adr-0015",

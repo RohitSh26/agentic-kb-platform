@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 KNOWLEDGE_EDGE_TABLE = "knowledge_edge"
 
-# Membership predicate (version-membership.md, ADR-0013): an edge is traversable
+# Membership predicate (version-membership.md,: an edge is traversable
 # iff it is a MEMBER of the active build's build_seq, not iff its label equals the
 # active kb_version. (The endpoint artifacts are independently membership-filtered
 # by the graph tool's per-hop fetch_artifacts.)

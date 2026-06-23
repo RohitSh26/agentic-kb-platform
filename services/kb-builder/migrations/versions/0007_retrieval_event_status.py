@@ -1,6 +1,6 @@
 """Add retrieval_event.status — the broker's per-call outcome.
 
-PR-10 (Context Broker): ledger.list_retrievals reports a status per retrieval
+: ledger.list_retrievals reports a status per retrieval
 (approved/reused/denied/needs_human_approval) so budget denials and reuse are
 auditable. NOT NULL with a server default is safe: the broker is this table's
 only writer and ships in the same PR, so the table is empty everywhere.

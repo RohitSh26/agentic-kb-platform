@@ -1,4 +1,4 @@
-"""Read-only typed claim/evidence ledger over the existing registry (ADR-0011, PR-30).
+"""Read-only typed claim/evidence ledger over the existing registry.
 
 This is NOT a new truth store: it derives nothing and writes nothing. It projects
 ``knowledge_artifact`` / ``knowledge_edge`` + spans into typed, ID-stable, citeable

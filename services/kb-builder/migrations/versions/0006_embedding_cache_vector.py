@@ -1,6 +1,6 @@
 """Store the embedding vector in embedding_cache.
 
-PR-08 (search indexer): the Azure AI Search index must be rebuildable from
+: the Azure AI Search index must be rebuildable from
 Postgres without re-embedding (invariants 1 and 4). embedding_hash alone
 cannot reproduce a vector, so the vector itself becomes part of the registry.
 Nullable: rows written before this revision (or by builds whose embedder does

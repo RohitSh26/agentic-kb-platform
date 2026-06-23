@@ -1,4 +1,4 @@
-"""Production BackendFactory (ADR-0015): dispatch a SourceSpec to its real backend.
+"""Production BackendFactory: dispatch a SourceSpec to its real backend.
 
 Same shape as `local_fs_backend_factory` so `connectors_from_config` is unchanged:
 the token (already resolved from `auth.token_env` by `resolve_token`) is handed in as

@@ -1,5 +1,5 @@
 """Graphify adapter: whole-tree Graphify extraction -> canonical code artifacts/edges
-(architecture §5.2). Code structure is delegated to the Graphify library (ADR-0012);
+(architecture §5.2). Code structure is delegated to the Graphify library;
 this package only maps its output into our versioned, ACL'd Postgres artifacts/edges."""
 
 from agentic_kb_builder.graphify.graphify_backend import graphify_tree, map_extraction

@@ -1,8 +1,8 @@
 """Add acl_teams to source_item and knowledge_artifact — team-based ACL metadata.
 
-PR-13 (security hardening): empty array = org-public (any authenticated subject
+: empty array = org-public (any authenticated subject
 may read); non-empty = visible only to requesters whose team set intersects.
-Enforcement happens in the mcp-server Context Broker (PR-13); kb-builder
+Enforcement happens in the mcp-server Context Broker; kb-builder
 connectors populate it in a follow-up, so the empty default preserves current
 behavior. NOT NULL with a server default is safe for the same reason as 0007:
 existing rows get the default, no backfill needed.

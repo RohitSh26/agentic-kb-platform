@@ -1,4 +1,4 @@
-"""Verifier selection + guardrails for local-dev auth (ADR-0016).
+"""Verifier selection + guardrails for local-dev auth.
 
 ``select_verifier`` is the single seam that decides whether a deployment runs the
 production Entra verifier (default) or the opt-in ``LocalDevTokenVerifier``. It is

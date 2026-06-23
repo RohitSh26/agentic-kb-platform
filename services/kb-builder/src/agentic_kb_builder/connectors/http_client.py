@@ -1,4 +1,4 @@
-"""Async HTTP client used *inside* the FetchBackend boundary (ADR-0015).
+"""Async HTTP client used *inside* the FetchBackend boundary.
 
 This is the only place a connector path makes a real network request. It wraps
 `httpx.AsyncClient` the same way the Azure SDKs sit behind SearchClient/ModelClient:

@@ -1,4 +1,4 @@
-"""Nightly incremental KB build (build plane). Skeleton only in PR-01."""
+"""Nightly incremental KB build (build plane). Skeleton only in."""
 
 from agentic_kb_builder.health import health
 

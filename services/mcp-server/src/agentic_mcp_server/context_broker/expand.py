@@ -175,7 +175,7 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
     # never re-traverse through them.
     visited: set[uuid.UUID] = set(request.seed_artifact_ids)
 
-    # Phase 1: EXTRACTED backbone BFS from allowed seeds.
+    #: EXTRACTED backbone BFS from allowed seeds.
     extracted_rows = await _bfs_tier(
         deps,
         list(seed_by_id),
@@ -186,7 +186,7 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
         visited=visited,
     )
 
-    # Phase 2: INFERRED tier BFS from everything gathered so far (seeds + phase 1).
+    #: INFERRED tier BFS from everything gathered so far (seeds + phase 1).
     inferred_rows: list[ArtifactRow] = []
     if request.include_inferred:
         phase2_seeds = list(seed_by_id) + [r.artifact_id for r in extracted_rows]

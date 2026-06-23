@@ -4,11 +4,11 @@ Remote MCP Context Broker (runtime plane): the policy, retrieval, dedupe,
 evidence, and token-budget layer that serves the active KB version to
 orchestrator and subagent manifests. Not a thin search wrapper.
 
-The KB is a **preferred-first, budgeted** tool, not a gate (ADR-0025): agents
+The KB is a **preferred-first, budgeted** tool, not a gate: agents
 ask `kb_search` first and read specific files directly when it falls short, and
 the governed `create_pack → open_evidence → verify_answer` path is for when an
 answer must be citation-grade. Token cost is controlled by a per-task budget
-(in the tool, not the prompt) plus skeleton-first code reads (ADR-0026).
+(in the tool, not the prompt) plus skeleton-first code reads.
 
 ## Boundaries
 

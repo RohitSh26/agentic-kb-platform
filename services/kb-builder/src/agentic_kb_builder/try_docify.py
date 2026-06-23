@@ -1,6 +1,6 @@
 """Local docify smoke test: run document extraction on one file through a real LLM and print it.
 
-Validate the docify step (ADR-0023: Graphify's LLM doc pipeline behind our adapter) end to
+Validate the docify step end to
 end without a database, the cloud beyond the model call, or a build — it defaults to a local
 Ollama server. Run it from `services/kb-builder`:
 

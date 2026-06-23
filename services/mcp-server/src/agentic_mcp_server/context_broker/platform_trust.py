@@ -1,4 +1,4 @@
-"""Official-client platform-trust enforcement (ADR-0011 §6, phase 4).
+"""Official-client platform-trust enforcement.
 
 The broker governs retrieval, not an agent's final answer. The only enforceable
 boundary against agents we do not control is: *an answer is platform-trusted iff it

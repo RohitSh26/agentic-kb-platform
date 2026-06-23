@@ -1,4 +1,4 @@
-"""The crash-durable model-output cache port (ADR-0027).
+"""The crash-durable model-output cache port.
 
 `DurableOutputCache` is the abstraction the build runner depends on to memoise expensive
 model outputs in a way that survives a build rollback. The concrete adapter

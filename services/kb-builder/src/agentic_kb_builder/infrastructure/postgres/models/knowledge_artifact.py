@@ -33,7 +33,7 @@ class KnowledgeArtifact(Base):
     content_hash: Mapped[str | None] = mapped_column(Text)
     artifact_hash: Mapped[str | None] = mapped_column(Text)
     kb_version: Mapped[str] = mapped_column(Text, nullable=False)
-    # Interval membership (docs/contracts/version-membership.md, ADR-0013).
+    # Interval membership (docs/contracts/version-membership.md,.
     # valid_from_seq = the build_seq that introduced the row (set once at creation);
     # invalidated_at_seq = the build_seq it left the KB in (NULL while live). A row
     # is a member of version S iff valid_from_seq <= S AND (invalidated_at_seq IS
@@ -54,18 +54,18 @@ class KnowledgeArtifact(Base):
     authority_score: Mapped[float | None] = mapped_column(Float)
     freshness_score: Mapped[float | None] = mapped_column(Float)
     # Normalized [0,1] graph-centrality (PageRank over knowledge_edge), recomputed each build and
-    # folded into the broker rank key as a transparent prior (ADR-0028). NULL/0 ⇒ no graph signal.
+    # folded into the broker rank key as a transparent prior. NULL/0 ⇒ no graph signal.
     centrality_score: Mapped[float | None] = mapped_column(Float)
     # 1-based inclusive line span for code artifacts (path comes via source_id ->
     # source_item.path); lets L2 evidence return precise snippets at a source version.
     span_start: Mapped[int | None] = mapped_column(Integer)
     span_end: Mapped[int | None] = mapped_column(Integer)
-    # Deterministic retrieval surface for code_symbol artifacts (ADR-0018 Phase 2):
+    # Deterministic retrieval surface for code_symbol artifacts:
     # split-identifier words + docstring + signature + decorator + call + import names.
     # Populated by the AST pass (Python-only, zero-LLM). NULL for non-code artifacts.
     search_text: Mapped[str | None] = mapped_column(Text)
     # team-based ACL: empty = org-public; non-empty = visible only to requesters
-    # whose team set intersects. Enforced by the mcp-server Context Broker (PR-13).
+    # whose team set intersects. Enforced by the mcp-server Context Broker.
     acl_teams: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default=text("'{}'")
     )

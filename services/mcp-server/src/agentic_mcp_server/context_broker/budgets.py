@@ -2,7 +2,7 @@
 
 Allowances are keyed by the authenticated session subject (never by the
 agent_name request field — that is what makes budgets unspoofable). The default
-is the most conservative role allowance from .claude/rules/token-budgets.md;
+is the most conservative role allowance from
 generous roles (e.g. implementation: 2 requests / 4k tokens) get an explicit
 entry in the allowance map, supplied per deployment via MCP_AGENT_ALLOWANCES
 (parsed by parse_agent_allowances below).

@@ -1,4 +1,4 @@
-"""Identity-over-time invalidation pass (PR-27, ADR-0013).
+"""Identity-over-time invalidation pass.
 
 Runs at the END of a build, AFTER all writes and the linker, but BEFORE
 activation. It reconciles identity so the new version (by interval membership)

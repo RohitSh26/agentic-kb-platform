@@ -1,4 +1,4 @@
-"""Security audit log: every context expansion and source access (PR-13).
+"""Security audit log: every context expansion and source access.
 
 Operator-facing structured stdout, distinct from the Postgres retrieval_event
 ledger on purpose: audit lines carry data agents must never see — ACL-

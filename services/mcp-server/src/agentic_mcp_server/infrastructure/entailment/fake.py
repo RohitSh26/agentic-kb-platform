@@ -1,4 +1,4 @@
-"""Hermetic FakeEntailmentClient for tests + local dev (PR-31).
+"""Hermetic FakeEntailmentClient for tests + local dev.
 
 Records every call so a test can assert the L3 cache prevented LLM calls (a hit
 => zero calls) and that L3 ran ONLY on deterministically-unresolved claims. The

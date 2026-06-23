@@ -7,7 +7,7 @@ never see duplicates. Linker edges absent from the computed set are
 SOFT-invalidated (invalidated_at_seq = this build's seq), never physically
 deleted: their textual evidence is gone so the active version stops serving them
 (invariant 7), but prior active versions that served them stay byte-reconstructable
-(ADR-0013 §1, invariant 5). A re-appearing edge is revived by the upsert resetting
+. A re-appearing edge is revived by the upsert resetting
 invalidated_at_seq to NULL. Edges below LOW_CONFIDENCE_THRESHOLD are written but flagged
 with a structured log so the eval harness can audit them — uncertain links are
 recorded as low confidence, never silently promoted to facts.
@@ -79,7 +79,7 @@ async def write_link_edges(
             )
             # On conflict the edge already exists from a prior build: refresh its
             # confidence/label/evidence but KEEP the original valid_from_seq — it
-            # has been a member since first introduced (immutability, ADR-0013).
+            # has been a member since first introduced (immutability,.
             # invalidated_at_seq is reset to NULL because a recomputed linker edge
             # is, by definition, live again this build.
             .on_conflict_do_update(
@@ -123,7 +123,7 @@ async def _invalidate_stale(
 ) -> int:
     """Soft-invalidate live linker edges absent from the computed set.
 
-    Sets invalidated_at_seq = this build's seq instead of deleting (ADR-0013 §1):
+    Sets invalidated_at_seq = this build's seq instead of deleting:
     the edge stops being served by this and later versions but stays a member of
     every prior version, so a previously active version remains byte-reconstructable
     (invariant 5). Only currently-LIVE edges (invalidated_at_seq IS NULL) are

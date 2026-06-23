@@ -25,7 +25,7 @@ class SearchClient(Protocol):
         """Return up to `top` relevance hits that are MEMBERS of `build_seq`.
 
         Results are scoped by interval membership (version-membership.md,
-        ADR-0013), not kb_version label-equality: an artifact introduced by an
+        , not kb_version label-equality: an artifact introduced by an
         earlier build but still live is a candidate; an invalidated one is not.
         """
         ...

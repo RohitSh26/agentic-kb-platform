@@ -12,7 +12,7 @@ format and parsing stdout. For each commit it produces:
 Same source state ⇒ same rendering ⇒ same content_hash (connectors rule), so an
 unchanged commit is skipped on the next build. History is bounded by
 `max_commits` so the scan is cheap and deterministic. Commits are zero-LLM:
-they skip extraction and graphify entirely (PR-26 is "deterministic, no LLM").
+they skip extraction and graphify entirely.
 
 The changed-file section is delimited so the linker can recover the file list
 from body_text deterministically (see `parse_changed_files`).

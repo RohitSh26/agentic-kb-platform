@@ -1,4 +1,4 @@
-"""Client-scope gating for the MCP tool surface (ADR-0011 §6, phase 4).
+"""Client-scope gating for the MCP tool surface.
 
 Scopes are an ADDITIONAL layer of authorization carried by the registered client/app
 identity — they NEVER replace the per-user team ACLs (defence in depth). A tool may

@@ -15,7 +15,7 @@ SERVER_NAME = "agentic-kb-context-broker"
 #: bind; deployments that change the bind set ``MCP_HTTP_HOST`` to match.
 DEFAULT_HTTP_HOST = "0.0.0.0"  # documentary default; no bind happens in config
 
-#: Local-dev auth (ADR-0016) defaults. All OFF/empty unless explicitly opted in.
+#: Local-dev auth defaults. All OFF/empty unless explicitly opted in.
 DEFAULT_LOCAL_DEV_SUBJECT = "local-dev"
 DEFAULT_LOCAL_DEV_TEAMS = "local-dev-team"
 
@@ -31,9 +31,9 @@ class ServerConfig:
     # raw MCP_CLIENT_REGISTRY value (client_id -> scopes + verification policy JSON);
     # optional — parsed fail-fast by auth.client_identity.parse_client_registry.
     # Identifiers + policy only; any client secret is referenced by env/Key Vault NAME
-    # (a 'secret_env' field), never a value (PR-32).
+    # (a 'secret_env' field), never a value.
     client_registry_json: str | None = None
-    # Local-dev auth (ADR-0016): OFF by default. When true a developer-only verifier
+    # Local-dev auth: OFF by default. When true a developer-only verifier
     # mints a fixed identity locally instead of the Entra path — gated by guardrails
     # in auth.local_dev_selection. Production leaves MCP_LOCAL_DEV_AUTH unset.
     local_dev_auth: bool = False

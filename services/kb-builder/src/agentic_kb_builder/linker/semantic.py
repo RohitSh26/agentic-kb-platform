@@ -2,7 +2,7 @@
 
 Runs only for concepts the deterministic pass could not link (deterministic
 match wins). The provider is an interface over the vector store — no real
-implementation until the Azure Search projection lands (PR-08) — so the build
+implementation until the Azure Search projection lands — so the build
 passes None and the pass is skipped with a structured log. Confidence is the
 raw similarity score, never inflated to look deterministic.
 """

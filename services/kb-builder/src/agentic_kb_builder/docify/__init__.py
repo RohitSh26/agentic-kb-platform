@@ -1,4 +1,4 @@
-"""Docify pipeline (ADR-0023): Graphify LLM doc extraction -> doc artifacts (artifacts-only).
+"""Docify pipeline: Graphify LLM doc extraction -> doc artifacts (artifacts-only).
 
 The prose extraction pipeline. Document sources (github_doc / azure_wiki /
 ado_card) route through Graphify's LLM doc extractor; the trust-sensitive normalization is

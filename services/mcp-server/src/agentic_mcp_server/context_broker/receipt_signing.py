@@ -1,4 +1,4 @@
-"""Signed verification receipts (ADR-0011 phase 4, PR-31).
+"""Signed verification receipts.
 
 The receipt is the verifier's trust boundary: an answer is platform-trusted iff it
 carries a VALID receipt (verification-receipt.md). Signing turns the receipt into a
@@ -6,7 +6,7 @@ host-checkable artifact — a host can validate one STATELESSLY (``verify_receip
 without re-running any check or touching the database, and a tampered ``answer_hash``
 or ``claim_results`` makes the signature mismatch.
 
-Key handling (CLAUDE.md: no secrets in code/fixtures/logs):
+Key handling: no secrets in code/fixtures/logs):
 - The signing key is read from an ENV VAR whose NAME is config (default
   ``VERIFY_SIGNING_KEY``). The NAME may appear in code/logs; the VALUE never does.
 - ``key_id`` is a non-secret, stable fingerprint (a truncated HMAC of a fixed
@@ -18,7 +18,7 @@ claim reduced to id, result, and its check booleans). Ordering is fixed so the s
 receipt always hashes the same; any change to those fields changes the MAC. Binding
 ``client_id`` into the payload SCOPES the receipt to the client it was issued to: a
 valid receipt for client A does NOT validate for client B (cross-client reuse is
-rejected, ADR-0011 §6).
+rejected,.
 """
 
 import hashlib

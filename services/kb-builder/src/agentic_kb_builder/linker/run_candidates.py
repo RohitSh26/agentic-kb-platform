@@ -1,4 +1,4 @@
-"""Candidate-generator orchestration (PR-28, ADR-0010 phase 3A).
+"""Candidate-generator orchestration.
 
 Loads the linkable artifacts + the live deterministic linker edges, runs the cheap
 candidate generator, and writes the result to relationship_candidate ONLY. It does

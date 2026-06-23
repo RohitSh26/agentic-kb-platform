@@ -1,4 +1,4 @@
-"""entailment_cache table (PR-31, ADR-0011 phase 4).
+"""entailment_cache table.
 
 The L3 verifier (LLM entailment) in mcp-server runs ONLY for claims L0-L2 could
 not adjudicate deterministically. Every L3 entailment call is GATED by this cache

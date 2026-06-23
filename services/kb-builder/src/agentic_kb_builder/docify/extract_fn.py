@@ -1,4 +1,4 @@
-"""The live Graphify doc-extraction call, behind an injectable function (ADR-0023 §5).
+"""The live Graphify doc-extraction call, behind an injectable function.
 
 This is the single seam between our adapter and Graphify's LLM doc pipeline. It reads the
 SAME model endpoint as every other build-plane LLM call (the shared
@@ -18,7 +18,7 @@ Backend choice by provider:
 
 It returns Graphify's raw extraction dict — the trust-sensitive normalization lives in the
 pure ``map_doc_extraction``. Unit tests inject a captured-fixture function instead of this one,
-so the live LLM is never required by the test suite (the hermetic-test requirement, ADR-0023 §5).
+so the live LLM is never required by the test suite (the hermetic-test requirement,.
 """
 
 import asyncio
@@ -90,7 +90,7 @@ def _graphify_backend_name(endpoint: ModelEndpoint) -> str:
     if endpoint.provider == AZURE_PROVIDER:
         return AZURE_PROVIDER
 
-    from graphify import llm  # declared dependency (ADR-0012 / ADR-0023)
+    from graphify import llm # declared dependency
 
     llm.BACKENDS[BACKEND_NAME] = {
         "base_url": endpoint.base_url,
@@ -160,7 +160,7 @@ def make_graphify_doc_extract(endpoint: ModelEndpoint) -> DocExtractFn:
     return graphify_doc_extract
 
 
-# System prompt for the Anthropic-native docify path. Instructs Claude to return the same
+# System prompt for the Anthropic-native docify path. Instructs the model to return the same
 # node-dict format that ``map_doc_extraction`` consumes, so downstream trust derivation is
 # identical regardless of whether Graphify or the Anthropic client drove the extraction.
 _ANTHROPIC_DOC_EXTRACT_SYSTEM = (
@@ -182,7 +182,7 @@ _ANTHROPIC_DOC_EXTRACT_SYSTEM = (
 
 
 def _make_anthropic_foundry_doc_extract(endpoint: ModelEndpoint) -> DocExtractFn:
-    """Doc extraction via Claude on Azure AI Foundry — the Anthropic Messages API DIRECTLY,
+    """Doc extraction via a model on Azure AI Foundry — the Anthropic Messages API DIRECTLY,
     bypassing Graphify (which speaks only the OpenAI API, so it cannot drive a Foundry-Anthropic
     deployment). Returns the SAME node-dict shape ``map_doc_extraction`` consumes, so all
     downstream trust derivation (source_backed vs interpreted) is identical regardless of which
@@ -240,7 +240,7 @@ def _make_anthropic_foundry_doc_extract(endpoint: ModelEndpoint) -> DocExtractFn
 def make_doc_extract(endpoint: ModelEndpoint) -> DocExtractFn:
     """Route docify to the right extractor for the resolved provider.
 
-    Claude on Azure AI Foundry uses the Anthropic Messages API directly (Graphify has no
+    a model on Azure AI Foundry uses the Anthropic Messages API directly (Graphify has no
     Anthropic backend and is mediated, so neither our provider nor our cert can reach it); every
     other provider goes through Graphify exactly as before.
     """

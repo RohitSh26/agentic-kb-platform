@@ -24,7 +24,7 @@ class SourceItem(Base):
     content_hash: Mapped[str] = mapped_column(Text, nullable=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # team-based ACL: empty = org-public; non-empty = visible only to requesters
-    # whose team set intersects. Enforced by the mcp-server Context Broker (PR-13).
+    # whose team set intersects. Enforced by the mcp-server Context Broker.
     acl_teams: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default=text("'{}'")
     )

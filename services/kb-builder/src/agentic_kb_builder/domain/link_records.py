@@ -33,7 +33,7 @@ class LinkEdgeDraft(ArtifactModel):
     (docs/contracts/relation-ontology.md "Required edge fields"): the matched
     work-item reference, the changed-file path, or the verbatim match key. Stored
     as a small JSON object in knowledge_edge.evidence. Optional only because the
-    pre-PR-26 doc/concept rules predate the column; the cross-domain rules always
+    pre- doc/concept rules predate the column; the cross-domain rules always
     set it.
     """
 

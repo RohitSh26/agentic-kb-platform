@@ -1,4 +1,4 @@
-"""EmbeddingSimilarityProvider — the linker's SimilarityProvider, for real (ADR-0019).
+"""EmbeddingSimilarityProvider — the linker's SimilarityProvider, for real.
 
 Embeds every live artifact's text once (cache-gated via embedding_cache, so unchanged
 text is never re-embedded) and answers `similar_code_symbols` by cosine nearest-neighbour

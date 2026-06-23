@@ -13,7 +13,7 @@ never happens and MCP keeps serving the last active version (active_version.py
 leaves the previous active row untouched on a False hook).
 
 Phasing: only phase-1 gates are enforcing here. Phase-2 gates (relation
-precision, no-ghost-edges) are SKIPPED, not failed (ADR-0010) — they are not
+precision, no-ghost-edges) are SKIPPED, not failed — they are not
 wired in until their producing mechanism exists; making them enforcing early
 would block otherwise-valid builds.
 """
@@ -54,9 +54,9 @@ ALLOWED_EDGE_TYPES: frozenset[str] = frozenset(
         # producer aliases in use today
         "exposed_as",
         "requests",
-        # structural code edges (ADR-0020): deterministic symbol->file / file->file
+        # structural code edges: deterministic symbol->file / file->file
         "defined_in",
-        # Graphify cross-file symbol relations (ADR-0012 delegation): a symbol uses /
+        # Graphify cross-file symbol relations: a symbol uses /
         # type-references another, ingested whole-tree for symbol-level dependency.
         "uses",
         "references",
@@ -276,7 +276,7 @@ async def no_dangling_citations_gate(session: AsyncSession, kb_version: str) -> 
 
 async def edge_evidence_integrity_gate(session: AsyncSession, kb_version: str) -> GateResult:
     """Every edge that is a MEMBER of this build has an allowed edge_type AND both
-    endpoints are MEMBERS of this build (no-ghost-edges, PR-27 / ADR-0013).
+    endpoints are MEMBERS of this build (no-ghost-edges,.
 
     This is the enforcing no-ghost-edges gate. Scoped by interval membership, not
     kb_version label-equality (version-membership.md): a legitimate cross-version
@@ -327,9 +327,9 @@ async def edge_evidence_integrity_gate(session: AsyncSession, kb_version: str) -
 
 
 async def relation_precision_gate(session: AsyncSession, kb_version: str) -> GateResult:
-    """Per-edge_type relation precision >= 0.9 for relations in production (PR-27).
+    """Per-edge_type relation precision >= 0.9 for relations in production.
 
-    Split into two parts (publish-gates.md, ADR-0013):
+    Split into two parts (publish-gates.md,:
 
     - ENFORCING here: the registry-derivable integrity of the served edge set —
       every edge that is a MEMBER of this build and was produced by the
@@ -340,7 +340,7 @@ async def relation_precision_gate(session: AsyncSession, kb_version: str) -> Gat
       registry can prove without the golden set, so it blocks activation.
     - SEAM (logged, non-blocking): the authoritative per-edge_type precision over a
       labelled golden set is computed by the evals harness (make eval-run), the
-      same seam as evidence_recall — kb-builder cannot import evals/ (ADR-0008).
+      same seam as evidence_recall — kb-builder cannot import evals/.
 
     measured_value is the count of member linker edges missing an evidence pointer.
     """
@@ -380,7 +380,7 @@ async def evidence_recall_gate(session: AsyncSession, kb_version: str) -> GateRe
     (retrieval + ACL + budget) against the registry over the golden query set —
     far too heavy to spin up inside activation, and the golden set lives in
     `evals/` (a root project) which kb-builder MUST NOT import (service boundary,
-    ADR-0008). So in phase 1 this gate runs in CI as `make eval-run`, not here.
+    . So in phase 1 this gate runs in CI as `make eval-run`, not here.
 
     We still COMPUTE and LOG a registry-derivable PROXY (linked_symbols /
     total_symbols) so underlinking is observable from build logs, but the gate is
@@ -471,7 +471,7 @@ def make_publish_gate_validator(consistency: ValidationHook) -> ValidationHook:
     """The publish gate, composing the existing index-consistency validator FIRST
     with the registry gates. Index consistency is the existing gate
     (make_consistency_validator); the rest extend it. Phase-2 gates are now
-    ENFORCING (PR-27 / ADR-0013): no-ghost-edges (edge_evidence_integrity_gate,
+    ENFORCING: no-ghost-edges (edge_evidence_integrity_gate,
     membership-scoped) and the registry-derivable part of relation precision
     (relation_precision_gate). evidence_recall stays on the evals-harness seam.
     """

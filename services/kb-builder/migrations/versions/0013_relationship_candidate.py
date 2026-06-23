@@ -1,4 +1,4 @@
-"""relationship_candidate audit table (PR-28, ADR-0010 phase 3A).
+"""relationship_candidate audit table.
 
 The cheap, deterministic candidate generator (docs/contracts/relationship-candidates.md)
 writes cross-domain artifact PAIRS it thinks are worth the phase-3B LLM judge looking

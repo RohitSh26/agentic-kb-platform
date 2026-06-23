@@ -1,4 +1,4 @@
-"""EntailmentClient seam for the L3 verifier (ADR-0011 phase 4, PR-31).
+"""EntailmentClient seam for the L3 verifier.
 
 The broker depends only on the ``EntailmentClient`` Protocol, never an SDK — so
 the model backend (local Ollama by default, Azure OpenAI / Groq / OpenAI by env)

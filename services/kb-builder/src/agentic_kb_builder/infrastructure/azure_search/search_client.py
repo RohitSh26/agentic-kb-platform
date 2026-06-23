@@ -1,4 +1,4 @@
-"""SearchClient interface + in-memory fake (PR-08, ADR-0006).
+"""SearchClient interface + in-memory fake.
 
 The Protocol is the only thing tools and builders may depend on; the Azure
 implementation lives in azure_search_client.py in this same package, so this

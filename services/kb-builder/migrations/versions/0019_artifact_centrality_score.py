@@ -1,11 +1,11 @@
-"""knowledge_artifact.centrality_score — graph-centrality ranking prior (ADR-0028 / PR-36).
+"""knowledge_artifact.centrality_score — graph-centrality ranking prior.
 
 A normalized [0,1] PageRank over the live knowledge graph, recomputed each build and folded into the
 broker rank key as a transparent prior. Nullable: NULL/0 means no graph signal and ranks exactly as
 before (backward-safe). Same shape/precedent as authority_score / freshness_score.
 
 Backfill: none — populated by the next build's centrality step. Downgrade drops the column (derived
-data; nothing served depends on it — a NULL centrality is the pre-PR-36 behaviour). Verified up->down->up.
+data; nothing served depends on it — a NULL centrality is the pre-. Verified up->down->up.
 
 Revision ID: 0019
 Revises: 0018

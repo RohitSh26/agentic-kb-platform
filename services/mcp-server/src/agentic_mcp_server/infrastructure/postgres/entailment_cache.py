@@ -1,4 +1,4 @@
-"""entailment_cache access: the L3 verifier's gate over the LLM (PR-31).
+"""entailment_cache access: the L3 verifier's gate over the LLM.
 
 kb-builder OWNS this table (migration 0015); mcp-server NEVER runs migrations and
 reaches it only via raw SQL with pinned names — the SAME boundary pattern as

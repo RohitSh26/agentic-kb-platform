@@ -3,7 +3,7 @@
 Deterministic on purpose — the broker makes no embedding calls in V1 (see
 docs/contracts/mcp-tools-contract.md), so semantic similarity is a cosine over
 token count vectors. The threshold is configurable (default 0.90, tuned from
-ledger logs per .claude/rules/token-budgets.md).
+ledger logs per.
 """
 
 import math

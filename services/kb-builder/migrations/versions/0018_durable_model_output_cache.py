@@ -1,4 +1,4 @@
-"""Crash-durable model-output cache (ADR-0027 / PR-35).
+"""Crash-durable model-output cache.
 
 The nightly build commits once at the very end, and the paid-work memo tables
 (generation_cache, embedding_cache) are written into that same transaction, so a
@@ -7,7 +7,7 @@ mid-build crash rolls them back and the re-run re-pays for every LLM/embedding c
 These two tables store the RAW model output keyed only by content + model identity,
 with NO FK into build-scoped artifacts, so a side-committing writer can persist them
 the moment the model returns. A re-run after a crash re-maps the cached output into a
-fresh build_seq with zero model calls, while atomic activation (ADR-0013) is unchanged.
+fresh build_seq with zero model calls, while atomic activation is unchanged.
 
 - doc_extraction_output: the serialized DocExtractionResult, keyed by the exact
   doc_extract_cache_key composition (content_hash + prompt + model + params + schema).

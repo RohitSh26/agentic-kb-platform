@@ -1,6 +1,6 @@
 """governance.checkpoint: durable gate-decision events for the ledger.
 
-The agent runner (ADR-0021) calls ``record_checkpoint`` at each delegation gate
+The agent runner calls ``record_checkpoint`` at each delegation gate
 to write a ``governance.checkpoint`` row into the retrieval_event ledger. This
 is NOT an MCP tool — it is an internal broker call made by the runner when it
 approves, edits, rejects, or aborts an agent-to-agent plan handoff.

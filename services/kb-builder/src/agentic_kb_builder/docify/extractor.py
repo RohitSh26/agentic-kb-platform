@@ -1,10 +1,10 @@
 """DocExtractor: one document -> Graphify LLM extraction -> mapped doc artifacts (artifacts-only).
 
-Implements the build runner's DocExtractor seam (ADR-0023). The generation-cache gate lives
+Implements the build runner's DocExtractor seam. The generation-cache gate lives
 in the runner, so this is only reached on a cache miss; it makes exactly one model call per
 changed document. The Graphify extraction function is an INJECTABLE dependency (default = the
 live ``graphify_doc_extract``) so unit/integration tests inject a captured-fixture function and
-never hit a live LLM (the hermetic-test seam, ADR-0023 §5).
+never hit a live LLM (the hermetic-test seam,.
 """
 
 import hashlib

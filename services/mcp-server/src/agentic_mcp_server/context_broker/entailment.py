@@ -1,7 +1,7 @@
-"""L3 verifier: cached LLM entailment for deterministically-unresolved claims (PR-31).
+"""L3 verifier: cached LLM entailment for deterministically-unresolved claims.
 
 This is the ONLY non-deterministic verifier level, so it is gated hard by cost
-discipline (ADR-0011, verification-receipt.md):
+discipline:
 
   - It runs ONLY for a claim L0-L2 could not adjudicate — i.e. the claim passed
     every deterministic level that ran but carries no typed assertion L2 settled.

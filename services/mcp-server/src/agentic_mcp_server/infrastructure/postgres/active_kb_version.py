@@ -7,7 +7,7 @@ sync with those documents. The partial unique index on kb_build_run guarantees
 at most one 'active' row.
 
 The broker serves by INTERVAL MEMBERSHIP, not kb_version label-equality
-(version-membership.md, ADR-0013): it resolves the active build's `build_seq`
+(version-membership.md,: it resolves the active build's `build_seq`
 once and filters every artifact/edge/provenance/graph/search query by the
 membership predicate against this `build_seq`. `kb_version` stays as a label only.
 """

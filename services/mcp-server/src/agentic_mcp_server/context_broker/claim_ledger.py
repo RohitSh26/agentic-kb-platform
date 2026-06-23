@@ -1,4 +1,4 @@
-"""Typed claim/evidence ledger adjudication for the L2 verifier (ADR-0011, PR-30).
+"""Typed claim/evidence ledger adjudication for the L2 verifier.
 
 The deterministic L2 level asks the ledger one question per claim: "does a real,
 in-version, requester-visible ledger unit support this claim's typed assertion?"

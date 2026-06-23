@@ -1,11 +1,11 @@
 """Persist docify drafts as knowledge_artifact rows (Postgres is truth).
 
 Writes document artifacts. Docify produces ARTIFACTS ONLY — no edges
-(ADR-0023, relation-ontology): Graphify's concept->concept relations are generic
+: Graphify's concept->concept relations are generic
 relatedness, which the relation ontology bans as an edge. Artifacts carry valid_from_seq
 and participate in supersession via the existing invalidation pass (a changed source
 retires its prior-generation artifacts); no new supersession mechanism is introduced
-(ADR-0023 §4).
+.
 """
 
 import uuid
@@ -37,9 +37,9 @@ async def write_doc_artifacts(
 
     Flushes so ids are assigned, but does not commit — the build runner owns the
     transaction and records the generation-cache row in the same transaction after this
-    returns. valid_from_seq stamps the introducing build (interval membership, ADR-0013);
+    returns. valid_from_seq stamps the introducing build (interval membership,;
     acl_teams propagates the SOURCE's ACL onto every derived artifact (never widened,
-    never from Graphify output — ADR-0023 §3).
+    never from Graphify output —.
     """
     rows = [
         KnowledgeArtifact(

@@ -5,7 +5,7 @@ cloud, no spend) and repoints to **Groq**, **OpenAI**, or **Azure OpenAI** by
 environment variables alone. The `openai` SDK is confined to this module — the rest of
 the build plane depends only on the `ModelClient` protocol (rule python.md), so the
 model backend stays swappable. The provider->endpoint resolution is shared with the
-``docify`` adapter through the public ``llm_endpoint.resolve_endpoint_from_env`` (ADR-0023);
+``docify`` adapter through the public ``llm_endpoint.resolve_endpoint_from_env``;
 this module just builds the OpenAI/Azure SDK client from the resolved ``ModelEndpoint``.
 
 Configure via env (see the wiki "Run locally"):
@@ -16,7 +16,7 @@ Configure via env (see the wiki "Run locally"):
 - Anthropic on Azure AI Foundry (`anthropic_foundry`): the Anthropic SDK's
   ``AsyncAnthropicFoundry`` client + the Messages API (a DIFFERENT SDK/API to OpenAI). Reuses
   the generic `LLM_BASE_URL` (the ``.../anthropic`` endpoint), `LLM_API_KEY`, `LLM_MODEL` (the
-  Claude deployment). The system prompt is a top-level ``system=`` param, not a message; the
+  the model deployment). The system prompt is a top-level ``system=`` param, not a message; the
   response is a list of content blocks; usage is ``input_tokens`` / ``output_tokens``.
 """
 
@@ -205,7 +205,7 @@ class ChatModelClient:
                 http_client=http_client,
             )
         elif endpoint.is_anthropic_foundry:
-            # Claude on Azure AI Foundry: a DIFFERENT SDK (Anthropic) + the Messages API.
+            # a model on Azure AI Foundry: a DIFFERENT SDK (Anthropic) + the Messages API.
             # base_url is the .../anthropic endpoint; api_key is API-key auth.
             client = AsyncAnthropicFoundry(
                 base_url=endpoint.base_url,
@@ -348,7 +348,7 @@ class ChatModelClient:
     async def _call_anthropic(
         self, messages: list[ChatCompletionMessageParam]
     ) -> tuple[str, int | None, int | None]:
-        """Anthropic Messages-API path (Claude on Azure AI Foundry).
+        """Anthropic Messages-API path (a model on Azure AI Foundry).
 
         The system prompt is a top-level ``system=`` param (NOT a message with role "system"),
         the response is a LIST of content blocks (we join the text blocks), and usage is

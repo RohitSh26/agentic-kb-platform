@@ -1,4 +1,4 @@
-"""GitHub REST FetchBackend (ADR-0015): determinism via a pinned commit SHA.
+"""GitHub REST FetchBackend: determinism via a pinned commit SHA.
 
 One backend serves both `github_code` and `github_doc` — `spec.type` decides the
 emitted `source_type`; include/exclude globs are applied upstream by
@@ -119,7 +119,7 @@ class GitHubRestBackend:
                 params={"recursive": "1"},
             )
         if tree.get("truncated"):
-            # Known limitation (ADR-0015): very large trees are capped by the API.
+            # Known limitation: very large trees are capped by the API.
             logger.warning(
                 "event=github_tree_truncated repo=%s/%s sha=%s "
                 "msg=partial-listing-large-repo-see-adr-0015",

@@ -1,4 +1,4 @@
-"""kb_version interval membership + identity-over-time (PR-27, ADR-0013).
+"""kb_version interval membership + identity-over-time.
 
 A KB version becomes an INTERVAL MEMBERSHIP keyed to a monotonic build sequence,
 replacing label-equality (docs/contracts/version-membership.md). Three changes:

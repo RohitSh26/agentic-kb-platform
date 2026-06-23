@@ -1,6 +1,6 @@
 """Canonical code artifacts/edges produced from Graphify's whole-tree extraction.
 
-Graphify (the library) owns code-structure extraction (ADR-0012); these are the shapes
+Graphify (the library) owns code-structure extraction; these are the shapes
 our mapping layer (graphify.graphify_backend) emits into the versioned, ACL'd Postgres
 registry. Symbols carry exact spans (recovered deterministically — Graphify reports only
 a start line) so L2 evidence can return precise snippets at a source version. Edge drafts
@@ -39,7 +39,7 @@ class CodeArtifactDraft(ArtifactModel):
     search_text: str | None = Field(
         default=None,
         description=(
-            "Deterministic retrieval surface (ADR-0018 Phase 2): split identifiers + "
+            "Deterministic retrieval surface: split identifiers + "
             "docstring + signature + decorator + call + import names. Python-only, zero-LLM."
         ),
     )

@@ -1,4 +1,4 @@
-"""Azure DevOps Wiki FetchBackend (ADR-0015): determinism via the wiki's git head.
+"""Azure DevOps Wiki FetchBackend: determinism via the wiki's git head.
 
 An ADO wiki is backed by a git repository, so — mirroring how `GitHubRestBackend`
 pins one commit SHA before listing/reading — this backend resolves the wiki's

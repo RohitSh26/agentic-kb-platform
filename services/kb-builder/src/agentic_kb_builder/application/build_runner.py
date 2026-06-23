@@ -1,7 +1,7 @@
 """Incremental build runner — the 8-step algorithm from docs/architecture §7.
 
 Unchanged content_hash => docify/graphify/embed/index are all skipped. Document
-sources go through docify (Graphify's LLM doc extraction, ADR-0023) and code through
+sources go through docify (Graphify's LLM doc extraction, and code through
 the whole-tree graphify adapter; both, the search indexer, and the embedding backend
 are injected collaborators. Every model-shaped call is gated by a cache lookup so a hit
 never reaches the model. Generation-cache rows are recorded in the same transaction as
@@ -57,7 +57,7 @@ logger = get_logger(__name__)
 
 
 class DocExtractor(Protocol):
-    """The document-extraction seam (ADR-0023): one document -> mapped doc artifacts
+    """The document-extraction seam: one document -> mapped doc artifacts
     (artifacts-only). Implemented by docify.DocExtractor (Graphify LLM extraction);
     faked in tests."""
 
@@ -137,13 +137,13 @@ class BuildRunner:
         self._embedder = embedder
         self._indexer = indexer
         self._similarity = similarity
-        # Crash-durable model-output cache (ADR-0027). None ⇒ legacy behaviour (paid work
+        # Crash-durable model-output cache. None ⇒ legacy behaviour (paid work
         # is only as durable as the build's single end-commit). When present, doc-extraction
         # and embedding outputs are side-committed so a crashed-and-restarted build re-maps
         # them with zero model calls. The artifact-coupled generation_cache / embedding_cache
         # gates below are unchanged — this layer sits BENEATH them.
         self._durable_cache = durable_cache
-        # The phase-3B relationship judge (PR-29). None ⇒ no judging this build
+        # The phase-3B relationship judge. None ⇒ no judging this build
         # (candidate generation still runs so the audit set stays current).
         self._judge = judge
         self._generation_gate = GenerationCacheGate(session)
@@ -198,7 +198,7 @@ class BuildRunner:
     async def _start_run(self) -> uuid.UUID:
         """Allocate the build_seq, persist the running kb_build_run row, and commit
         it up front so the audit record survives a failed build. Returns build_id."""
-        # Monotonic build_seq, assigned once at run start (ADR-0013): the active
+        # Monotonic build_seq, assigned once at run start: the active
         # build's build_seq is the served interval-membership cutoff. nextval is
         # safe under concurrent builds (the SEQUENCE serialises allocation).
         self._build_seq = (
@@ -242,7 +242,7 @@ class BuildRunner:
         generation so the new version does not serve both."""
         code_key_map: dict[tuple[str, str], uuid.UUID] = {}
         # Code (github_code) is graphified as ONE whole tree (Graphify resolves cross-file
-        # imports/calls/uses only when it sees all files together — ADR-0012), so every current
+        # imports/calls/uses only when it sees all files together —, so every current
         # code file is collected here and the whole graph is (re)built after the loop. Docs and
         # commits keep their incremental per-file path.
         code_units: list[_CodeUnit] = []
@@ -320,7 +320,7 @@ class BuildRunner:
             valid_from_seq=self._build_seq,
             similarity=self._similarity,
         )
-        # Phase 3A/3B (ADR-0010): the cheap, zero-LLM candidate generator emits
+        # /3B: the cheap, zero-LLM candidate generator emits
         # cross-domain candidate pairs (audit only), then the LLM judge (if
         # configured) rules on them and writes INFERRED_*/AMBIGUOUS edges. Both
         # run AFTER the deterministic linker (so deterministic facts are excluded
@@ -337,7 +337,7 @@ class BuildRunner:
                 valid_from_seq=self._build_seq,
                 judge=self._judge,
             )
-        # Invalidation pass (ADR-0013) runs AFTER all writes and the linker, but
+        # Invalidation pass runs AFTER all writes and the linker, but
         # BEFORE activation: deletion sweep, rename detection, ACL propagation.
         # Version-scoped — it only flips invalidated_at_seq / acl_teams, never
         # physically deletes a live row a prior version still serves.
@@ -347,7 +347,7 @@ class BuildRunner:
             seen_source_ids=seen_source_ids,
             changed_source_ids=changed_source_ids,
         )
-        # Graph centrality (ADR-0028) runs LAST in finalize — AFTER invalidation, so it ranks the
+        # Graph centrality runs LAST in finalize — AFTER invalidation, so it ranks the
         # served, post-sweep live set — and before index reconciliation + activation. Pure graph
         # math (no model call), written in this same pre-activation transaction.
         await run_centrality(self._session, build_seq=self._build_seq)
@@ -475,7 +475,7 @@ class BuildRunner:
     ) -> uuid.UUID:
         """Process one changed NON-code source; return its source_id (seen this build).
 
-        Routing (ADR-0018 / ADR-0023): git_metadata -> one deterministic commit artifact;
+        Routing: git_metadata -> one deterministic commit artifact;
         github_doc / azure_wiki / ado_card -> docify (Graphify's LLM doc extraction; the LLM
         is reserved for prose). github_code is handled separately as a whole tree (see
         _graphify_code_tree).
@@ -497,7 +497,7 @@ class BuildRunner:
         code_units: list[_CodeUnit],
         code_key_map: dict[tuple[str, str], uuid.UUID],
     ) -> None:
-        """Build the WHOLE code graph in one Graphify pass (ADR-0012, the way the library is
+        """Build the WHOLE code graph in one Graphify pass, the way the library is
         meant to be used): run Graphify over every current code file together so it resolves
         cross-file imports/calls/uses, then write the artifacts (grouped by their file's source)
         and the edges in one consistent key space. Zero-LLM; embeddings stay body-hash cached."""
@@ -622,7 +622,7 @@ class BuildRunner:
     async def _docify_gated(
         self, counters: _Counters, fetched: NormalizedContent, source_id: uuid.UUID
     ) -> list[uuid.UUID]:
-        """Cache-gated document extraction (ADR-0023). Mirrors the prior gated extractor
+        """Cache-gated document extraction. Mirrors the prior gated extractor
         exactly for caching: a hit replays the MAPPED artifact rows from
         generation_cache_artifact (no LLM call); a miss runs the extractor, writes
         artifacts, and records the cache. Docify produces artifacts only — no edges
@@ -653,7 +653,7 @@ class BuildRunner:
                 source_uri=fetched.source.source_uri,
             )
         # generation_cache missed in THIS build (a prior crashed build's rows were rolled
-        # back). Before paying the model, try the crash-durable output cache (ADR-0027): a
+        # back). Before paying the model, try the crash-durable output cache: a
         # side-committed extraction output survives a rollback, so a re-run re-maps it with
         # no LLM call. llm_calls is incremented ONLY on an actual extract.
         result = None
@@ -684,7 +684,7 @@ class BuildRunner:
             drafts=result.artifacts,
         )
         counters.artifacts_created += len(artifact_ids)
-        # The cache stores the MAPPED ARTIFACT ROWS (ADR-0023 §4): a replay returns these
+        # The cache stores the MAPPED ARTIFACT ROWS: a replay returns these
         # ids and never re-runs the mapper over stale Graphify output.
         await self._generation_gate.record(
             cache_key=cache_key,
@@ -710,7 +710,7 @@ class BuildRunner:
         if hit is not None:
             return
         model = self._embedder.embedding_model
-        # embedding_cache missed in THIS build; try the crash-durable vector cache (ADR-0027),
+        # embedding_cache missed in THIS build; try the crash-durable vector cache,
         # keyed by (text_hash, model) only — the vector is a pure function of text + model, so a
         # side-committed vector is reusable across builds and artifact identities with no
         # re-embed. embedding_calls is incremented ONLY on an actual embed.

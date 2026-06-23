@@ -1,4 +1,4 @@
-"""Opt-in, OFF-by-default local-dev auth verifier (ADR-0016).
+"""Opt-in, OFF-by-default local-dev auth verifier.
 
 The production path is fail-closed Microsoft Entra (``auth/entra.py``): every
 request carries a JWKS-verified bearer and there is NO auth-off switch

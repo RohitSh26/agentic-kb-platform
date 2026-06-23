@@ -43,7 +43,7 @@ class BrokerSettings:
     # "evidence by handle, not bulk text" principle the broker enforces elsewhere.
     max_quote_chars: int = 600
     # Env var NAME holding the receipt signing key value. The NAME is config; the
-    # VALUE is read from env at sign time and never literalised (PR-31). When the
+    # VALUE is read from env at sign time and never literalised. When the
     # var is unset the verifier still issues an (unsigned) receipt.
     signing_key_env: str = "VERIFY_SIGNING_KEY"
 
@@ -56,11 +56,11 @@ class BrokerDeps:
     budget_policy: BudgetPolicy = field(default_factory=BudgetPolicy)
     authorization: AuthorizationPolicy = field(default_factory=TeamAclAuthorization)
     packs: PackStore = field(default_factory=PackStore)
-    # L3 verifier (PR-31): the entailment backend. None ⇒ L3 cannot run even if
+    # L3 verifier: the entailment backend. None ⇒ L3 cannot run even if
     # requested (the verifier drops it from verifier_levels_run); a configured
     # client + an "L3" request runs the cached entailment check.
     entailment_client: EntailmentClient | None = None
-    # Client/app identity registry (PR-32): authenticated client_id -> scopes +
+    # Client/app identity registry: authenticated client_id -> scopes +
     # verification_required policy. Default empty ⇒ every client resolves to the
     # unregistered, non-scope-gated, non-verification-required identity (existing
     # behaviour unchanged for deployments that ship no registry).

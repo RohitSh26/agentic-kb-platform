@@ -1,4 +1,4 @@
-"""Deterministic cross-domain link rules (PR-26, ADR-0010 phase 2).
+"""Deterministic cross-domain link rules.
 
 Zero LLM, exact references only — no fuzzy/partial matches (the brief's explicit
 "Do NOT"). Three rules, all EXTRACTED, source='linker', strategy='deterministic',

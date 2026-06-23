@@ -1,6 +1,6 @@
 """Add knowledge_artifact.span_start / span_end line-span columns.
 
-PR-06 (graphify adapter): code artifacts record a 1-based inclusive line
+: code artifacts record a 1-based inclusive line
 span so L2 evidence can return precise snippets at a source version. The
 file path comes via source_id -> source_item.path, so only the span lives
 here. Nullable on purpose — non-code artifacts (summaries, concepts, wiki

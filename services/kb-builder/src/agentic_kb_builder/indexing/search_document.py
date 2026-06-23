@@ -1,4 +1,4 @@
-"""Search projection contract (PR-08, architecture §1/§6/§14, ADR-0002).
+"""Search projection contract.
 
 The Azure AI Search index is a derived, rebuildable projection of the Postgres
 Knowledge Registry — never truth. A SearchDoc is the unit of that projection:
@@ -50,7 +50,7 @@ class SearchDoc(SearchModel):
     authority_score: float | None
     freshness_score: float | None
     artifact_hash: str | None
-    # Deterministic retrieval surface for code_symbol artifacts (ADR-0018 Phase 2).
+    # Deterministic retrieval surface for code_symbol artifacts.
     # None for prose artifacts. The MCP-server keyword scorer ranks on this field
     # alongside title / body_text so concept-word queries hit even when the raw body
     # doesn't contain the searched word.

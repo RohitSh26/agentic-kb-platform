@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adopter-side parity checker for the portable agent framework (ADR-0009).
+"""Adopter-side parity checker for the portable agent framework.
 
 Copy this file along with `agents/`, `.copilot/`, and `.opencode/` into your
 repository and run it (locally or in CI):
@@ -186,7 +186,6 @@ class ParityChecker:
         )
 
     def discovered_skills(self) -> list[str]:
-        # anchored to the OpenCode tree (the shipped skill names): per-agent skill
         # membership checks against this set, and check_skills separately pins that the
         # copilot tree carries the same set, so the two definitions cannot diverge
         opencode_skills = self.opencode_dir / "skills"
@@ -470,7 +469,6 @@ class ParityChecker:
                 self.fail(f".copilot/skills/{skill}.md: empty skill module")
         # body parity: the two host renderings of a skill must not drift. There is no
         # canonical source yet (a recorded follow-up); this is the interim gate over the
-        # safety-critical prose. The opencode body is its post-frontmatter content.
         for skill in sorted(opencode_set & copilot_set):
             try:
                 _, opencode_body = _read(opencode_skills / skill / "SKILL.md")

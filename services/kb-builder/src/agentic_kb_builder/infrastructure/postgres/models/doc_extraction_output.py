@@ -9,7 +9,7 @@ from agentic_kb_builder.infrastructure.postgres.models.base import Base
 
 
 class DocExtractionOutput(Base):
-    """Crash-durable cache of one document's RAW LLM extraction output (ADR-0027).
+    """Crash-durable cache of one document's RAW LLM extraction output.
 
     The artifact-coupled ``generation_cache`` replays mapped artifact rows, but it is
     committed only in the build's single end-transaction, so a mid-build crash rolls it

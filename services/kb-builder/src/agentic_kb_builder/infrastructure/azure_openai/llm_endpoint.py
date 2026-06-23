@@ -41,7 +41,7 @@ PROVIDER_DEFAULTS: dict[str, tuple[str, str, str]] = {
 # OpenAI-compatible base_url path.
 AZURE_PROVIDER = "azure"
 
-# Claude models hosted on Azure AI Foundry. They use the Anthropic SDK's AnthropicFoundry
+# the model models hosted on Azure AI Foundry. They use the Anthropic SDK's AnthropicFoundry
 # client + the Messages API (NOT OpenAI chat.completions), so they route to a separate client
 # path. Config reuses the generic LLM_* vars: LLM_BASE_URL is the
 # https://<resource>.services.ai.azure.com/anthropic endpoint, LLM_MODEL is the deployment name.
@@ -83,7 +83,7 @@ def resolve_endpoint_from_env(*, max_tokens_default: int, env_prefix: str = "LLM
     (the judge and docify differ). ``env_prefix`` selects the generic var family: the default
     ``"LLM"`` reads ``LLM_PROVIDER`` / ``LLM_BASE_URL`` / ``LLM_API_KEY`` / ``LLM_MODEL``;
     docify passes ``"DOC_LLM"`` to run documents on a SEPARATE model from the agent/judge (e.g.
-    Claude-on-Foundry can't extract docs — Graphify speaks OpenAI's API). The azure branch keeps
+    the Foundry model can't extract docs — Graphify speaks OpenAI's API). The azure branch keeps
     its own ``AZURE_OPENAI_*`` namespace regardless of prefix. Raises a clear RuntimeError when a
     required credential/deployment is missing so work is never silently dropped.
     """
@@ -126,7 +126,7 @@ def resolve_endpoint_from_env(*, max_tokens_default: int, env_prefix: str = "LLM
             for name, value in (
                 (f"{env_prefix}_BASE_URL", base_url),  # the .../anthropic Foundry endpoint
                 (f"{env_prefix}_API_KEY", api_key),
-                (f"{env_prefix}_MODEL", model),  # the Claude deployment, e.g. claude-sonnet-4-6
+                (f"{env_prefix}_MODEL", model), # the the model deployment
             )
             if not value
         ]

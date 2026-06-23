@@ -1,4 +1,4 @@
-"""Add knowledge_artifact.search_text column (ADR-0018 Phase 2).
+"""Add knowledge_artifact.search_text column.
 
 Adds a nullable TEXT column that holds the deterministic retrieval surface
 for code_symbol artifacts: split-identifier words + docstring + signature

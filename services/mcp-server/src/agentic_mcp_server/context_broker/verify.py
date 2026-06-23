@@ -1,4 +1,4 @@
-"""context.verify_answer: layered L0/L1/L2/L3 verifier + signed receipt (ADR-0011).
+"""context.verify_answer: layered L0/L1/L2/L3 verifier + signed receipt.
 
 The broker governs retrieval, not the agent's answer; the only enforceable
 trust boundary is "an answer is platform-trusted iff it carries a valid
@@ -8,7 +8,7 @@ L0 checks run per cited evidence id:
   exists · in active version · ACL-visible to requester · in requester's
   retrieval ledger · not stale · supporting trust is EXTRACTED.
 
-Phase 4 adds three more levels, run only when requested (additive — an L0-only
+ adds three more levels, run only when requested (additive — an L0-only
 caller is unchanged):
 
   L1 (coverage)   — the claim cites ≥1 resolvable ledger unit and any quote it
@@ -180,7 +180,7 @@ def _l3_eligible(entry: _DeterministicClaim) -> bool:
     Concretely: it passed every deterministic level that ran (so L3 is not piling on
     an already-failed claim) AND carries no L2 typed-fact verdict (the ledger could
     not settle it — a paraphrase/synthesis claim). A claim L2 already resolved (pass
-    OR fail) is NEVER sent to the LLM — the cost guard of ADR-0011."""
+    OR fail) is NEVER sent to the LLM — the cost guard of."""
     return entry.deterministic_passed and entry.l2_typed_fact is None
 
 
@@ -216,7 +216,7 @@ def _check_evidence(raw_id: str, ctx: _EvidenceContext) -> tuple[_L0Result, list
     # Claim support fails only when the evidence is reached SOLELY through inferred
     # edges. Standalone source-backed evidence (no incident edges — e.g. a summary)
     # and evidence with any EXTRACTED edge both qualify; an artifact whose only
-    # incident edges are inferred does not (ADR-0011, verification-receipt.md L0).
+    # incident edges are inferred does not.
     supporting_trust_ok = in_active_version and (
         row.has_extracted_edge or not row.has_any_edge  # type: ignore[union-attr]
     )
@@ -705,7 +705,7 @@ async def verify_answer(
     )
     # Sign only when a key is configured (the env var NAME is config; the value is
     # read at sign time, never literalised). When unset, an UNSIGNED receipt is
-    # still issued — L0 stays the mandatory floor; signing is additive (PR-31).
+    # still issued — L0 stays the mandatory floor; signing is additive.
     if os.environ.get(deps.settings.signing_key_env):
         receipt = sign_receipt(receipt, env_var=deps.settings.signing_key_env)
     return receipt
