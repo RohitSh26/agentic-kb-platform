@@ -14,7 +14,8 @@ cd "$(git rev-parse --show-toplevel)"
 
 SRC_BRANCH="${1:-main}"
 
-if [ -n "$(git status --porcelain)" ]; then
+# Ignore local-only files that prod removes anyway (e.g. local editor/agent settings).
+if [ -n "$(git status --porcelain | grep -v '\.claude/settings\.json$')" ]; then
   echo "error: working tree not clean — commit or stash first." >&2
   exit 1
 fi
