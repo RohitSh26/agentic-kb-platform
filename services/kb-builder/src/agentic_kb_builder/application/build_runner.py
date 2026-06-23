@@ -288,7 +288,6 @@ class BuildRunner:
                         fetched.content_hash,
                     )
                     continue
-                counters.sources_changed += 1
                 logger.info(
                     "event=build_source_started connector=%s source_uri=%s "
                     "source_version=%s decision=changed",
@@ -296,9 +295,29 @@ class BuildRunner:
                     ref.source_uri,
                     fetched.source.source_version,
                 )
-                changed_id = await self._process_changed_source(counters, fetched)
-                seen_source_ids.add(changed_id)
-                changed_source_ids.add(changed_id)
+                # Resilience: a single source's failure (e.g. an LLM timeout) must NOT abort the
+                # whole build. Process each changed source inside a SAVEPOINT; on failure roll back
+                # JUST that source so every source already completed stays committed, count the
+                # failure, keep the source's prior generation, and leave its content_hash unadvanced
+                # so the next build retries it (mirrors the per-repo resilience graphify has).
+                try:
+                    async with self._session.begin_nested():
+                        changed_id = await self._process_changed_source(counters, fetched)
+                    counters.sources_changed += 1
+                    seen_source_ids.add(changed_id)
+                    changed_source_ids.add(changed_id)
+                except Exception as error:
+                    counters.extractor_failures += 1
+                    logger.error(
+                        "event=build_source_failed source_uri=%s error=%s",
+                        ref.source_uri,
+                        f"{type(error).__name__}: {error}",
+                    )
+                    # Keep the source SEEN (so the deletion sweep keeps its prior generation)
+                    # without advancing content_hash → it is retried on the next build.
+                    prior_id = await self._touch_last_seen(fetched)
+                    if prior_id is not None:
+                        seen_source_ids.add(prior_id)
         if code_units and any_code_changed:
             # the whole code graph is regenerated: mark every code source changed so the
             # supersession sweep retires the prior generation (no duplicate served edges).

@@ -353,29 +353,42 @@ async def test_cache_hit_prevents_model_calls_even_when_source_looks_changed(
 
 
 @requires_db
-async def test_failed_wikify_leaves_no_cache_row_or_artifacts_but_audit_row_survives(
+async def test_one_source_failure_is_skipped_not_fatal_and_others_persist(
     session: AsyncSession,
 ) -> None:
+    """A single source's extraction failure (e.g. an LLM timeout) is skipped, not fatal: the
+    build COMPLETES, the failure is counted, the failed doc leaves nothing behind (and is not
+    advanced, so it retries next build), and every source that SUCCEEDED is persisted."""
     runner = BuildRunner(
         session,
         kb_version="v-test.1",
-        doc_extractor=FailingDocExtractor(),
+        doc_extractor=FailingDocExtractor(),  # every doc extraction raises
         embedder=SpyEmbedder(),
         indexer=SpyIndexer(),
     )
-    with pytest.raises(RuntimeError, match="model exploded"):
-        # wikify runs only for prose now (ADR-0018) — a github_doc source.
-        await runner.run([_doc_connector("Some prose to summarize.\n")])
-    # partial work was rolled back by the runner...
+    # one code source (graphify, zero-LLM — succeeds) + one doc source (docify — fails).
+    run = await runner.run([_connector(CODE_FN), _doc_connector("Some prose to summarize.\n")])
+    await session.commit()
+
+    # the build COMPLETED despite the doc failure — no exception aborted it.
+    assert run.status == "completed"
+    assert run.extractor_failures == 1
+    # the failed doc left no generation-cache row, and its source_item was rolled back (a
+    # brand-new source), so it is retried on the next build.
     assert await _count(session, GenerationCache) == 0
-    assert await _count(session, KnowledgeArtifact) == 0
-    assert await _count(session, SourceItem) == 0
-    # ...but the build failure is recorded, never silent
-    failed_run = (await session.execute(select(KbBuildRun))).scalar_one()
-    assert failed_run.status == "failed"
-    assert failed_run.error_summary is not None
-    assert "model exploded" in failed_run.error_summary
-    assert failed_run.completed_at is not None
+    doc_sources = (
+        await session.execute(select(SourceItem).where(SourceItem.source_type == "github_doc"))
+    ).scalars().all()
+    assert doc_sources == []
+    # but the code source that SUCCEEDED is persisted.
+    code = (
+        await session.execute(
+            select(KnowledgeArtifact).where(
+                KnowledgeArtifact.artifact_type.in_(("code_file", "code_symbol"))
+            )
+        )
+    ).scalars().all()
+    assert code
 
 
 class MultiDraftDocExtractor(SpyDocExtractor):
