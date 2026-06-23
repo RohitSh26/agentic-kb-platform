@@ -32,8 +32,16 @@ _REF_TOKEN = re.compile(
     re.VERBOSE,
 )
 # Pointers at internal development files (the agent build tooling, project memory, rule files).
-_DEV_FILE = re.compile(r"\(?\b(?:CLAUDE\.md|\.claude/[^\s)]+)\b[^)\n]*?\)?")
+_DEV_FILE = re.compile(r"\(?(?:CLAUDE\.md|\.claude/[^\s)]+)[^)\n]*?\)?")
 _PHASE = re.compile(r"\bPhase\s+\d[AB]?\b")
+# Genericise the runtime model-provider naming (a configurable feature, not the build process).
+_REPLACE: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"Claude[- ]on[- ]Azure\s+AI\s+Foundry"), "a model on Azure AI Foundry"),
+    (re.compile(r"Claude[- ]on[- ]Foundry"), "the Foundry model"),
+    (re.compile(r"\bClaude deployment\b"), "the model deployment"),
+    (re.compile(r",?\s*e\.g\.\s*claude-[\w.-]+"), ""),
+    (re.compile(r"\bClaude\b"), "the model"),
+)
 # Whole comment/markdown lines mentioning the internal build process get dropped.
 _PROCESS_WORDS = re.compile(
     r"\b(?:Claude\s*Code|Claude|Anthropic'?s\s+CLI|dogfood\w*|Headroom|Groq|wikif\w*|"
@@ -61,6 +69,8 @@ def _scrub_text(text: str, *, is_markdown: bool) -> str:
         line = _REF_TOKEN.sub("", raw)
         line = _DEV_FILE.sub("", line)
         line = _PHASE.sub("", line)
+        for pat, repl in _REPLACE:
+            line = pat.sub(repl, line)
         is_comment = bool(_COMMENT_LINE.match(line))
         # Drop a comment / markdown-prose line that still names the internal build process.
         if (is_comment or is_markdown) and _PROCESS_WORDS.search(line):

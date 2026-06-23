@@ -27,6 +27,7 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 cp -R release/docs "$STAGE/docs"
 cp release/README.prod.md "$STAGE/README.md"
+cp release/gitignore.prod "$STAGE/gitignore"
 cp release/scrub.py "$STAGE/scrub.py"
 
 git checkout -B prod "$SRC_BRANCH" >/dev/null
@@ -49,6 +50,7 @@ git rm -rq --ignore-unmatch services/kb-builder/tests services/mcp-server/tests 
 mkdir -p docs
 cp -R "$STAGE/docs/." docs/
 cp "$STAGE/README.md" README.md
+cp "$STAGE/gitignore" .gitignore
 
 # --- 3. scrub internal references from every remaining file ---
 python3 "$STAGE/scrub.py" .
