@@ -58,6 +58,10 @@ and the migrations. Summary:
   > S)` for the active build's `build_seq` `S`. Added by kb-builder migration 0012.
   `knowledge_artifact.prior_identity_id` (uuid) is the rename link (history
   survives a path change).
+- `knowledge_artifact.centrality_score` (`float`, nullable; added by kb-builder migration 0019,
+  ADR-0028) — a normalized [0,1] graph-centrality (PageRank over `knowledge_edge`) recomputed each
+  build. The broker reads it and folds it into its rank key as a transparent multiplicative prior;
+  NULL/0 means no graph signal and ranks exactly as before. Derived data, never a citation.
 - `retrieval_event` full row shape — written by the Context Broker (PR-10).
 - `knowledge_artifact.acl_teams` (`text[]`, NOT NULL, default `'{}'`; added by
   kb-builder migration 0008, also on `source_item`) — the broker's

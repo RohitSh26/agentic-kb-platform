@@ -24,7 +24,7 @@ SOURCE_ITEM_TABLE = "source_item"
 _FETCH_ARTIFACTS_QUERY = text(
     f"""
     SELECT a.artifact_id, a.artifact_type, a.title, a.body_text, a.knowledge_kind,
-           a.authority_score, a.acl_teams, a.invalidated_at_seq,
+           a.authority_score, a.centrality_score, a.acl_teams, a.invalidated_at_seq,
            s.source_uri, s.source_type, s.is_deleted
     FROM {KNOWLEDGE_ARTIFACT_TABLE} a
     JOIN {SOURCE_ITEM_TABLE} s ON s.source_id = a.source_id
@@ -74,6 +74,9 @@ class ArtifactRow:
     source_type: str | None = None
     invalidated_at_seq: int | None = None
     source_is_deleted: bool = False
+    # Normalized [0,1] graph-centrality prior (ADR-0028); None ⇒ no graph signal (ranks as before).
+    # Defaulted so existing constructors stay valid; fetch_artifacts sets it by keyword.
+    centrality_score: float | None = None
 
 
 async def fetch_artifacts(
@@ -99,6 +102,9 @@ async def fetch_artifacts(
             # the ranker/cards do float arithmetic on it, so coerce at the boundary.
             authority_score=(
                 float(row.authority_score) if row.authority_score is not None else None
+            ),
+            centrality_score=(
+                float(row.centrality_score) if row.centrality_score is not None else None
             ),
             source_uri=row.source_uri,
             acl_teams=tuple(row.acl_teams),

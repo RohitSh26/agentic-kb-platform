@@ -53,6 +53,9 @@ class KnowledgeArtifact(Base):
     knowledge_kind: Mapped[str | None] = mapped_column(Text)
     authority_score: Mapped[float | None] = mapped_column(Float)
     freshness_score: Mapped[float | None] = mapped_column(Float)
+    # Normalized [0,1] graph-centrality (PageRank over knowledge_edge), recomputed each build and
+    # folded into the broker rank key as a transparent prior (ADR-0028). NULL/0 ⇒ no graph signal.
+    centrality_score: Mapped[float | None] = mapped_column(Float)
     # 1-based inclusive line span for code artifacts (path comes via source_id ->
     # source_item.path); lets L2 evidence return precise snippets at a source version.
     span_start: Mapped[int | None] = mapped_column(Integer)

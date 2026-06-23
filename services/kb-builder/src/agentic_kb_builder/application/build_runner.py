@@ -23,6 +23,7 @@ from agentic_kb_builder.application.cache_gates import (
     GenerationCacheGate,
     doc_extract_cache_key,
 )
+from agentic_kb_builder.application.centrality import run_centrality
 from agentic_kb_builder.application.invalidation import run_invalidation_pass
 from agentic_kb_builder.application.write_commit import write_commit_artifact
 from agentic_kb_builder.connectors import Connector
@@ -346,6 +347,10 @@ class BuildRunner:
             seen_source_ids=seen_source_ids,
             changed_source_ids=changed_source_ids,
         )
+        # Graph centrality (ADR-0028) runs LAST in finalize — AFTER invalidation, so it ranks the
+        # served, post-sweep live set — and before index reconciliation + activation. Pure graph
+        # math (no model call), written in this same pre-activation transaction.
+        await run_centrality(self._session, build_seq=self._build_seq)
 
     async def _reconcile_index(self, build_id: uuid.UUID, counters: _Counters) -> None:
         """Reconcile the search index in BOTH directions before validation, so

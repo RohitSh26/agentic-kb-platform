@@ -47,21 +47,29 @@ def _temporal_signals(artifact: ArtifactRow) -> TemporalSignals:
     )
 
 
+# ADR-0028: graph-centrality prior weight. A small multiplicative lift on the relevance term so a
+# structurally-central node outranks an equally-keyword-matching leaf, WITHOUT overriding the
+# provenance (source_backed) or authority tiers. NULL/0 centrality gives a 1.0 factor (no change).
+_CENTRALITY_BETA = 0.25
+
+
 def _rank_key(
     artifact: ArtifactRow,
     scores: dict[uuid.UUID, float],
     temporal: dict[uuid.UUID, TemporalWeight],
 ) -> tuple[int, float, float, str]:
-    """Deterministic rank key. The temporal weight multiplies the search score (a
-    TRANSPARENT, logged factor — never a hidden reranker); the source_backed and
-    authority tiers and the artifact_id tie-break are unchanged so ordering stays
-    stable for equal inputs. A neutral (intent=None) weight is 1.0 ⇒ identical
-    ordering to the pre-PR-33 ranker."""
+    """Deterministic rank key. The temporal weight and the centrality prior multiply the search
+    score (TRANSPARENT, logged factors — never a hidden reranker); the source_backed and authority
+    tiers and the artifact_id tie-break are unchanged so ordering stays stable for equal inputs. A
+    neutral temporal weight (intent=None) is 1.0 and a NULL/0 centrality is a 1.0 factor, so the
+    ordering is identical to the pre-PR-33/PR-36 ranker."""
     source_backed = 1 if artifact.knowledge_kind == "source_backed" else 0
     authority = artifact.authority_score or 0.0
     base_score = scores.get(artifact.artifact_id, 0.0)
     weight = temporal[artifact.artifact_id].weight if artifact.artifact_id in temporal else 1.0
-    return (source_backed, authority, base_score * weight, str(artifact.artifact_id))
+    centrality = artifact.centrality_score or 0.0
+    relevance = base_score * weight * (1.0 + _CENTRALITY_BETA * centrality)
+    return (source_backed, authority, relevance, str(artifact.artifact_id))
 
 
 def build_card(artifact: ArtifactRow, temporal: TemporalWeight | None = None) -> EvidenceCard:
@@ -262,12 +270,14 @@ async def retrieve_cards(
     cards = [build_card(artifact, temporal.get(artifact.artifact_id)) for artifact in ranked]
     logger.info(
         "event=temporal_weight_summary tool=%s intent=%s candidates=%d ranked=%d "
-        "stale_docs=%d order=%s",
+        "stale_docs=%d centrality_lifted=%d order=%s",
         tool,
         intent or "none",
         len(allowed),
         len(ranked),
         stale_count,
+        # ranked artifacts carrying a non-zero centrality prior (ADR-0028, transparent factor)
+        sum(1 for a in ranked if (a.centrality_score or 0.0) > 0.0),
         ",".join(str(card.artifact_id) for card in cards),
     )
     audit_context_access(
