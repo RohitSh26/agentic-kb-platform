@@ -56,7 +56,11 @@ cp "$STAGE/gitignore" .gitignore
 python3 "$STAGE/scrub.py" .
 
 # --- 4. commit the generated release ---
-git add -A
+# Stage tracked changes (scrub edits + the dev-path deletions) and the curated files only.
+# NEVER `git add -A`: that would sweep in untracked local cruft (index files, agent state) that
+# the source branch's .gitignore was keeping out.
+git add -u
+git add docs README.md .gitignore
 git commit -q -m "prod: pristine customer release (generated from ${SRC_BRANCH})"
 git checkout -q "$START_BRANCH"
 
