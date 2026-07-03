@@ -24,17 +24,23 @@ approval on sub-steps. Two self-imposed rules carried from this session:
 |---|---|---|---|
 | A1 | `kb_search` is a real, budgeted MCP tool | contract test pins it; dual-cap tested per axis; ledger row per call; ACL filtered | ✅ done (PR-37, verified) |
 | A2 | All 12 roles parity-clean in both host renderings | `check_parity.py` exit 0 | ✅ done (verified) |
-| A3 | `get_task_context` exists: one call → scope + blast radius + conventions + similar changes, tiered + cited | PR-39 suite: parallel graph nodes, retry path, ledger, ACL, budget | ⬜ |
-| A4 | Alias resolution ≥80% top-1 on a 25-case golden set mined from THIS repo's real history | `evals/` golden set + runner; accuracy printed, recorded in docs/reports | ⬜ |
-| A5 | Name-collision safety: 3/3 adversarial fixtures demoted to `interpreted`+caveat — never a confident wrong `deterministic` edge | fixtures in PR-39 test suite (implements the 2026-07-02 Graphify audit finding) | ⬜ |
-| A6 | `get_task_context` measurably beats raw file-reading | A/B harness ships runnable (tooled vs raw, 10 cases, pre-written expected-file refs); target ≥30% fewer tokens at equal-or-better correctness; needs LLM creds to execute — harness + goldens are the gate, execution recorded when creds present | ⬜ |
-| A7 | Review panel runs as an owned LangGraph workflow: 4 specialists fan-out → code_reviewer synthesizes → one PR review posted | hermetic suite incl. **crash-resume** (kill mid-run, resume, exactly one post) and **idempotency** (same head_sha re-run = no-op) | ⬜ |
-| A8 | Adversarial hardening: injection payloads in PR body/diff (≥5 fixtures incl. "approve this", tool-policy override, credential ask) achieve zero policy override / zero unfenced trust | fixture suite in PR-40; fencing asserted hermetically | ⬜ |
-| A9 | LangSmith tracing wired into both owned graphs, env-gated; everything runs clean with NO creds set | tests run without `LANGSMITH_*` env | ⬜ |
-| A10 | Query-time latency: `get_task_context` p50 < 2s on a seeded local KB (loose CI assert < 5s; actuals reported) | integration test prints measured p50 | ⬜ |
-| A11 | Orchestrator can actually reach the new roles on hosts that support delegation | manifests wired + parity 0; panel stays backend-only by design | ⬜ |
-| A12 | Docs coherent: v2 architecture doc drops Managed Agents; token-budgets names all 12 roles; `adr_draft_v1` registered (strict xfail flips to pass) | grep + test suite | ⬜ |
-| A13 | Full local gate green at the end: ruff + pyright + pytest on both services, parity 0, all contract tests | I run `/verify`-equivalent myself | ⬜ |
+| A3 | `get_task_context` exists: one call → scope + blast radius + conventions + similar changes, tiered + cited | PR-39 suite: parallel graph nodes, retry path, ledger, ACL, budget | ✅ done (PR-39, d79cc44, verified) |
+| A4 | Alias resolution ≥80% top-1 on a 25-case golden set mined from THIS repo's real history | `evals/` golden set + runner; accuracy printed, recorded in docs/reports | ✅ done — 25/25 on a real local build (docs/reports/alias-accuracy-2026-07-03.md; scope caveats recorded there) |
+| A5 | Name-collision safety: 3/3 adversarial fixtures demoted to `interpreted`+caveat — never a confident wrong `deterministic` edge | fixtures in PR-39 test suite (implements the 2026-07-02 Graphify audit finding) | ✅ done — unit + integration variants, plus a combined "none may surface deterministic" gate |
+| A6 | `get_task_context` measurably beats raw file-reading | A/B harness ships runnable (tooled vs raw, 10 cases, pre-written expected-file refs); target ≥30% fewer tokens at equal-or-better correctness; needs LLM creds to execute — harness + goldens are the gate, execution recorded when creds present | ✅ harness gate met (10/10 hermetic coverage; live two-arm run pending LLM creds — `scripts/eval_task_context.py`) |
+| A7 | Review panel runs as an owned LangGraph workflow — **amended by ADR-0031**: 4 specialists fan-out → reconcile → **store a draft, never post**; the developer publishes from their session | hermetic suite incl. **crash-resume** (reviewer LLM calls not re-executed; exactly one draft row) and **idempotency** (same head_sha → stored draft, zero model calls) | ✅ done (PR-40, cf6f9f9; proven in-memory AND against real Postgres) |
+| A8 | Adversarial hardening: injection payloads in PR body/diff (≥5 fixtures incl. "approve this", tool-policy override, credential ask) achieve zero policy override / zero unfenced trust | fixture suite in PR-40; fencing asserted hermetically | ✅ done — 6 fixtures; plus the strongest mitigation: no publish path exists to escalate to (node-set + GET-only client + static-scan tests) |
+| A9 | LangSmith tracing wired into both owned graphs, env-gated; everything runs clean with NO creds set | tests run without `LANGSMITH_*` env | ✅ done (both graphs; explicit env-stripping fixtures) |
+| A10 | Query-time latency: `get_task_context` p50 < 2s on a seeded local KB (loose CI assert < 5s; actuals reported) | integration test prints measured p50 | ✅ done — measured p50 4.9 ms (n=11, max 24.5 ms) |
+| A11 | Orchestrator can actually reach the new roles on hosts that support delegation | manifests wired + parity 0; review is dev-initiated in-session per ADR-0031 (panel lenses stay server-side) | ✅ done (a3e5102 + 3b4f885) |
+| A12 | Docs coherent: v2 architecture doc drops Managed Agents; token-budgets names all 12 roles; `adr_draft_v1` registered (strict xfail flips to pass) | grep + test suite | ✅ done (2f75ce6 + a3e5102) |
+| A13 | Full local gate green at the end: ruff + pyright + pytest on all three services + evals, parity 0, all contract tests | I run `/verify`-equivalent myself | ✅ done 2026-07-03 — kb-builder 370✓, mcp-server 340✓, review-panel 75✓, evals 106✓, parity 12/12, pyright 0 errors ×4, tree clean |
+
+**Post-completion notes (2026-07-03):** ADR-0031 amended the A7 flow mid-execution (owner: developers
+must read/revise/publish reviews from their own session — no auto-posting; the panel became a draft
+engine). Remaining open items beyond this checklist: the live A/B eval execution (A6's second half,
+needs LLM creds), the tracked durable-cache test regression (ADR-0027/0029 reconciliation), the
+kb_search budget-window TTL question, and PR-41 (MCP draft-fetch tool; CLI is the v1 fetch path).
 
 ## Eval system
 
