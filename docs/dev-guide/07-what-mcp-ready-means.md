@@ -41,6 +41,18 @@ file-fallback is logged as a **KB-gap signal** — a precise pointer to where th
 governed `create_pack → open_evidence → verify_answer` path (below) stays available for when a claim
 must be citation-grade.
 
+For a **change task** (not a question), `get_task_context` (PR-39, ADR-0030 §2) is the preferred
+first call: ONE request with the task description returns the resolved files/symbols in scope,
+their blast radius (callers/callees/tests), applicable conventions, and similar prior changes —
+every item confidence-tiered (`ground_truth | deterministic | interpreted`) and cited, capped at
+the Evidence-Pack band server-side. Zero LLM at query time: the backend is a LangGraph fan-out of
+four pure-retrieval nodes with one broadened retry, so the response is fast and deterministic.
+Ambiguous scope comes back as `ambiguous_candidates` + `open_questions`, never a silent guess; a
+`calls` edge only reads `deterministic` when the import graph corroborates it (otherwise it carries
+a `caveat`). Contract: `docs/contracts/mcp-tools-contract.md`; A/B eval:
+`scripts/eval_task_context.py` + `evals/agent_task_cases/task_context_ab_v1.yaml` (hermetic gate in
+`evals/tests/test_task_context_ab.py`; the live two-arm run needs LLM creds).
+
 ## Example: an agent gets a real task
 
 > **Prompt:** *"Add a per-team daily token cap to the context broker's budget enforcement."*

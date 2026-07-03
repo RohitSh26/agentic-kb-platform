@@ -243,8 +243,11 @@ def load_case(path: Path) -> EvalCase:
 # suite schema (harness.alias.AliasCase — a resolver golden set, not a broker
 # EvalCase) that happens to live alongside the broker retrieval cases; it is
 # scored by scripts/eval_alias_resolution.py, not evals/run.py, so it is
-# deliberately excluded from this glob.
-_EXCLUDED_GLOBS = ("alias_*.yaml",)
+# deliberately excluded from this glob. task_context_*.yaml (PR-39) is the same
+# shape of exception: the get_task_context A/B suite (harness.task_context_ab),
+# scored hermetically by tests/test_task_context_ab.py and live by
+# scripts/eval_task_context.py.
+_EXCLUDED_GLOBS = ("alias_*.yaml", "task_context_*.yaml")
 
 
 def load_cases(directory: Path) -> list[EvalCase]:

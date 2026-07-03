@@ -30,6 +30,10 @@ from agentic_mcp_server.mcp.tool_schemas.ledger import (
     ListRetrievalsResponse,
 )
 from agentic_mcp_server.mcp.tool_schemas.search import KbSearchRequest, KbSearchResponse
+from agentic_mcp_server.mcp.tool_schemas.task_context import (
+    GetTaskContextRequest,
+    GetTaskContextResponse,
+)
 from agentic_mcp_server.mcp.tool_schemas.verification import (
     PlatformTrustDecision,
     PlatformTrustRequest,
@@ -119,5 +123,15 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
         "Prefer this FIRST to find where things are; cite the source_uri of results you use, "
         "and do not re-read files it already answered. Budgeted — a per-task call + token cap "
         "is enforced server-side; each response reports budget_remaining.",
+    ),
+    # ADR-0030 §2 (PR-39): one call for a coding TASK. Already '_'-shaped like kb_search.
+    "get_task_context": ToolSchema(
+        GetTaskContextRequest,
+        GetTaskContextResponse,
+        "For a coding task, get everything at once in ONE call: the resolved files/symbols in "
+        "scope, their blast radius (callers, callees, tests), the conventions that apply, and "
+        "similar prior changes — each item tiered by confidence and citing its source. Call "
+        "this FIRST for any change task instead of exploring files; ambiguous scope comes back "
+        "as candidates + open questions, never a guess.",
     ),
 }

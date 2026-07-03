@@ -21,6 +21,10 @@ from agentic_mcp_server.mcp.tool_schemas import (
     RequestMoreResponse,
     RequestMoreStatus,
 )
+from agentic_mcp_server.mcp.tool_schemas.task_context import (
+    AmbiguousCandidate,
+    GetTaskContextRequest,
+)
 from agentic_mcp_server.mcp.tool_schemas.verification import ClaimInput, VerifyAnswerRequest
 
 EXPECTED_TOOLS = {
@@ -35,6 +39,7 @@ EXPECTED_TOOLS = {
     "context.platform_trust",
     "context.create_change_pack",
     "kb_search",
+    "get_task_context",
 }
 
 
@@ -76,6 +81,35 @@ def test_kb_search_hits_default_to_interpreted_and_reject_unknown_tiers() -> Non
         KbSearchHit.model_validate(
             {"title": "t", "artifact_type": "code_symbol", "confidence_tier": "certain"}
         )
+
+
+def test_get_task_context_accepts_a_bare_task_description() -> None:
+    """Like kb_search, the simple path IS the contract: one required field, no
+    run/pack handle; the optional knobs default per the proposal §2."""
+    request = GetTaskContextRequest.model_validate(
+        {"task_description": "fix the retrieval budget check"}
+    )
+    assert request.hints is None
+    assert request.confidence_floor == "interpreted"
+    assert request.max_tokens is None  # None ⇒ the server's Evidence-Pack cap
+    with pytest.raises(ValidationError):
+        GetTaskContextRequest.model_validate({"task_description": ""})
+    with pytest.raises(ValidationError):
+        GetTaskContextRequest.model_validate({"task_description": "x", "run_id": "run-1"})
+    with pytest.raises(ValidationError):
+        GetTaskContextRequest.model_validate(
+            {"task_description": "x", "confidence_floor": "certain"}
+        )
+
+
+def test_ambiguous_candidates_carry_at_least_two_candidates() -> None:
+    """One candidate is a resolution, not an ambiguity — the schema forbids using
+    ambiguous_candidates as a hedge around a single (guessed) answer."""
+    single = [uuid.uuid4()]
+    with pytest.raises(ValidationError):
+        AmbiguousCandidate(alias_text="the login bug", candidates=single, reason="r")
+    pair = [uuid.uuid4(), uuid.uuid4()]
+    assert len(AmbiguousCandidate(alias_text="x", candidates=pair, reason="r").candidates) == 2
 
 
 def test_request_more_requires_full_justification() -> None:

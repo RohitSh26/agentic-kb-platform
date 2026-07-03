@@ -3,7 +3,7 @@
 > Versioned tool surface served by mcp-server. Schema before code: every tool
 > has a frozen pydantic request/response model (`extra="forbid"`) in
 > `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`, registered in
-> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.8.0"` (1.1.0 = PR-13:
+> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.10.0"` (1.1.0 = PR-13:
 > `authorization` decision on every retrieval response, `injection_*` markers
 > on cards and expansions; 1.2.0 = PR-18: `read_pack.role` opened from the
 > closed six-role enum to a free-form charset-guarded string — response
@@ -45,7 +45,19 @@
 > ranked ACL-filtered hits out (`title`, `artifact_type`, `source_uri`,
 > `snippet`, `confidence_tier`), with a server-side dual cap (call count AND
 > cumulative tokens) per (MCP session, subject). Additive: every `context.*`
-> tool is unchanged and stays registered.
+> tool is unchanged and stays registered; 1.10.0 = PR-39 (ADR-0030 Decision §2,
+> `docs/proposals/2026-07-02-tool-design-first-kb-architecture.md` §2–3): adds
+> `get_task_context`, the one-call task-context tool — a task description (plus
+> optional file/symbol hints) in; resolved scope, blast radius
+> (callers/callees/tests), conventions, and similar prior changes out. Every
+> entity carries a `confidence_tier` (`ground_truth | deterministic |
+> interpreted`) and a source path; a `calls` edge is `deterministic` ONLY when
+> corroborated by the import graph (or same-module definition), otherwise
+> `interpreted` with a `caveat` — the 2026-07-02 Graphify-audit rule. Ambiguous
+> resolution returns `ambiguous_candidates` + `open_questions`, never a silent
+> guess. Zero LLM at query time: the backend is a LangGraph StateGraph of four
+> parallel pure-retrieval nodes, a synthesis node, and ONE broadened retry on
+> empty scope. Additive: no existing tool changes.
 
 ## The V1 tools
 
@@ -62,6 +74,7 @@
 | `context.platform_trust` | Official-client gate: is the client's answer platform-trusted? |
 | `context.create_change_pack` | BUILD-lane selector: the small file set (target/test/dependency) to edit for a code-change task |
 | `kb_search` | ADR-0025 KB-first retrieval: one budgeted, ACL-filtered ranked search over the active KB |
+| `get_task_context` | One-call task context (ADR-0030): resolved scope + blast radius + conventions + similar prior changes, tiered, cited, budgeted |
 
 There is **no unrestricted** KB search tool in V1. `kb_search` (1.9.0, ADR-0025)
 is deliberately simple to *call* — a bare `{"query": ...}` is its entire request —
@@ -107,6 +120,15 @@ provenance is required; `kb_search` is the preferred first stop.
   handle, no justification fields (this tool is the ADR-0025 *simple* path; the
   justified path stays `context.request_more`). Identity and budget bind to the
   authenticated session, never to a request field.
+- `get_task_context`: `task_description` (non-empty), optional
+  `hints {file_paths[], symbols[]}`, optional `confidence_floor` ∈
+  `ground_truth | deterministic | interpreted` (default `interpreted` — admit
+  everything), optional `max_tokens ≥ 1` (default: the server's Evidence-Pack
+  cap; the request value is clamped to that cap, never an escape hatch). No
+  run/pack handle; identity binds to the authenticated session. Resolution
+  order is hints → alias index (`alias_reference` artifacts, PR-38 — the tool
+  degrades gracefully to plain search when the KB predates PR-38 or an alias
+  row's `body_text` JSON is unparseable) → keyword search fallback.
 - `run_id` matches `^[A-Za-z0-9._-]{1,128}$` (log-injection guard).
 - `context.read_pack.role` is **free-form** — adopting teams name their own
   roles (`security_auditor` is as valid as `implementation`); the broker never
@@ -257,6 +279,58 @@ provenance is required; `kb_search` is the preferred first stop.
   factors, semantic dedupe, 3–5 results max) and ledgered with
   `run_id = "-"` (the request carries no run handle; the session is recorded in
   `details`).
+- `get_task_context` returns `{resolved_scope, blast_radius, conventions,
+  similar_prior_changes, evidence_ids, budget_used, open_questions}`
+  (`docs/proposals/2026-07-02-tool-design-first-kb-architecture.md` §2):
+  - `resolved_scope.entities[]`: `{entity_id, path, symbol, resolution_source ∈
+    alias_index | hint | search, confidence_tier}`. When resolution is genuinely
+    ambiguous (a hint or alias matches several distinct targets with no clear
+    winner), the tool returns `resolved_scope.ambiguous_candidates[]`
+    (`{alias_text, candidates[], reason}`) plus an `open_questions` entry and
+    NO guessed entity — an ambiguous answer is an answer, so it does not
+    trigger the broadened retry (only a truly empty scope does, once).
+  - `blast_radius.{callers,callees,tests}[]`: `{entity_id, path, symbol,
+    edge_type, confidence_tier, caveat}`. Traversal covers `calls` / `imports` /
+    `tests` edges from the resolved entities, EXTRACTED trust class only.
+    **Confidence rule (2026-07-02 Graphify audit):** a `calls` edge is
+    `deterministic` ONLY if the caller and target are defined in the same file
+    OR the caller's file has an `imports` edge to the target's file; anything
+    short of that (including a missing `defined_in` for either side) is
+    `interpreted` with a non-null `caveat` naming the missing corroboration.
+    `imports` and `tests` edges are direct AST facts and stay `deterministic`.
+  - `conventions[]`: `{pattern, evidence_ids, confidence_tier}` — rule/ADR/doc
+    artifacts relevant to the resolved scope's directories; always
+    `interpreted` in v1.
+  - `similar_prior_changes[]`: `{commit_or_pr_id, summary, evidence_ids}` —
+    keyword hits over `commit` artifacts (`interpreted`-class content).
+  - `confidence_floor` filters the response: a floor above `interpreted`
+    removes interpreted-tier entities/edges and empties `conventions` +
+    `similar_prior_changes` rather than silently blending them in (drops are
+    logged, `event=task_context_floor_filtered`).
+  - `evidence_ids` = every artifact id cited anywhere in the response;
+    `budget_used = {tokens, calls}` where `tokens` is the estimate of the EXACT
+    serialized response (meter == wire, the kb_search rule) and `calls` counts
+    the internal retrieval operations the backend ran.
+  - Budget: the serialized response is capped server-side at the Evidence-Pack
+    band (`task_context_max_tokens`, default 8k — the top of the 6k–8k band).
+    Over-budget responses are trimmed deterministically from the lowest-value
+    tail (`similar_prior_changes` → `conventions` → `callees` → `callers` →
+    `tests`; never the resolved scope, ambiguity, or open questions), logged as
+    `event=task_context_budget_trim`.
+  - Backend structure (ADR-0030 Decision §2): a LangGraph StateGraph — four
+    genuinely parallel pure-retrieval nodes (`resolve_scope`, `blast_radius`,
+    `conventions`, `similar_prior_changes`) joined by a `synthesize` node, with
+    ONE conditional broadened retry when scope resolves empty, then an honest
+    answer with what is known. Zero LLM calls at query time. LangSmith tracing
+    is env-gated (`LANGSMITH_TRACING`); nothing requires it to be set.
+  - Ledger + ACL: one `retrieval_event` per call (`tool_name="get_task_context"`,
+    `run_id="-"`, `returned_artifact_ids` = the evidence ids, `tokens_returned` =
+    `budget_used.tokens`; ledger-only `error` status when no active kb_version).
+    Every artifact surfaced anywhere in the response is hydrated from Postgres
+    and filtered by the requester's team ACL first; an unauthorized neighbor is
+    dropped before it can reveal its connectivity (same rule as
+    `graph.get_neighbors`), and suppressed ids are audit-logged.
+- `ledger.list_retrievals` returns one record per retrieval event:
   `event_id`, `run_id`, `kb_version`, `agent_name`, `tool`, `status`,
   `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`. The non-run
   sentinel `run_id = "-"` is rejected (it aggregates every subject's

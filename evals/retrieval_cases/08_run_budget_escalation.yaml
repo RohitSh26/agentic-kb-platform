@@ -8,7 +8,13 @@ approved_context_plan: "trace the embedding pipeline change and its review escal
 # per-agent denial — but its max_tokens exceeds what the RUN has left, so the
 # broker escalates: needs_human_approval (F3). Dedupe-before-budget means the
 # question must be genuinely new, so it cites a distinct keyword.
-budget_tokens: 30
+#
+# Calibrated to the HONEST card meter (card_tokens = the full serialized card,
+# ~144 tok/card here — commit 997f94a): 200 keeps exactly the top-ranked card
+# (144 <= 200 < 289 for two), and the ~56 run-remaining still forces the
+# 2000-token follow-up to escalate. The previous value (30) predated that meter
+# and silently produced an EMPTY initial pack, failing the expected-doc recall.
+budget_tokens: 200
 fixtures:
   artifacts:
     - key: embedding_pipeline

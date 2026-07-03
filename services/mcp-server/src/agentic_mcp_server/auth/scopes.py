@@ -37,6 +37,9 @@ TOOL_REQUIRED_SCOPES: dict[str, str] = {
     # kb_search is the ADR-0025 read path: the same capability class as the context.*
     # read tools, so a host that granted `context.read` for the read path gets it too.
     "kb_search": SCOPE_CONTEXT_READ,
+    # get_task_context (PR-39) is the same read-capability class: pure retrieval over
+    # the active KB, so the one `context.read` grant covers the whole read path.
+    "get_task_context": SCOPE_CONTEXT_READ,
     "graph.get_neighbors": SCOPE_GRAPH_READ,
     "ledger.list_retrievals": SCOPE_LEDGER_READ,
     "context.verify_answer": SCOPE_VERIFY,

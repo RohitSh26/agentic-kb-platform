@@ -46,6 +46,11 @@ class BrokerSettings:
     # VALUE is read from env at sign time and never literalised (PR-31). When the
     # var is unset the verifier still issues an (unsigned) receipt.
     signing_key_env: str = "VERIFY_SIGNING_KEY"
+    # get_task_context response cap (PR-39): the Evidence-Pack band's top
+    # (token-budgets rule: initial pack 6k-8k). A request max_tokens is clamped
+    # to this — the request value is never an escape hatch (same rule as
+    # max_run_budget_tokens above).
+    task_context_max_tokens: int = 8_000
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,267 @@
+# get_task_context A/B golden set (PR-39). Ten realistic dev tasks against THIS repo.
+#
+# `expected_files` are hand-written expert references (written BEFORE any run) to real,
+# verified repo paths — the file set an agent must locate to do the task. They serve two
+# consumers:
+#   1. HERMETIC: evals/tests/test_task_context_ab.py seeds each case's `fixtures` into a
+#      migrated TEST_DATABASE_URL and asserts the tool's one-call output (resolved scope +
+#      blast radius) covers the expected file set. No LLM, no creds.
+#   2. LIVE A/B: scripts/eval_task_context.py runs each `task` through two agent arms
+#      (tooled: get_task_context offered; raw: file tools only) against the local active KB.
+#      Needs LLM creds — see the script docstring.
+#
+# NOT a broker EvalCase file: excluded from harness.cases.load_cases via the
+# task_context_* glob (same precedent as alias_*.yaml, PR-38). Schema:
+# harness/task_context_ab.py (suite marker below is validated).
+#
+# Fixture notes: `path` is the repo-relative source path (source_uri is derived from it);
+# body_text is a fixture stand-in, not the real file body. FakeSearchClient matches whole
+# normalized single tokens, so every seed keyword is one token reachable from the task
+# text or a hint (validated at load time).
+
+suite: task_context_ab_v1
+
+cases:
+  - id: kb-search-dual-budget
+    task: "enforce the kb_search dual budget cap server side"
+    expected_files:
+      - services/mcp-server/src/agentic_mcp_server/context_broker/kb_search.py
+      - services/mcp-server/src/agentic_mcp_server/context_broker/budgets.py
+      - services/mcp-server/src/agentic_mcp_server/context_broker/dependencies.py
+      - services/mcp-server/tests/unit/test_kb_search_budget.py
+    fixtures:
+      artifacts:
+        - key: kb_search_file
+          title: kb_search.py
+          body_text: "kb_search enforces the dual budget (call count AND token cap) per window."
+          path: services/mcp-server/src/agentic_mcp_server/context_broker/kb_search.py
+        - key: budgets_file
+          title: budgets.py
+          body_text: "AgentAllowance + KbSearchBudgetStore: the per-(session, subject) meters."
+          path: services/mcp-server/src/agentic_mcp_server/context_broker/budgets.py
+        - key: deps_file
+          title: dependencies.py
+          body_text: "BrokerSettings carries the budget caps; BrokerDeps wires the budget store."
+          path: services/mcp-server/src/agentic_mcp_server/context_broker/dependencies.py
+        - key: budget_test
+          title: test_kb_search_budget.py
+          body_text: "pins kb_budget_open on both axes"
+          artifact_type: test
+          path: services/mcp-server/tests/unit/test_kb_search_budget.py
+      search_seeds:
+        - keyword: budget
+          hits: [kb_search_file, budgets_file, deps_file]
+      edges:
+        - from: budget_test
+          to: kb_search_file
+          edge_type: tests
+
+  - id: durable-cache-alias
+    task: "fix the durable model output cache"
+    expected_files:
+      - services/kb-builder/src/agentic_kb_builder/infrastructure/postgres/durable_output_cache.py
+      - services/kb-builder/src/agentic_kb_builder/domain/durable_output_port.py
+    fixtures:
+      artifacts:
+        - key: durable_cache_file
+          title: durable_output_cache.py
+          body_text: "crash-durable model-output cache, fail-soft (never crashes the build)"
+          path: services/kb-builder/src/agentic_kb_builder/infrastructure/postgres/durable_output_cache.py
+        - key: durable_port_file
+          title: durable_output_port.py
+          body_text: "the DurableOutputPort protocol the cache implements"
+          path: services/kb-builder/src/agentic_kb_builder/domain/durable_output_port.py
+        - key: durable_alias
+          title: durable model output cache
+          body_text: "(alias body is generated at seed time from alias_targets)"
+          artifact_type: alias_reference
+          path: alias/durable-model-output-cache
+          alias_targets: [durable_cache_file, durable_port_file]
+      search_seeds:
+        - keyword: durable
+          hits: [durable_alias]
+
+  - id: task-context-synthesize
+    task: "speed up the task context synthesize step"
+    expected_files:
+      - services/mcp-server/src/agentic_mcp_server/context_broker/task_context.py
+      - services/mcp-server/src/agentic_mcp_server/context_broker/task_context_nodes.py
+    fixtures:
+      artifacts:
+        - key: tc_file
+          title: task_context.py
+          body_text: "the get_task_context StateGraph: synthesize node, budget trim, retry route"
+          path: services/mcp-server/src/agentic_mcp_server/context_broker/task_context.py
+        - key: tcn_file
+          title: task_context_nodes.py
+          body_text: "the four parallel retrieval nodes and the calls-edge tiering rule"
+          path: services/mcp-server/src/agentic_mcp_server/context_broker/task_context_nodes.py
+      search_seeds:
+        - keyword: synthesize
+          hits: [tc_file]
+      edges:
+        - from: tc_file
+          to: tcn_file
+          edge_type: imports
+
+  - id: publish-quality-gate
+    task: "block activating a kb version when a publish quality gate fails"
+    expected_files:
+      - services/kb-builder/src/agentic_kb_builder/application/publish_gates.py
+      - services/kb-builder/src/agentic_kb_builder/build.py
+    fixtures:
+      artifacts:
+        - key: gates_file
+          title: publish_gates.py
+          body_text: "publish gates run before a kb_version is marked active"
+          path: services/kb-builder/src/agentic_kb_builder/application/publish_gates.py
+        - key: build_file
+          title: build.py
+          body_text: "the nightly build entry: runs gates, then activates the version"
+          path: services/kb-builder/src/agentic_kb_builder/build.py
+      search_seeds:
+        - keyword: publish
+          hits: [gates_file]
+      edges:
+        - from: build_file
+          to: gates_file
+          edge_type: imports
+
+  - id: gitlab-connector
+    task: "add a gitlab connector for source code like the github connector"
+    expected_files:
+      - services/kb-builder/src/agentic_kb_builder/connectors/source_connector.py
+      - services/kb-builder/src/agentic_kb_builder/connectors/github_code.py
+      - services/kb-builder/src/agentic_kb_builder/connectors/production_factory.py
+    fixtures:
+      artifacts:
+        - key: source_connector_file
+          title: source_connector.py
+          body_text: "the SourceConnector protocol every connector implements"
+          path: services/kb-builder/src/agentic_kb_builder/connectors/source_connector.py
+        - key: github_code_file
+          title: github_code.py
+          body_text: "the github_code connector: commit-SHA-versioned source ingestion"
+          path: services/kb-builder/src/agentic_kb_builder/connectors/github_code.py
+        - key: factory_file
+          title: production_factory.py
+          body_text: "connector registry/factory: adding a source type is a registration"
+          path: services/kb-builder/src/agentic_kb_builder/connectors/production_factory.py
+      search_seeds:
+        - keyword: connector
+          hits: [source_connector_file, github_code_file, factory_file]
+
+  - id: ledger-run-listing
+    task: "list a run's retrieval ledger events for the requesting agent"
+    expected_files:
+      - services/mcp-server/src/agentic_mcp_server/context_broker/ledger.py
+      - services/mcp-server/src/agentic_mcp_server/infrastructure/postgres/retrieval_events.py
+    fixtures:
+      artifacts:
+        - key: ledger_file
+          title: ledger.py
+          body_text: "ledger.list_retrievals: subject-scoped listing of retrieval events"
+          path: services/mcp-server/src/agentic_mcp_server/context_broker/ledger.py
+        - key: events_file
+          title: retrieval_events.py
+          body_text: "retrieval_event insert/select — the durable ledger rows"
+          path: services/mcp-server/src/agentic_mcp_server/infrastructure/postgres/retrieval_events.py
+      search_seeds:
+        - keyword: ledger
+          hits: [ledger_file]
+        - keyword: retrieval
+          hits: [events_file]
+
+  - id: graph-trust-floor
+    task: "raise the trust floor for graph neighbors traversal"
+    expected_files:
+      - services/mcp-server/src/agentic_mcp_server/context_broker/graph.py
+      - services/mcp-server/src/agentic_mcp_server/context_broker/trust.py
+      - services/mcp-server/src/agentic_mcp_server/infrastructure/postgres/edges.py
+    fixtures:
+      artifacts:
+        - key: graph_file
+          title: graph.py
+          body_text: "graph.get_neighbors: trust-floor-admitted knowledge_edge traversal"
+          path: services/mcp-server/src/agentic_mcp_server/context_broker/graph.py
+        - key: trust_file
+          title: trust.py
+          body_text: "admits(): the trust-bucket floor check"
+          path: services/mcp-server/src/agentic_mcp_server/context_broker/trust.py
+        - key: edges_file
+          title: edges.py
+          body_text: "fetch_edges_touching: membership-filtered edge reads"
+          path: services/mcp-server/src/agentic_mcp_server/infrastructure/postgres/edges.py
+      search_seeds:
+        - keyword: trust
+          hits: [trust_file]
+        - keyword: graph
+          hits: [graph_file]
+        - keyword: neighbors
+          hits: [edges_file]
+
+  - id: verify-receipt-signing
+    task: "sign the verify answer receipt with the configured key"
+    expected_files:
+      - services/mcp-server/src/agentic_mcp_server/context_broker/verify.py
+      - services/mcp-server/src/agentic_mcp_server/context_broker/receipt_signing.py
+    fixtures:
+      artifacts:
+        - key: verify_file
+          title: verify.py
+          body_text: "context.verify_answer: claim checks, receipt assembly"
+          path: services/mcp-server/src/agentic_mcp_server/context_broker/verify.py
+        - key: signing_file
+          title: receipt_signing.py
+          body_text: "receipt signing with the env-named key (unsigned when unset)"
+          path: services/mcp-server/src/agentic_mcp_server/context_broker/receipt_signing.py
+      search_seeds:
+        - keyword: receipt
+          hits: [signing_file, verify_file]
+
+  - id: alias-mining-rules
+    task: "tune the alias mining ngram rules"
+    expected_files:
+      - services/kb-builder/src/agentic_kb_builder/alias/mining.py
+      - services/kb-builder/src/agentic_kb_builder/alias/resolve.py
+    fixtures:
+      artifacts:
+        - key: mining_file
+          title: mining.py
+          body_text: "deterministic alias mining: scope tokens, subject n-grams, doc slugs"
+          path: services/kb-builder/src/agentic_kb_builder/alias/mining.py
+        - key: resolve_file
+          title: resolve.py
+          body_text: "pure alias resolution: exact normalized match, then token-set Jaccard"
+          path: services/kb-builder/src/agentic_kb_builder/alias/resolve.py
+      search_seeds:
+        - keyword: mining
+          hits: [mining_file]
+        - keyword: alias
+          hits: [resolve_file]
+
+  - id: search-index-projection
+    task: "project alias reference rows into the search index"
+    hints:
+      file_paths:
+        - services/kb-builder/src/agentic_kb_builder/indexing/projection.py
+    expected_files:
+      - services/kb-builder/src/agentic_kb_builder/indexing/projection.py
+      - services/kb-builder/src/agentic_kb_builder/indexing/search_document.py
+    fixtures:
+      artifacts:
+        - key: projection_file
+          title: projection.py
+          body_text: "projects PROJECTABLE_ARTIFACT_TYPES into the search index (reconcile)"
+          path: services/kb-builder/src/agentic_kb_builder/indexing/projection.py
+        - key: search_document_file
+          title: search_document.py
+          body_text: "the search document shape the projection writes"
+          path: services/kb-builder/src/agentic_kb_builder/indexing/search_document.py
+      search_seeds:
+        - keyword: projection
+          hits: [projection_file]
+      edges:
+        - from: projection_file
+          to: search_document_file
+          edge_type: imports

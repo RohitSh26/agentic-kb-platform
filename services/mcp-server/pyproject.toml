@@ -18,6 +18,8 @@ dependencies = [
     "openai>=1.40",
     "json_repair>=0.25",
     "anthropic>=0.109.2",
+    "langgraph>=1.2.7",
+    "langchain-core>=1.4.8",
 ]
 
 [dependency-groups]

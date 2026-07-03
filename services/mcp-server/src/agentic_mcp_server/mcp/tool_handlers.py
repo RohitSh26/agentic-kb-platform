@@ -28,6 +28,9 @@ from agentic_mcp_server.context_broker import (
 from agentic_mcp_server.context_broker import (
     kb_search as kb_search_mod,
 )
+from agentic_mcp_server.context_broker import (
+    task_context as task_context_mod,
+)
 from agentic_mcp_server.context_broker.dependencies import (
     BrokerDeps,
     current_client_identity,
@@ -48,6 +51,7 @@ from agentic_mcp_server.mcp.tool_schemas.context import (
 from agentic_mcp_server.mcp.tool_schemas.graph import GetNeighborsRequest
 from agentic_mcp_server.mcp.tool_schemas.ledger import ListRetrievalsRequest
 from agentic_mcp_server.mcp.tool_schemas.search import KbSearchRequest
+from agentic_mcp_server.mcp.tool_schemas.task_context import GetTaskContextRequest
 from agentic_mcp_server.mcp.tool_schemas.verification import (
     PlatformTrustRequest,
     VerifyAnswerRequest,
@@ -112,6 +116,13 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
             deps, request, current_requester(), session_key=current_session_key()
         )
 
+    async def get_task_context(request: GetTaskContextRequest) -> McpModel:
+        _client("get_task_context")
+        # Same read-capability class as kb_search: identity binds to the
+        # authenticated session; the response cap is server-side (never a
+        # request escape hatch), so no per-window budget key is needed here.
+        return await task_context_mod.get_task_context(deps, request, current_requester())
+
     async def platform_trust(request: PlatformTrustRequest) -> McpModel:
         # Official-client gate: trusted ONLY for a verification_required client with a
         # valid, client-matched, passing receipt; structured denial otherwise; a
@@ -134,6 +145,7 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         "context.platform_trust": platform_trust,
         "context.create_change_pack": create_change_pack,
         "kb_search": kb_search,
+        "get_task_context": get_task_context,
     }
     for tool_name, handler in handlers.items():
         schema = TOOL_SCHEMAS[tool_name]
