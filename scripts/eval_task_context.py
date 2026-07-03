@@ -191,11 +191,21 @@ async def _run_arm(case: TaskContextAbCase, arm: str) -> dict[str, Any]:
     tool_surfaced: set[str] = set()
     answer_text = ""
     in_tok = out_tok = steps = tool_calls = file_reads = 0
+    model_error = ""
 
     for _step in range(MAX_STEPS):
-        native, answer, tool_uses, di, do = kb_agent._model_step(
-            client, provider, model, system, tools, messages
-        )
+        # Same guard as kb_agent's own loop: small models sometimes hallucinate a tool
+        # name and the provider 400s. One flaky generation must cost ONE arm-run its
+        # remaining steps, never the whole eval; the arm is scored on what it did reach
+        # and flagged so the report can call it out.
+        try:
+            native, answer, tool_uses, di, do = kb_agent._model_step(
+                client, provider, model, system, tools, messages
+            )
+        except Exception as exc:
+            model_error = f"{type(exc).__name__}: {exc}"
+            print(f"  · [model error, arm ends early: {model_error[:120]}]")
+            break
         steps += 1
         in_tok += di
         out_tok += do
@@ -236,6 +246,7 @@ async def _run_arm(case: TaskContextAbCase, arm: str) -> dict[str, Any]:
     covered = {f for f in case.expected_files if f in seen_paths or f in mentioned}
     return {
         "arm": arm,
+        "model_error": model_error,
         "coverage": len(covered) / len(case.expected_files),
         "tool_cover": (
             len([f for f in case.expected_files if f in tool_surfaced])
