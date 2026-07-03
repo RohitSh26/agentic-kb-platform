@@ -18,6 +18,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agentic_kb_builder.alias.run import run_alias_miner
 from agentic_kb_builder.application.cache_gates import (
     EmbeddingCacheGate,
     GenerationCacheGate,
@@ -372,6 +373,14 @@ class BuildRunner:
             seen_source_ids=seen_source_ids,
             changed_source_ids=changed_source_ids,
         )
+        # Alias/reference index (PR-38, ADR-0030) runs AFTER invalidation (so a
+        # sweep-invalidated alias that is still confirmed is revived in the same
+        # transaction, mirroring the linker-edge reconcile pattern) and BEFORE
+        # centrality. Deterministic, zero-LLM: mines commit + doc-source artifacts
+        # already live in the registry — no model call, no embedding.
+        await run_alias_miner(
+            self._session, kb_version=self._kb_version, valid_from_seq=self._build_seq
+        )
         # Graph centrality (ADR-0028) runs LAST in finalize — AFTER invalidation, so it ranks the
         # served, post-sweep live set — and before index reconciliation + activation. Pure graph
         # math (no model call), written in this same pre-activation transaction.
@@ -553,7 +562,10 @@ class BuildRunner:
             result = graphify_tree([(u.path, u.fetched.text) for u in units])
             logger.info(
                 "event=code_graph_built repo=%s units=%d artifacts=%d edges=%d",
-                repo, len(units), len(result.artifacts), len(result.edges),
+                repo,
+                len(units),
+                len(result.artifacts),
+                len(result.edges),
             )
         except Exception as error:
             counters.extractor_failures += 1

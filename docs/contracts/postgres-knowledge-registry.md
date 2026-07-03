@@ -37,7 +37,7 @@ and the migrations. Summary:
 | Table | Purpose | Written by |
 |---|---|---|
 | `source_item` | Source identity (`source_type`, `source_uri`, `source_version`, `content_hash`) + normalized text + `acl_teams`. Drives incremental skip. | kb-builder |
-| `knowledge_artifact` | Chunks, summaries, concepts, source-backed facts, code artifacts (with spans). `knowledge_kind` ∈ interpreted / source_backed. Carries `acl_teams`, the validity interval (`valid_from_seq`, `invalidated_at_seq`), and the rename link `prior_identity_id`. | kb-builder |
+| `knowledge_artifact` | Chunks, summaries, concepts, source-backed facts, code artifacts (with spans), and `alias_reference` rows (PR-38 — deterministic alias index; see `alias-reference.md`). `knowledge_kind` ∈ interpreted / source_backed. Carries `acl_teams`, the validity interval (`valid_from_seq`, `invalidated_at_seq`), and the rename link `prior_identity_id`. | kb-builder |
 | `knowledge_edge` | Graph edges: `edge_type`, `confidence`, `source` (graphify/linker), `kb_version`, and the validity interval (`valid_from_seq`, `invalidated_at_seq`). The V1 graph store — no graph DB. | kb-builder |
 | `generation_cache` / `generation_cache_artifact` | Cache key ⇒ generated outputs ⇒ produced artifacts. | kb-builder |
 | `embedding_cache` | Embedding call gate, keyed `(artifact_id, text_hash, embedding_model)`. The vector itself is stored as a float array (`ARRAY(double precision)` — no pgvector in V1), so the Search index rebuilds without re-embedding. | kb-builder |

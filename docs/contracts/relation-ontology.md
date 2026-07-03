@@ -27,6 +27,7 @@ MUST treat an unknown `edge_type` as `AMBIGUOUS` (excluded from default traversa
 | `documents`   | doc artifact → code artifact | deterministic ref (path/symbol/anchor) **or** judged prose→code (lower trust)  | `EXTRACTED`/`INFERRED_*` | yes (if EXTRACTED) |
 | `implements`  | code/PR → work-item          | deterministic work-item-ID / PR / commit / branch reference                    | `EXTRACTED`         | yes                  |
 | `mentions`    | artifact → artifact          | verbatim identifier match (name/path/work-item-ID) found in source text        | `EXTRACTED`         | yes                  |
+| `aliases`     | alias_reference → artifact   | the normalized alias phrase + the deterministic mining source(s) (commit SHA / doc path) recorded in `evidence` (see PR-38 / `alias-reference.md`) | `EXTRACTED`         | **no — routing hint only** |
 
 **Banned:** `related_to` and any other generic catch-all. If a relationship cannot be expressed as
 one of the above with its required evidence, it is **not created** — it becomes a candidate
@@ -37,6 +38,18 @@ one of the above with its required evidence, it is **not created** — it become
 work-item, from an explicit AB#/#/GH-/PR# / branch reference) and `mentions` (commit → code_file,
 from a changed-file path). This adds **no new edge type** — the vocabulary above stays closed; it
 only records a new node producer for the existing `implements` / `mentions` rows.
+
+**Producers note (PR-38, alias miner):** the deterministic build-time alias miner
+(`alias/run.py`, `source = 'alias_miner'`) produces `alias_reference` artifacts and writes
+`aliases` edges from each alias artifact to the live artifact(s) its targets resolve to.
+`aliases` is deliberately NOT a generic catch-all: its required evidence is the deterministic
+mining record — the normalized phrase plus the commit SHA(s) / doc path(s) that established the
+phrase→target mapping — stored in the edge's `evidence` JSONB. The mechanism is deterministic
+(zero LLM), so the trust class is `EXTRACTED` per `trust-buckets.md`; but the phrase→target
+mapping itself is co-occurrence-derived (the artifact carries
+`confidence_tier: "interpreted"`), so an `aliases` edge is a **retrieval-routing hint only** —
+it can lead an agent to evidence but MUST NEVER itself support a cited claim. Artifact shape and
+mining rules: `docs/contracts/alias-reference.md`.
 
 ## Trust class rules
 
@@ -50,9 +63,10 @@ only records a new node producer for the existing `implements` / `mentions` rows
 ## Required edge fields (maps to `knowledge_edge`)
 
 Every edge row MUST carry: `edge_type` (from this table), `from_artifact_id`, `to_artifact_id`,
-`trust_class`, `source` (mechanism: `ast` | `linker_deterministic` | `llm_judge`),
-`relation_schema_version`, `kb_version`, and an evidence pointer (artifact id + source span, or the
-deterministic match key). Edges without a valid evidence pointer MUST NOT be written.
+`trust_class`, `source` (mechanism: `ast` | `linker_deterministic` | `llm_judge` |
+`alias_miner`), `relation_schema_version`, `kb_version`, and an evidence pointer (artifact id +
+source span, or the deterministic match key). Edges without a valid evidence pointer MUST NOT be
+written.
 
 ## Consumption (broker)
 

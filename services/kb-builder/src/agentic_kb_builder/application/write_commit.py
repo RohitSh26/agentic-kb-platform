@@ -8,16 +8,10 @@ the build runner's content_hash skip.
 
 ACL propagation (docs/contracts/acl-source-visibility.md): a derived artifact is
 visible only where EVERY input is, so the commit artifact's acl_teams is the
-INTERSECTION of the acl_teams of the source_items for the files it changed.
-
-Subtlety — empty acl_teams means org-public (everyone) at READ time (mcp-server
-auth/rbac.py: `not artifact.acl_teams or requester.teams & artifact.acl_teams`).
-So an org-public input imposes NO constraint on the intersection (it is the
-universe of teams), and an EMPTY intersection result can NOT be stored as `[]` —
-that would widen to everyone, the exact failure acl-source-visibility.md warns
-against. We therefore store an explicit deny-all sentinel (`DENY_ALL_ACL`, a team
-no requester holds) for "visible to nobody": disjoint restrictions (no common
-team) and unknown provenance (zero resolvable inputs) both deny by default.
+INTERSECTION of the acl_teams of the source_items for the files it changed. The
+intersection rule itself (`commit_acl_intersection` / `DENY_ALL_ACL`) is pure
+domain logic shared with the alias/reference miner (PR-38) and lives in
+`domain.acl_intersection` — re-exported here for backward compatibility.
 """
 
 import uuid
@@ -26,6 +20,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agentic_kb_builder.domain.acl_intersection import DENY_ALL_ACL, commit_acl_intersection
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.infrastructure.postgres.models import KnowledgeArtifact, SourceItem
 from agentic_kb_builder.structured_logging import get_logger
@@ -36,45 +31,6 @@ COMMIT_ARTIFACT_TYPE = "commit"
 # A commit record is verbatim source-backed evidence (it is git's own data).
 COMMIT_AUTHORITY = 1.0
 BUILD_TIME_FRESHNESS = 1.0
-# "Visible to nobody". Empty acl_teams means org-public (everyone) at read, so an
-# empty intersection can't be stored as []; this sentinel — a team no real
-# requester ever holds — denies all without a schema change. The broker's
-# read-time edge-ACL intersection inherits it, so a denied commit's edges are
-# hidden too. (Open question: a first-class deny needs a tri-state acl model.)
-DENY_ALL_ACL: tuple[str, ...] = ("__no_team__",)
-
-
-def commit_acl_intersection(
-    changed_files: Sequence[str],
-    file_acls: dict[str, list[str]],
-) -> list[str]:
-    """Visibility of a commit artifact = the teams authorised for EVERY changed file.
-
-    A file with no source_item entry in `file_acls` contributes nothing (it
-    cannot widen visibility). An org-public input (empty acl) is the universe of
-    teams (rbac.py), so it imposes no constraint — only non-empty ACLs narrow.
-
-    Results:
-    - no constraining input (every resolved input org-public) ⇒ [] (org-public);
-    - a non-empty intersection ⇒ that team set;
-    - disjoint restrictions (constraints exist but share no team) ⇒ DENY_ALL_ACL;
-    - zero resolvable inputs (unknown provenance) ⇒ DENY_ALL_ACL (deny by default).
-    [] is NEVER used to mean "nobody" — it means "everyone" at read.
-    """
-    resolved = [file_acls[path] for path in changed_files if path in file_acls]
-    if not resolved:
-        # Unknown provenance: we can vouch for no team ⇒ deny by default.
-        return list(DENY_ALL_ACL)
-    # Org-public inputs (empty acl) impose no constraint; only non-empty ACLs
-    # narrow. If every resolved input is org-public, the commit is org-public.
-    constraints = [set(acl) for acl in resolved if acl]
-    if not constraints:
-        return []
-    intersection = set.intersection(*constraints)
-    if not intersection:
-        # Disjoint teams: no team can see every input ⇒ visible to nobody.
-        return list(DENY_ALL_ACL)
-    return sorted(intersection)
 
 
 async def _file_acls(

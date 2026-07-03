@@ -239,8 +239,21 @@ def load_case(path: Path) -> EvalCase:
     return EvalCase.model_validate(raw)
 
 
+# alias_*.yaml (e.g. retrieval_cases/alias_golden_v1.yaml, PR-38) is a DIFFERENT
+# suite schema (harness.alias.AliasCase — a resolver golden set, not a broker
+# EvalCase) that happens to live alongside the broker retrieval cases; it is
+# scored by scripts/eval_alias_resolution.py, not evals/run.py, so it is
+# deliberately excluded from this glob.
+_EXCLUDED_GLOBS = ("alias_*.yaml",)
+
+
 def load_cases(directory: Path) -> list[EvalCase]:
-    cases = [load_case(path) for path in sorted(directory.glob("*.yaml"))]
+    paths = [
+        path
+        for path in sorted(directory.glob("*.yaml"))
+        if not any(path.match(pattern) for pattern in _EXCLUDED_GLOBS)
+    ]
+    cases = [load_case(path) for path in paths]
     seen: set[str] = set()
     for case in cases:
         if case.id in seen:

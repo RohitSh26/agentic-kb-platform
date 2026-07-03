@@ -214,6 +214,9 @@ All under `services/kb-builder/tests/`:
 | `integration/test_graphify.py` | whole-tree extraction; key round-trips; exact spans; span-past-EOF rejection; edge confidences |
 | `integration/test_registry_roundtrip.py` | migrations up/down + model round-trips |
 | `unit/test_connectors.py` | normalize+hash pipeline determinism per source type |
+| `unit/test_alias_mining.py` / `test_alias_resolve.py` | PR-38 deterministic alias miner: tokenize/scope/n-gram/doc-slug extraction, cross-source aggregation, pure resolver (exact/fuzzy/tie-break) |
+| `unit/test_alias_golden_subset.py` | PR-38 hermetic 5-case subset of `evals/retrieval_cases/alias_golden_v1.yaml`, run through the real mine→aggregate→resolve pipeline (no DB) |
+| `integration/test_alias_miner.py` | PR-38 `run_alias_miner`: artifacts+edges written; incremental skip + idempotent rerun (no duplicates); never-widen ACL; end-to-end `BuildRunner` wiring |
 | `contract/test_import_boundaries.py` | no cross-service or legacy root-package imports (ADR-0008) |
 
 mcp-server's suite mirrors the same split (`services/mcp-server/tests/{unit,integration,contract}`)

@@ -24,7 +24,7 @@ Code authority: `services/kb-builder/src/agentic_kb_builder/indexing/search_docu
 |---|---|---|
 | `doc_id` | string, key | `str(artifact_id)` — stable across rebuilds |
 | `artifact_id` | UUID | FK back to `knowledge_artifact` (the truth) |
-| `artifact_type` | string | concept / summary / chunk / source_backed_fact / code_symbol |
+| `artifact_type` | string | concept / summary / chunk / source_backed_fact / code_symbol / commit / alias_reference |
 | `source_type` | string | github_code / github_doc / azure_wiki / ado_card |
 | `source_uri` | string | provenance pointer |
 | `title` | string? | |
@@ -39,9 +39,12 @@ Code authority: `services/kb-builder/src/agentic_kb_builder/indexing/search_docu
 
 Only artifacts meant to rank by their own text are projected
 (`PROJECTABLE_ARTIFACT_TYPES`: concept, summary, chunk, source_backed_fact,
-code_symbol). `code_file` and `endpoint` are pointer-only (`body_text` null).
-`test` carries a snippet body but is deliberately excluded from the index and
-reached through graph edges instead.
+code_symbol, commit, alias_reference). `code_file` and `endpoint` are
+pointer-only (`body_text` null). `test` carries a snippet body but is
+deliberately excluded from the index and reached through graph edges instead.
+`alias_reference` rows (PR-38, `alias-reference.md`) rank via their
+`search_text` (phrase + variants); their `embedding` stays null in v1
+(deterministic, zero-model build).
 
 ## Rules
 

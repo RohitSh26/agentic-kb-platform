@@ -453,6 +453,40 @@ async def test_commit_artifact_is_projected_and_indexed(session: AsyncSession) -
     assert str(commit.artifact_id) in state.docs
 
 
+@requires_db
+async def test_alias_reference_artifact_is_projected_via_search_text_with_no_embedding(
+    session: AsyncSession,
+) -> None:
+    """PR-38 (docs/contracts/alias-reference.md): an `alias_reference` artifact
+    rides the existing keyword surface via `search_text` — no embedding_cache row
+    is ever written for it, so the projection carries `embedding=None`."""
+    commit_source = await _add_source(session, "git_metadata", "git://org/repo/commit/def456")
+    alias = KnowledgeArtifact(
+        artifact_type="alias_reference",
+        source_id=commit_source.source_id,
+        title="durable output cache",
+        body_text='{"schema":"alias_reference_v1","alias":"durable output cache"}',
+        search_text="durable output cache durable-output-cache durable_output_cache",
+        kb_version="v-build.1",
+        knowledge_kind="interpreted",
+        valid_from_seq=0,
+    )
+    session.add(alias)
+    await session.flush()
+
+    docs = await load_search_docs(session, artifact_ids=[alias.artifact_id])
+    assert [d.artifact_type for d in docs] == ["alias_reference"]
+    assert docs[0].search_text == alias.search_text
+    assert docs[0].embedding is None  # zero embeddings in v1 (alias-reference.md)
+
+    client = FakeSearchClient()
+    upserter = SearchDocUpserter(session, client)
+    upserted = await upserter.upsert_documents([alias.artifact_id])
+    assert upserted == 1
+    state = await client.fetch_index_state()
+    assert str(alias.artifact_id) in state.docs
+
+
 # ---------------------------------------------------------------------------
 # KB-F3: superseded (invalidated) artifacts are excluded from the projection
 # ---------------------------------------------------------------------------

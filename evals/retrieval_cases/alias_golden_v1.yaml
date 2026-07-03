@@ -1,0 +1,237 @@
+# Alias/Reference golden set v1 (PR-38, ADR-0030).
+#
+# 25 real terse phrases from THIS repo's history (git log, PR-brief titles, ADR titles),
+# each with hand-verified expected target path(s). Every target was verified to exist at
+# HEAD (2026-07-02) and every provenance commit's changed-file list was inspected by hand
+# (`git show --name-only <sha>`) BEFORE the resolver was implemented or run.
+#
+# Scoring: top-1 hit iff the resolver's first-ranked target path is IN expected_targets.
+# Where several changed files are equally legitimate answers for the phrase, all of them
+# are listed (never padded with wrong-but-convenient paths).
+#
+# Runner: scripts/eval_alias_resolution.py (full 25-case run against a locally built KB).
+# Loader/metrics: evals/harness/alias.py. This file is NOT an EvalCase for evals/run.py's
+# broker benchmark — harness.cases.load_cases skips alias_*.yaml by design.
+suite: alias_golden_v1
+cases:
+  - id: alias-01-alias-reference-index
+    query: "the alias reference index"
+    expected_targets:
+      - docs/pr-briefs/PR-38-alias-reference-index.md
+    provenance: >-
+      Brief title/filename docs/pr-briefs/PR-38-alias-reference-index.md, introduced by
+      commit e1433e3 "docs: autonomous execution plan ... and PR-38/39/40 briefs".
+      Hand-verified: the brief file is the only artifact named by this phrase.
+
+  - id: alias-02-crash-durable-model-output-cache
+    query: "crash durable model output cache"
+    expected_targets:
+      - docs/adr/0027-crash-durable-model-output-cache.md
+      - docs/pr-briefs/PR-35-crash-durable-model-output-cache.md
+    provenance: >-
+      ADR-0027 and PR-35 brief filenames; both changed by commits 7683d72 "docs(adr):
+      ADR-0027 + PR-35 brief" and 9354cca "feat(kb-builder): crash-durable model-output
+      cache (PR-35, ADR-0027)". Hand-verified: both documents carry exactly this title.
+
+  - id: alias-03-kb-first-file-fallback
+    query: "kb first file fallback"
+    expected_targets:
+      - docs/adr/0025-kb-first-file-fallback.md
+    provenance: >-
+      ADR-0025 filename, changed by commit 76cd582 "feat: KB-first agent + reversible
+      code-skeleton compression (ADR-0025/0026)". Hand-verified: the ADR is the document
+      that defines the kb-first/file-fallback pattern.
+
+  - id: alias-04-code-skeleton-compression
+    query: "code skeleton compression"
+    expected_targets:
+      - docs/adr/0026-code-skeleton-compression.md
+      - scripts/codeskeleton.py
+    provenance: >-
+      ADR-0026 filename + the implementing script, both changed by commit 76cd582.
+      Hand-verified: ADR-0026 defines the mechanism; scripts/codeskeleton.py implements it.
+
+  - id: alias-05-graph-centrality-ranking
+    query: "graph centrality ranking"
+    expected_targets:
+      - docs/pr-briefs/PR-36-graph-centrality-ranking.md
+      - services/kb-builder/src/agentic_kb_builder/application/centrality.py
+    provenance: >-
+      PR-36 brief filename (commit ce0dea9 "docs(adr): ADR-0028 + PR-36 brief") and the
+      centrality implementation (commit ec175b9 "feat: graph-centrality ranking prior").
+      Hand-verified changed-file lists of both commits.
+
+  - id: alias-06-graph-centrality-ranked-retrieval
+    query: "graph centrality ranked retrieval"
+    expected_targets:
+      - docs/adr/0028-graph-centrality-ranked-retrieval.md
+    provenance: >-
+      ADR-0028 filename, changed by commit ce0dea9 (which changed exactly ADR-0028 and the
+      PR-36 brief). Hand-verified: the ADR carries this exact title.
+
+  - id: alias-07-twelve-role-roster
+    query: "twelve role roster"
+    expected_targets:
+      - docs/adr/0030-twelve-role-roster-and-langgraph-backend.md
+    provenance: >-
+      ADR-0030 filename, changed by commit 30af03e "feat(agents): twelve-role roster on
+      the kb-first pattern (ADR-0030, ADR-0025)". Hand-verified: 30af03e's changed files
+      include docs/adr/0030-twelve-role-roster-and-langgraph-backend.md.
+
+  - id: alias-08-review-panel-service
+    query: "the review panel service"
+    expected_targets:
+      - docs/pr-briefs/PR-40-review-panel-service.md
+    provenance: >-
+      PR-40 brief filename, introduced by commit e1433e3. Hand-verified: the only
+      artifact named by this phrase.
+
+  - id: alias-09-get-task-context-langgraph
+    query: "get task context langgraph"
+    expected_targets:
+      - docs/pr-briefs/PR-39-get-task-context-langgraph.md
+    provenance: >-
+      PR-39 brief filename, introduced by commit e1433e3. Hand-verified.
+
+  - id: alias-10-human-approval-delegation-gate
+    query: "human approval delegation gate"
+    expected_targets:
+      - docs/adr/0021-human-approval-delegation-gate.md
+    provenance: >-
+      ADR-0021 filename, changed by TWO commits (3af8e5b "ADR-0021: enforced
+      human-approval gate at every agent delegation" and ead115a "ADR-0021: orchestrator
+      routing + plan-of-action gate") — a genuine multi-source confirmation.
+      Hand-verified: each commit changed only this ADR.
+
+  - id: alias-11-structural-code-edges
+    query: "structural code edges"
+    expected_targets:
+      - docs/adr/0020-structural-code-edges.md
+    provenance: >-
+      ADR-0020 filename, changed by commit 6ae0aec "Add deterministic defined_in
+      (symbol→file) structural edges (ADR-0020)". Hand-verified.
+
+  - id: alias-12-incremental-per-source-commit
+    query: "incremental per source commit"
+    expected_targets:
+      - docs/adr/0029-incremental-per-source-commit.md
+      - services/kb-builder/src/agentic_kb_builder/application/build_runner.py
+    provenance: >-
+      ADR-0029 filename + the build runner it changed, both from commit 21f275d
+      "feat(kb-builder): persist knowledge per source (incremental commit)".
+      Hand-verified: 21f275d changed exactly the ADR, build_runner.py, and its test.
+
+  - id: alias-13-autonomous-execution-plan
+    query: "the autonomous execution plan"
+    expected_targets:
+      - docs/proposals/2026-07-02-autonomous-execution-plan.md
+    provenance: >-
+      Proposal filename, introduced by commit e1433e3 whose subject also carries the
+      phrase verbatim. Hand-verified: the proposal document is the named artifact.
+
+  - id: alias-14-agent-gateway-code-owned-routing
+    query: "agent gateway code owned routing"
+    expected_targets:
+      - docs/adr/0022-agent-gateway-code-owned-routing.md
+    provenance: >-
+      ADR-0022 filename, changed (alone) by commit e39be66 "ADR-0022: code-owned intent
+      routing; broker-governed vs broker-assisted". Hand-verified single-file commit.
+
+  - id: alias-15-budgeted-kb-search-tool
+    query: "the budgeted kb search tool"
+    expected_targets:
+      - services/mcp-server/src/agentic_mcp_server/context_broker/kb_search.py
+      - docs/pr-briefs/PR-37-ship-kb-search-mcp-tool.md
+      - services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/search.py
+    provenance: >-
+      Commit 44847c0 "feat(mcp-server): budgeted kb_search MCP tool (PR-37, ADR-0025)".
+      Hand-verified changed files: kb_search.py is the tool implementation, the PR-37
+      brief names it, tool_schemas/search.py is its schema — all legitimate answers.
+
+  - id: alias-16-durable-cache-fail-soft
+    query: "the durable cache fail soft fix"
+    expected_targets:
+      - services/kb-builder/src/agentic_kb_builder/infrastructure/postgres/durable_output_cache.py
+      - services/kb-builder/tests/unit/test_durable_cache_failsoft.py
+    provenance: >-
+      Commit 129d3e1 "fix(kb-builder): durable model-output cache is fail-soft, never
+      crashes the build". Hand-verified: the commit changed exactly these two files;
+      durable_output_cache.py is the fix, the test pins it.
+
+  - id: alias-17-path-traversal-sandbox-bypass
+    query: "path traversal sandbox bypass"
+    expected_targets:
+      - scripts/kb_agent.py
+      - scripts/test_kb_agent_safety.py
+    provenance: >-
+      Commit 75b7451 "fix(kb_agent): close path-traversal sandbox bypass + enforce the
+      full KB budget". Hand-verified: exactly these two files changed; kb_agent.py holds
+      the sandbox.
+
+  - id: alias-18-idf-weight-query-tokens
+    query: "idf weight query tokens"
+    expected_targets:
+      - services/mcp-server/src/agentic_mcp_server/infrastructure/postgres/keyword_search.py
+    provenance: >-
+      Commit 2547a7c "Retrieval precision: IDF-weight query tokens in the keyword search
+      (#148)". Hand-verified: changed keyword_search.py + its integration test; the
+      implementation file is the answer.
+
+  - id: alias-19-release-scrub-pipeline
+    query: "the release scrub pipeline"
+    expected_targets:
+      - release/scrub.py
+      - release/make_prod.sh
+    provenance: >-
+      Commit a2403b9 "build: add release-scrub pipeline for the pristine prod branch".
+      Hand-verified: scrub.py is the scrubber, make_prod.sh drives the pipeline.
+
+  - id: alias-20-source-failure-aborts-build
+    query: "source failure aborts the build"
+    expected_targets:
+      - services/kb-builder/src/agentic_kb_builder/application/build_runner.py
+    provenance: >-
+      Commit 05a541b "fix(kb-builder): one source's failure no longer aborts the whole
+      build". Hand-verified: changed build_runner.py + its integration test; the runner
+      holds the per-source failure isolation.
+
+  - id: alias-21-embedding-candidate-floor
+    query: "embedding candidate floor"
+    expected_targets:
+      - services/kb-builder/src/agentic_kb_builder/linker/candidates.py
+    provenance: >-
+      Commit fd62bf2 "Raise embedding candidate floor 0.70 -> 0.80 to cut INFERRED_LOW
+      noise". Hand-verified: a single-file commit touching exactly candidates.py.
+
+  - id: alias-22-resolve-relative-imports
+    query: "resolve relative imports"
+    expected_targets:
+      - services/kb-builder/src/agentic_kb_builder/graphify/span_recovery.py
+    provenance: >-
+      Commit c5e2151 "graphify: resolve relative imports (was skipped — broke deps on
+      most libraries)". Hand-verified: changed span_recovery.py + its unit test.
+
+  - id: alias-23-ado-wiki-path-filtering
+    query: "ado wiki path filtering"
+    expected_targets:
+      - services/kb-builder/src/agentic_kb_builder/connectors/ado_wiki_backend.py
+    provenance: >-
+      Commit e79ccae "Fix ADO wiki path filtering + surface provider error messages".
+      Hand-verified: ado_wiki_backend.py implements the path filtering; http_client.py
+      and three tests also changed but the backend is the named entity.
+
+  - id: alias-24-config-pre-flight-validator
+    query: "config pre flight validator"
+    expected_targets:
+      - services/kb-builder/src/agentic_kb_builder/connectors/config_validator.py
+    provenance: >-
+      Commit 1464bfc "Add backend-aware config pre-flight validator (--validate-only)".
+      Hand-verified: config_validator.py is the validator among the five changed files.
+
+  - id: alias-25-smoke-client
+    query: "the smoke client"
+    expected_targets:
+      - scripts/smoke_client.py
+    provenance: >-
+      Commit 420af45 "Smoke client exercises context.expand against the connected graph".
+      Hand-verified: a single-file commit touching exactly scripts/smoke_client.py.
