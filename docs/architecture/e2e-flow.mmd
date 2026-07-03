@@ -1,0 +1,41 @@
+flowchart TD
+    subgraph BUILD["nightly build — kb-builder (owned)"]
+        SRC["code · docs · tickets · commits"] --> HASH{"content_hash<br/>changed?"}
+        HASH -- "no" --> SKIP["skip — no LLM call,<br/>no re-embed"]
+        HASH -- "yes" --> EXT["graphify AST (code)<br/>docify LLM (docs, durable-cached)<br/>alias mining (zero-LLM)"]
+        EXT --> PG[("Postgres registry<br/>artifacts · edges · ACL")]
+        PG --> GATES{"publish gates:<br/>extractor errors · edge integrity<br/>index consistency"}
+        GATES -- "any fail" --> KEEP["build never activates —<br/>previous version keeps serving"]
+        GATES -- "all pass" --> ACT["version ACTIVE"]
+    end
+
+    subgraph MCP["mcp-server (owned)"]
+        KBS["kb_search<br/>dual-cap budget · ACL · ledger row/call"]
+        GTC["get_task_context<br/>LangGraph: 4 parallel nodes → synthesize<br/>→ 1 broadened retry · zero LLM · p50 4.9ms"]
+    end
+    ACT --> KBS
+    ACT --> GTC
+
+    subgraph HOSTS["host surfaces — NOT ours, fed via MCP"]
+        OC["OpenCode<br/>(subagent delegation)"]
+        CP["VS Code Copilot<br/>(handoffs)"]
+        GH["GH Copilot cloud agent<br/>(MCP tools only, 1 task/session)"]
+    end
+    KBS --> OC
+    KBS --> CP
+    KBS --> GH
+    GTC --> OC
+    GTC --> CP
+    GTC --> GH
+
+    subgraph PANEL["review draft engine (owned — structurally cannot post)"]
+        FAN["bug · security · quality · test-coverage<br/>4 lenses in parallel (LangGraph, checkpointed)"]
+        FAN --> RECON["reconcile: merge dupes,<br/>keep disagreement, rank severity"]
+        RECON --> DRAFT[("stored draft<br/>review_panel schema")]
+    end
+    DRAFT -- "dev's code_reviewer agent<br/>pulls draft into chat" --> CP
+    CP -- "dev reads · revises · explicitly approves" --> PUB["dev publishes to GitHub<br/>under their OWN auth (ADR-0031)"]
+
+    KBS -.-> LED[("retrieval ledger —<br/>every call, incl. denials")]
+    GTC -.-> LED
+    LED -. "file-fallbacks = KB-gap signals" .-> BUILD

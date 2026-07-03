@@ -34,6 +34,43 @@
   metric the June report settled on: tooled ≈ 5,600 tok/covered-case-equivalent; raw = ∞ (zero
   correct). A cheaper wrong answer is not a saving.
 
+## Per-case results (fresh-KB run)
+
+`ERR@0` = the arm died on its very first model call (hallucinated tool name → provider 400) and
+never got to act; its 0.00 is a model flake, not a tool verdict. Flakes split evenly — 4 tooled,
+4 raw — so the aggregate comparison is not biased toward either arm.
+
+| Case | Task kind | Tooled cov | Tooled notes | Raw cov | Raw notes |
+|---|---|---|---|---|---|
+| durable-cache-alias | bug fix, history-echoing phrase | **1.00** | 2 steps, 3 reads | 0.00 | ERR@0 |
+| task-context-synthesize | perf tune, history-echoing | **1.00** | 2 steps, **0 file reads** — tool output alone sufficed | 0.00 | ERR@0 |
+| publish-quality-gate | guard, history-echoing | **1.00** | 3 steps | 0.00 | ran 2 steps, missed |
+| alias-mining-rules | tuning, history-echoing | **1.00** | 4 steps | 0.00 | 9 reads in fantasy dirs |
+| search-index-projection | integration wiring | 0.00 | ran; explored the RIGHT real dirs, missed exact files | 0.00 | fantasy `docs/search_index/` tree |
+| verify-receipt-signing | prospective feature (doesn't exist yet) | 0.00 | ran 2 steps, 7 reads | 0.00 | ERR@0 |
+| kb-search-dual-budget | guard on existing subsystem | 0.00 | ERR@0 | 0.00 | ran 4 steps, missed |
+| gitlab-connector | new feature by analogy | 0.00 | ERR@0 | 0.00 | ran 4 steps, missed |
+| ledger-run-listing | feature on existing subsystem | 0.00 | ERR@0 | 0.00 | ran 3 steps, missed |
+| graph-trust-floor | config change | 0.00 | ERR@0 | 0.00 | ERR@0 |
+
+## By task type — where the KB actually earns its keep
+
+- **History-echoing maintenance** (fix/tune/guard something the repo's commits and briefs already
+  talk about): tooled **4/4 cases at 1.00 coverage** — this is the alias index working exactly as
+  designed: the developer's phrasing matches mined history, one call returns perfect scope. One
+  case needed *zero* file reads — the cheapest possible correct run (2,267 tokens).
+- **Novel / prospective work** (the thing doesn't exist yet, or the phrasing has no history to
+  match): tooled 0/2 on clean runs — but with a qualitative difference the coverage number hides:
+  the tooled arm explored the correct *real* directories (`services/kb-builder/.../alias/`), while
+  raw invented entire directory trees. For genuinely new work, the KB narrows the search; it can't
+  name files that don't exist.
+- **Clean-run means** (excluding step-0 flakes on both sides): tooled **0.667** (4/6), raw
+  **0.000** (0/6).
+- **Implication for the roster**: the orchestrator's EXPLAIN lane and maintenance-type BUILD tasks
+  are where `get_task_context` is decisive today; greenfield tasks lean on the host model's own
+  reasoning with the KB as a directional aid — consistent with the tool's design (it returns
+  `open_questions` rather than guessing at what doesn't exist).
+
 ## Verdict against plan criterion A6
 
 The literal "≥30% fewer tokens at equal-or-better correctness" arm of A6 is **not met** (tokens
