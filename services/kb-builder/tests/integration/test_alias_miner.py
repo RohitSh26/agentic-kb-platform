@@ -8,6 +8,7 @@ idempotent re-run (no duplicate rows/edges), and the never-widen ACL rule.
 DB-backed; skipped without TEST_DATABASE_URL. Never run against the :55432 demo DB.
 """
 
+import json
 import os
 import subprocess
 import uuid
@@ -24,6 +25,7 @@ from agentic_kb_builder.alias.resolve import resolve
 from agentic_kb_builder.alias.run import (
     ALIAS_ARTIFACT_TYPE,
     ALIAS_EDGE_TYPE,
+    _prior_extractions,
     run_alias_miner,
 )
 from agentic_kb_builder.alias.run import (
@@ -91,13 +93,18 @@ async def session(migrated_db: None) -> AsyncIterator[AsyncSession]:
 
 
 async def _code_source(
-    session: AsyncSession, path: str, *, acl_teams: tuple[str, ...] = ()
+    session: AsyncSession,
+    path: str,
+    *,
+    acl_teams: tuple[str, ...] = (),
+    repo: str = "o/r",
+    uri_suffix: str = "",
 ) -> uuid.UUID:
     row = SourceItem(
         source_type="github_code",
-        source_uri=f"repo://o/r/{path}",
+        source_uri=f"repo://{repo}/{path}{uri_suffix}",
         source_version="rev-1",
-        repo="o/r",
+        repo=repo,
         path=path,
         content_hash="code-hash-" + path,
         acl_teams=list(acl_teams),
@@ -108,9 +115,15 @@ async def _code_source(
     return row.source_id
 
 
-async def _code_artifact(session: AsyncSession, *, source_id: uuid.UUID, path: str) -> uuid.UUID:
+async def _code_artifact(
+    session: AsyncSession,
+    *,
+    source_id: uuid.UUID,
+    path: str,
+    artifact_type: str = "code_file",
+) -> uuid.UUID:
     row = KnowledgeArtifact(
-        artifact_type="code_file",
+        artifact_type=artifact_type,
         source_id=source_id,
         title=path,
         body_text=None,
@@ -362,6 +375,111 @@ async def test_alias_acl_denies_all_on_disjoint_restricted_targets(session: Asyn
     rows = await _alias_rows(session)
     assert rows
     assert all(r.acl_teams == list(DENY_ALL_ACL) for r in rows)
+
+
+@requires_db
+async def test_alias_target_resolution_is_scoped_to_the_contributing_repo(
+    session: AsyncSession,
+) -> None:
+    """Same path in TWO repos: the alias mined from an o/r commit must bind to
+    o/r's artifact with o/r's ACL. Unscoped resolution would prefer the OTHER
+    repo's code_file artifact (wrong repo) and contaminate the ACL with its
+    restricted teams (alias-reference.md: resolution is (repo, path))."""
+    path = "services/kb-builder/shared.py"
+    # o/r: org-public, only a summary artifact (so the wrong-repo code_file would
+    # deterministically win under unscoped type preference)
+    own_source = await _code_source(session, path, repo="o/r", acl_teams=())
+    own_artifact = await _code_artifact(
+        session, source_id=own_source, path=path, artifact_type="summary"
+    )
+    # unrelated repo: restricted, with a code_file artifact at the SAME path
+    other_source = await _code_source(session, path, repo="other/r", acl_teams=("team-b",))
+    await _code_artifact(session, source_id=other_source, path=path, artifact_type="code_file")
+    await _commit(
+        session,
+        sha="f" * 40,
+        subject="fix(alias): shared module cleanup",
+        changed_files=(path,),
+    )
+
+    await run_alias_miner(session, kb_version="kb-v1", valid_from_seq=1)
+    await session.commit()
+
+    rows = await _alias_rows(session)
+    assert rows
+    # o/r's file is org-public; the other repo's ["team-b"] must not leak in
+    assert all(r.acl_teams == [] for r in rows)
+    edges = await _alias_edges(session)
+    assert edges
+    assert all(e.to_artifact_id == own_artifact for e in edges)
+
+
+@requires_db
+async def test_alias_acl_denies_all_when_one_paths_rows_have_disjoint_teams(
+    session: AsyncSession,
+) -> None:
+    """Two source rows for ONE path restricted to DISJOINT teams: the per-path
+    merge must collapse to the deny-all sentinel — storing [] would mean
+    org-public at read (rbac treats [] as everyone), the never-widen failure."""
+    path = "services/kb-builder/dual.py"
+    source_a = await _code_source(session, path, acl_teams=("team-a",))
+    await _code_source(session, path, acl_teams=("team-b",), uri_suffix="?rev=2")
+    await _code_artifact(session, source_id=source_a, path=path)
+    await _commit(
+        session,
+        sha="9" * 40,
+        subject="fix(alias): dual ownership handling",
+        changed_files=(path,),
+    )
+
+    await run_alias_miner(session, kb_version="kb-v1", valid_from_seq=1)
+    await session.commit()
+
+    rows = await _alias_rows(session)
+    assert rows
+    assert all(r.acl_teams == list(DENY_ALL_ACL) for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# Watermark reconstruction (_prior_extractions) — pure, no DB
+# ---------------------------------------------------------------------------
+
+
+def _stored_alias_row(source: str, mined_hash: str, targets: tuple[str, ...]) -> KnowledgeArtifact:
+    body = {
+        "schema": "alias_reference_v1",
+        "evidence": [
+            {"source": source, "ref": "r", "content_hash": mined_hash, "targets": list(targets)}
+        ],
+    }
+    return KnowledgeArtifact(artifact_type=ALIAS_ARTIFACT_TYPE, body_text=json.dumps(body))
+
+
+def test_watermark_conflict_poisons_the_source_for_the_whole_scan() -> None:
+    """Hash pattern A,B,A across one source's stored rows: after the B conflict a
+    LATER matching-hash row must NOT re-add a PARTIAL phrase map (pop-then-readd
+    would replay only the post-conflict phrases and invalidate the rest as
+    no_contributing_source on an unchanged source). The source must re-mine."""
+    prior_rows = {
+        "phrase a": _stored_alias_row("commit:git:s1", "hash-A", ("a.py",)),
+        "phrase b": _stored_alias_row("commit:git:s1", "hash-B", ("b.py",)),
+        "phrase c": _stored_alias_row("commit:git:s1", "hash-A", ("c.py",)),
+    }
+
+    assert "commit:git:s1" not in _prior_extractions(prior_rows)
+
+
+def test_watermark_agreeing_hashes_reconstruct_the_full_phrase_map() -> None:
+    prior_rows = {
+        "phrase a": _stored_alias_row("commit:git:s2", "hash-A", ("a.py",)),
+        "phrase b": _stored_alias_row("commit:git:s2", "hash-A", ("b.py",)),
+    }
+
+    state = _prior_extractions(prior_rows)
+    assert state["commit:git:s2"] == (
+        "hash-A",
+        {"phrase a": ("a.py",), "phrase b": ("b.py",)},
+    )
 
 
 # ---------------------------------------------------------------------------

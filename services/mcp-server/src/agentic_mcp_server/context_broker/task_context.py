@@ -188,8 +188,13 @@ async def synthesize_node(state: TaskContextState) -> TaskContextUpdate:
     cap = min(request.max_tokens or server_cap, server_cap)
     calls_used = state.get("calls_used", 0)
 
-    trim_order: list[list[object]] = [list(prior), list(conventions)]
-    blast_lists = {
+    # Trim state IS the kept lists (popped from the tail, order preserved) —
+    # never a value-membership filter over the originals, which would misbehave
+    # on equal-valued duplicates (popping one tail copy silently drops or keeps
+    # ALL equal items, trimming the wrong entries).
+    prior_kept: list[PriorChange] = list(prior)
+    conventions_kept: list[Convention] = list(conventions)
+    blast_lists: dict[str, list[BlastRadiusEntity]] = {
         "callees": list(blast.callees),
         "callers": list(blast.callers),
         "tests": list(blast.tests),
@@ -203,8 +208,8 @@ async def synthesize_node(state: TaskContextState) -> TaskContextUpdate:
                 callees=tuple(blast_lists["callees"]),
                 tests=tuple(blast_lists["tests"]),
             ),
-            conventions=tuple(c for c in conventions if c in trim_order[1]),
-            prior=tuple(p for p in prior if p in trim_order[0]),
+            conventions=tuple(conventions_kept),
+            prior=tuple(prior_kept),
             open_questions=open_questions,
             calls_used=calls_used,
         )
@@ -214,8 +219,8 @@ async def synthesize_node(state: TaskContextState) -> TaskContextUpdate:
         # drop one item from the lowest-value tail: prior -> conventions ->
         # callees -> callers -> tests; never scope, ambiguity, or open questions
         for bucket in (
-            trim_order[0],
-            trim_order[1],
+            prior_kept,
+            conventions_kept,
             blast_lists["callees"],
             blast_lists["callers"],
             blast_lists["tests"],
@@ -257,9 +262,7 @@ def _route_after_synthesize(state: TaskContextState) -> str:
 
 
 async def broaden_node(state: TaskContextState) -> TaskContextUpdate:
-    logger.info(
-        "event=task_context_broadened_retry subject=%s", state["ctx"].requester.subject
-    )
+    logger.info("event=task_context_broadened_retry subject=%s", state["ctx"].requester.subject)
     return {
         "broadened": True,
         "node_spans": [NodeSpan("broaden", time.monotonic(), time.monotonic())],

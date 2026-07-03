@@ -64,6 +64,17 @@ async def compute_draft(
         if snapshot.next:  # pending nodes => a crashed run to resume, not re-pay
             resuming = True
             logger.info("event=panel_resume thread_id=%s next=%s", key, ",".join(snapshot.next))
+        elif snapshot.values:
+            # A COMPLETED thread whose stored draft row is gone (deleted
+            # out-of-band): invoking fresh input on this thread would MERGE into
+            # the checkpointed reducer state — operator.add appends four MORE
+            # panelist_reviews, feeding eight into reconcile. Clear the thread so
+            # the recompute starts from clean state on the same thread_id.
+            await checkpointer.adelete_thread(key)
+            logger.info(
+                "event=panel_thread_cleared thread_id=%s reason=completed_without_stored_draft",
+                key,
+            )
     result = await graph.ainvoke(None if resuming else {"pr": pr}, config)
     draft = cast(ReviewDraft, result["draft"])
     return DraftOutcome(draft=draft, source="resumed" if resuming else "computed")

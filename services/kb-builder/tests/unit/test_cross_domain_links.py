@@ -20,6 +20,7 @@ from agentic_kb_builder.connectors.git_metadata import (
     parse_changed_files,
     render_commit,
 )
+from agentic_kb_builder.domain.acl_intersection import merge_path_acls
 from agentic_kb_builder.linker.cross_domain import (
     IMPLEMENTS_CONFIDENCE,
     MENTIONS_CONFIDENCE,
@@ -298,3 +299,27 @@ def test_acl_zero_resolvable_inputs_deny_by_default() -> None:
 def test_acl_all_public_inputs_stay_public() -> None:
     file_acls = {"a.py": [], "b.py": []}
     assert commit_acl_intersection(["a.py", "b.py"], file_acls) == []
+
+
+# --------------------------------------------------------------------------
+# Per-path strictest-wins merge (several source rows resolve for ONE path)
+# --------------------------------------------------------------------------
+
+
+def test_path_merge_disjoint_rows_deny_all_never_empty() -> None:
+    # Two rows for one path restricted to disjoint teams: nobody is authorised
+    # for every row. [] would mean org-public (everyone) at read — never widen.
+    assert merge_path_acls([["team-a"], ["team-b"]]) == list(DENY_ALL_ACL)
+
+
+def test_path_merge_keeps_the_common_team() -> None:
+    assert merge_path_acls([["platform", "payments"], ["payments"]]) == ["payments"]
+
+
+def test_path_merge_public_row_imposes_no_constraint() -> None:
+    assert merge_path_acls([["secret"], []]) == ["secret"]
+
+
+def test_path_merge_all_public_rows_stay_public() -> None:
+    assert merge_path_acls([[], []]) == []
+    assert merge_path_acls([]) == []

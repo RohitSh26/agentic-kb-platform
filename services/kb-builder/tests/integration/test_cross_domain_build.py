@@ -295,6 +295,54 @@ async def test_commit_acl_ignores_same_path_in_other_repo(session: AsyncSession)
     assert list(acl) == []
 
 
+@requires_db
+async def test_commit_acl_denies_all_when_one_paths_rows_have_disjoint_teams(
+    session: AsyncSession,
+) -> None:
+    """Two source rows for ONE (repo, path) restricted to DISJOINT teams: the
+    per-path strictest-wins merge must collapse to the deny-all sentinel — the
+    old empty-set merge stored [], which means org-public (everyone) at read."""
+    await _add_source(
+        session,
+        source_type="github_code",
+        source_uri="gh://repoA/src/dual.py",
+        path="src/dual.py",
+        repo="repoA",
+        acl_teams=["team-a"],
+    )
+    await _add_source(
+        session,
+        source_type="github_doc",
+        source_uri="gh://repoA/src/dual.py?doc",
+        path="src/dual.py",
+        repo="repoA",
+        acl_teams=["team-b"],
+    )
+    commit_source = await _add_source(
+        session,
+        source_type="git_metadata",
+        source_uri="git:mno",
+        external_id="m" * 40,
+        repo="repoA",
+    )
+    changed = ["src/dual.py"]
+    artifact_id = await write_commit_artifact(
+        session,
+        source_id=commit_source.source_id,
+        kb_version="v-build.1",
+        title="mno",
+        body_text=_commit_body("touch dual", changed),
+        changed_files=changed,
+        repo="repoA",
+    )
+    acl = (
+        await session.execute(
+            select(KnowledgeArtifact.acl_teams).where(KnowledgeArtifact.artifact_id == artifact_id)
+        )
+    ).scalar_one()
+    assert list(acl) == list(DENY_ALL_ACL)
+
+
 # --------------------------------------------------------------------------
 # changed-file → code edge + commit→work-item implements, via run_linker
 # --------------------------------------------------------------------------

@@ -1,9 +1,14 @@
-"""Crash-durable model-output cache (ADR-0027 / PR-35).
+"""Crash-durable model-output cache (ADR-0027 / PR-35) under per-source commits (ADR-0029).
 
-Proves the property the whole PR exists for: if a build crashes after paying the model
-but before its single end-commit, the artifact-coupled generation_cache / embedding_cache
-roll back, yet the *model outputs* survive (side-committed), so the re-run makes ZERO model
-calls — while the crashed build never activates (atomicity preserved).
+Proves the property the durable cache exists for: a build that pays the model and then
+fails NEVER pays again on the re-run — the model outputs are side-committed and survive
+any rollback. Persistence semantics follow ADR-0029 (which superseded ADR-0027's
+atomic-write stance): each source's knowledge COMMITS the moment it is ready, so
+
+- a crash in the build's finalize phase leaves the completed sources persisted (but the
+  failed run never activates — activation stays atomic, nothing is served);
+- a failure INSIDE one source rolls back just that source (hash unadvanced, retried next
+  build) while the durable outputs alone spare the retry's model spend.
 
 DB-backed; skipped gracefully when TEST_DATABASE_URL is not configured (same policy as the
 other integration tests). Never run against the :55432 demo DB — use TEST_DATABASE_URL.
@@ -165,10 +170,20 @@ class HealthyIndexer:
 
 class CrashingIndexer(HealthyIndexer):
     """Upserts succeed (so docify/embed run + side-commit), then the post-source index
-    reconcile raises — crashing the build AFTER the model was paid but BEFORE the commit."""
+    reconcile raises — crashing the build in the FINALIZE phase, after each source's
+    knowledge was already committed (ADR-0029) but before the run can complete/activate."""
 
     async def delete_orphaned(self) -> int:
         raise RuntimeError("simulated crash after sources processed")
+
+
+class MidSourceCrashIndexer(HealthyIndexer):
+    """The per-source index upsert raises BEFORE that source's commit: the source rolls
+    back (hash unadvanced, retried next build) while the build itself survives
+    (ADR-0029) — the durable outputs alone must spare the retry's model spend."""
+
+    async def upsert_documents(self, artifact_ids: Sequence[uuid.UUID]) -> int:
+        raise RuntimeError("simulated crash mid-source")
 
 
 def _doc_connector(raw: str) -> GitHubDocConnector:
@@ -200,10 +215,11 @@ async def test_crash_then_rerun_makes_zero_model_calls(session: AsyncSession) ->
         assert extractor1.calls == 1
         assert embedder1.calls == 1
 
-        # atomicity: the build rolled back — no served artifacts, no generation_cache,
-        # and no active version (the failed run never activates).
-        assert await _count(session, KnowledgeArtifact) == 0
-        assert await _count(session, GenerationCache) == 0
+        # ADR-0029: the source's knowledge committed the moment it was ready, so the
+        # finalize-phase crash discards NOTHING already done — but the failed run
+        # never activates, so none of it is served (activation stays atomic).
+        assert await _count(session, KnowledgeArtifact) == 1
+        assert await _count(session, GenerationCache) == 1
         active = (
             await session.execute(
                 select(KbBuildRun).where(KbBuildRun.status == "active")
@@ -228,12 +244,69 @@ async def test_crash_then_rerun_makes_zero_model_calls(session: AsyncSession) ->
         run2 = await runner2.run([_doc_connector("Some prose to summarize.\n")])
         await session.commit()
 
-        # the whole point: ZERO re-paid model calls, yet the build completes with artifacts
+        # ZERO re-paid model calls (the committed source skips on content_hash), and
+        # the re-run completes + can activate what the crashed build already persisted
         assert run2.status == "completed"
         assert extractor2.calls == 0
         assert embedder2.calls == 0
         assert run2.llm_calls == 0
         assert run2.embedding_calls == 0
+        assert await _count(session, KnowledgeArtifact) >= 1
+    finally:
+        await durable.aclose()
+
+
+@requires_db
+async def test_mid_source_failure_rolls_back_the_source_but_never_repays_the_model(
+    session: AsyncSession,
+) -> None:
+    """The durable-cache property under ADR-0029's per-source commits: a failure INSIDE
+    one source (before that source's commit) rolls back its artifacts and leaves its
+    hash unadvanced — so the next build retries it — yet the side-committed model
+    outputs mean the retry pays the model NOTHING."""
+    assert TEST_DATABASE_URL is not None
+    durable = PostgresDurableOutputCache.from_url(TEST_DATABASE_URL)
+    try:
+        extractor1, embedder1 = SpyDocExtractor(), SpyEmbedder()
+        runner1 = BuildRunner(
+            session,
+            kb_version="v-test.mid.1",
+            doc_extractor=extractor1,
+            embedder=embedder1,
+            indexer=MidSourceCrashIndexer(),
+            durable_cache=durable,
+        )
+        run1 = await runner1.run([_doc_connector("Some prose to summarize.\n")])
+        await session.commit()
+
+        # one source's failure is non-fatal (ADR-0029): the build completes, the
+        # source rolled back to the last commit — nothing persisted for it
+        assert run1.status == "completed"
+        assert run1.extractor_failures == 1
+        assert await _count(session, KnowledgeArtifact) == 0
+        assert await _count(session, GenerationCache) == 0
+        # the model WAS paid, and its outputs survived the per-source rollback
+        assert extractor1.calls == 1
+        assert await _count(session, DocExtractionOutput) == 1
+
+        extractor2, embedder2 = SpyDocExtractor(), SpyEmbedder()
+        runner2 = BuildRunner(
+            session,
+            kb_version="v-test.mid.2",
+            doc_extractor=extractor2,
+            embedder=embedder2,
+            indexer=HealthyIndexer(),
+            durable_cache=durable,
+        )
+        run2 = await runner2.run([_doc_connector("Some prose to summarize.\n")])
+        await session.commit()
+
+        # the retry re-processes the source (hash never advanced) with ZERO model
+        # spend — the durable outputs alone carry it to a completed build
+        assert run2.status == "completed"
+        assert extractor2.calls == 0
+        assert embedder2.calls == 0
+        assert run2.llm_calls == 0
         assert await _count(session, KnowledgeArtifact) >= 1
     finally:
         await durable.aclose()

@@ -33,7 +33,7 @@ from agentic_kb_builder.alias.mining import (
 )
 from agentic_kb_builder.alias.resolve import AliasEntry
 from agentic_kb_builder.connectors.git_metadata import parse_changed_files
-from agentic_kb_builder.domain.acl_intersection import commit_acl_intersection
+from agentic_kb_builder.domain.acl_intersection import commit_acl_intersection, merge_path_acls
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.domain.schema_versions import RELATION_SCHEMA_VERSION
 from agentic_kb_builder.infrastructure.postgres.models import (
@@ -91,6 +91,10 @@ class _MiningInput:
     content_hash: str
     source_id: uuid.UUID
     extract_kind: str  # "commit" | "doc"
+    # the contributing source's repo — target paths are resolved WITHIN it
+    # (alias-reference.md "Target resolution: (repo, path)"); None matches only
+    # repo-less source rows, mirroring write_commit._file_acls.
+    repo: str | None = None
     subject: str = ""
     changed_files: tuple[str, ...] = ()
     doc_path: str = ""
@@ -137,7 +141,8 @@ async def run_alias_miner(
     aggregates = aggregate_contributions(contributions)
     anchor_by_key = {i.source_key: i.source_id for i in inputs}
     target_paths = {t.path for agg in aggregates for t in agg.targets}
-    path_acls, path_artifacts = await _resolve_targets(session, target_paths)
+    path_repos = _contributing_repos(aggregates, {i.source_key: i.repo for i in inputs})
+    path_acls, path_artifacts = await _resolve_targets(session, target_paths, path_repos)
 
     art_counts, alias_ids = await _reconcile_artifacts(
         session,
@@ -213,6 +218,7 @@ async def _load_mining_inputs(session: AsyncSession) -> list[_MiningInput]:
             KnowledgeArtifact.source_id,
             SourceItem.source_uri,
             SourceItem.source_version,
+            SourceItem.repo,
         )
         .join(SourceItem, KnowledgeArtifact.source_id == SourceItem.source_id)
         .where(
@@ -221,7 +227,7 @@ async def _load_mining_inputs(session: AsyncSession) -> list[_MiningInput]:
             SourceItem.is_deleted.is_(False),
         )
     )
-    for body_text, body_hash, source_id, source_uri, source_version in commit_rows.tuples():
+    for body_text, body_hash, source_id, source_uri, source_version, repo in commit_rows.tuples():
         if body_text is None or body_hash is None:
             continue
         inputs.append(
@@ -231,6 +237,7 @@ async def _load_mining_inputs(session: AsyncSession) -> list[_MiningInput]:
                 content_hash=body_hash,
                 source_id=source_id,
                 extract_kind="commit",
+                repo=repo,
                 subject=body_text.split("\n", 1)[0].strip(),
                 changed_files=parse_changed_files(body_text),
             )
@@ -241,13 +248,14 @@ async def _load_mining_inputs(session: AsyncSession) -> list[_MiningInput]:
             SourceItem.path,
             SourceItem.content_hash,
             SourceItem.source_id,
+            SourceItem.repo,
         ).where(
             SourceItem.source_type == "github_doc",
             SourceItem.is_deleted.is_(False),
             SourceItem.path.is_not(None),
         )
     )
-    for source_uri, path, source_hash, source_id in doc_rows.tuples():
+    for source_uri, path, source_hash, source_id, repo in doc_rows.tuples():
         if path is None or source_hash is None or not path.lower().endswith(".md"):
             continue
         inputs.append(
@@ -257,6 +265,7 @@ async def _load_mining_inputs(session: AsyncSession) -> list[_MiningInput]:
                 content_hash=source_hash,
                 source_id=source_id,
                 extract_kind="doc",
+                repo=repo,
                 doc_path=path,
             )
         )
@@ -312,6 +321,7 @@ def _prior_extractions(
     source_key -> (content_hash mined at, {phrase: targets}). This is the
     incremental-skip watermark (alias-reference.md)."""
     state: dict[str, tuple[str, dict[str, tuple[str, ...]]]] = {}
+    poisoned: set[str] = set()
     for title, row in sorted(prior_rows.items()):
         body = _parse_body(row)
         if body is None:
@@ -322,16 +332,23 @@ def _prior_extractions(
             targets = tuple(entry.get("targets", []))
             if not isinstance(source_key, str) or not isinstance(mined_hash, str):
                 continue
+            if source_key in poisoned:
+                continue
             known = state.get(source_key)
             if known is None or known[0] == mined_hash:
                 phrases = known[1] if known is not None else {}
                 phrases[title] = targets
                 state[source_key] = (mined_hash, phrases)
-            # A hash mismatch between rows for one source means stale state; the
-            # source re-mines (treated as changed) because reuse requires ALL
-            # stored entries to agree on the mined-at hash.
-            elif known[0] != mined_hash:
+            else:
+                # A hash mismatch between rows for one source means stale state;
+                # the source re-mines (treated as changed) because reuse requires
+                # ALL stored entries to agree on the mined-at hash. POISON the
+                # key — merely popping it would let a LATER matching-hash row
+                # (hash pattern A,B,A) re-add a PARTIAL phrase map, and replaying
+                # it would invalidate the missing phrases as
+                # no_contributing_source on an unchanged source.
                 state.pop(source_key, None)
+                poisoned.add(source_key)
                 logger.warning("event=alias_watermark_conflict source=%s", source_key)
     return state
 
@@ -349,39 +366,54 @@ def _parse_body(row: KnowledgeArtifact) -> dict[str, Any] | None:
     return body if isinstance(body, dict) else None
 
 
+def _contributing_repos(
+    aggregates: tuple[AliasAggregate, ...], repo_by_key: dict[str, str | None]
+) -> dict[str, set[str | None]]:
+    """Which repos legitimately name each target path — the repo of every
+    contributing source whose evidence lists the path. Resolution is scoped to
+    these repos (alias-reference.md "(repo, path) → live source_item"): a
+    same-path file in an UNRELATED repo is a different file and must neither
+    bind the edge nor contaminate the ACL (write_commit._file_acls precedent)."""
+    path_repos: dict[str, set[str | None]] = {}
+    for aggregate in aggregates:
+        for source_key, _, _, targets in aggregate.evidence:
+            if source_key not in repo_by_key:
+                continue  # unreachable: evidence always comes from a live input
+            for path in targets:
+                path_repos.setdefault(path, set()).add(repo_by_key[source_key])
+    return path_repos
+
+
 async def _resolve_targets(
-    session: AsyncSession, paths: set[str]
+    session: AsyncSession, paths: set[str], path_repos: dict[str, set[str | None]]
 ) -> tuple[dict[str, list[str]], dict[str, uuid.UUID]]:
     """Map target path -> (source ACL, preferred live artifact id).
 
-    ACL per path is strictest-wins across matching source rows (mirrors
-    write_commit._file_acls); the artifact preference is code_file, then
-    summary, then any — deterministic. Paths with no live source stay absent
-    (they contribute nothing to ACL — deny-by-default handles zero-resolution —
-    and get no edge, so the no-ghost gate holds).
+    A source row counts only when its repo is one of the path's CONTRIBUTING
+    repos (`path_repos`); ACL per path is then strictest-wins across the
+    matching rows (merge_path_acls — disjoint restrictions collapse to the
+    deny-all sentinel, never []). The artifact preference is code_file, then
+    summary, then any — deterministic. Paths with no live source in a
+    contributing repo stay absent (they contribute nothing to ACL —
+    deny-by-default handles zero-resolution — and get no edge, so the no-ghost
+    gate holds).
     """
     if not paths:
         return {}, {}
     source_rows = await session.execute(
-        select(SourceItem.source_id, SourceItem.path, SourceItem.acl_teams).where(
+        select(SourceItem.source_id, SourceItem.path, SourceItem.repo, SourceItem.acl_teams).where(
             SourceItem.path.in_(sorted(paths)),
             SourceItem.is_deleted.is_(False),
         )
     )
-    acls: dict[str, list[str]] = {}
+    acl_rows_by_path: dict[str, list[list[str]]] = {}
     source_ids: dict[uuid.UUID, str] = {}
-    for source_id, path, acl_teams in source_rows.tuples():
-        if path is None:
+    for source_id, path, repo, acl_teams in source_rows.tuples():
+        if path is None or repo not in path_repos.get(path, set()):
             continue
         source_ids[source_id] = path
-        teams = list(acl_teams)
-        existing = acls.get(path)
-        if existing is None:
-            acls[path] = teams
-        elif existing and teams:
-            acls[path] = sorted(set(existing) & set(teams))
-        else:
-            acls[path] = existing or teams
+        acl_rows_by_path.setdefault(path, []).append(list(acl_teams))
+    acls = {path: merge_path_acls(acl_rows) for path, acl_rows in acl_rows_by_path.items()}
     if not source_ids:
         return acls, {}
     artifact_rows = await session.execute(

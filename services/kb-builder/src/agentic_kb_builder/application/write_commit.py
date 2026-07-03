@@ -20,7 +20,11 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agentic_kb_builder.domain.acl_intersection import DENY_ALL_ACL, commit_acl_intersection
+from agentic_kb_builder.domain.acl_intersection import (
+    DENY_ALL_ACL,
+    commit_acl_intersection,
+    merge_path_acls,
+)
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.infrastructure.postgres.models import KnowledgeArtifact, SourceItem
 from agentic_kb_builder.structured_logging import get_logger
@@ -53,24 +57,16 @@ async def _file_acls(
             SourceItem.is_deleted.is_(False),
         )
     )
-    acls: dict[str, list[str]] = {}
+    acl_rows_by_path: dict[str, list[list[str]]] = {}
     for path, acl_teams in rows.tuples():
         if path is None:
             continue
-        # Scoped to one repo, so several rows for one path are revisions of the
-        # SAME file; the strictest wins — a file is only org-public if every such
-        # row is.
-        existing = acls.get(path)
-        teams = list(acl_teams)
-        if existing is None:
-            acls[path] = teams
-        elif existing and teams:
-            acls[path] = sorted(set(existing) & set(teams))
-        else:
-            # one side org-public ⇒ keep the constraining (non-empty) side, or
-            # org-public if both empty.
-            acls[path] = existing or teams
-    return acls
+        acl_rows_by_path.setdefault(path, []).append(list(acl_teams))
+    # Scoped to one repo, so several rows for one path are revisions of the SAME
+    # file; the strictest wins (merge_path_acls) — a file is only org-public if
+    # every such row is, and rows restricted to DISJOINT teams collapse to the
+    # deny-all sentinel, never to [] (which would widen to everyone at read).
+    return {path: merge_path_acls(acl_rows) for path, acl_rows in acl_rows_by_path.items()}
 
 
 async def write_commit_artifact(

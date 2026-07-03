@@ -50,6 +50,31 @@ async def test_new_head_sha_gets_a_new_draft() -> None:
     assert await store.get(key_of(pr_v2)) == v2.draft
 
 
+async def test_deleted_draft_row_recomputes_clean_without_doubling_reviews() -> None:
+    """A COMPLETED checkpoint thread whose draft row was deleted out-of-band must
+    recompute from CLEAN state. Re-invoking fresh input on the finished thread
+    would MERGE into the checkpointed reducer state — operator.add appends four
+    MORE panelist_reviews, feeding eight into reconcile."""
+    pr = make_pr()
+    deps, model, _, store = make_deps(pr=pr)
+    saver = InMemorySaver()
+    first = await compute_or_get_draft(deps, saver, pr.repo, pr.number)
+    assert first.source == "computed"
+    assert len(model.calls) == 5
+
+    # manual cleanup / operator error: the draft row vanishes, the thread remains
+    store._drafts.pop(key_of(pr))
+
+    second = await compute_or_get_draft(deps, saver, pr.repo, pr.number)
+
+    assert second.source == "computed"  # an honest fresh recompute, not a fake resume
+    assert len(model.calls) == 10
+    assert await store.get(key_of(pr)) == second.draft
+    # the recomputed thread carries exactly ONE review per lens — never eight
+    snapshot = await build_panel_graph(deps, saver).aget_state(thread_config(pr))
+    assert len(snapshot.values["panelist_reviews"]) == 4
+
+
 async def test_racing_runs_on_the_same_sha_keep_exactly_one_draft() -> None:
     """Two concurrent engines both compute (neither saw a stored draft); the
     store's put_if_absent keeps the first row and hands it to the loser."""

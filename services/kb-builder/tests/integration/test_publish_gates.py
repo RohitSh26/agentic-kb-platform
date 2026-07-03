@@ -7,6 +7,7 @@ previously active version keeps serving. The allow_large_delta override is honou
 """
 
 import os
+import re
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from agentic_kb_builder.application.active_version import get_active_kb_version
 from agentic_kb_builder.application.publish_gates import (
+    ALLOWED_EDGE_TYPES,
     _build_seq_for,
     edge_evidence_integrity_gate,
     no_dangling_citations_gate,
@@ -472,3 +474,50 @@ async def test_build_seq_for_missing_version_raises_clear_error(session: AsyncSe
     NoResultFound / None propagation)."""
     with pytest.raises(ValueError, match="no completed kb_build_run"):
         await _build_seq_for(session, "v-gate.absent")
+
+
+# --------------------------------------------------------------------------
+# Ontology-contract drift (no DB): every relation the contract allows must be
+# accepted by the enforcing gate. The drift that actually happened (b6eb51a):
+# relation-ontology.md gained `aliases` but ALLOWED_EDGE_TYPES did not, and the
+# first full post-PR-38 build failed its own edge-evidence-integrity gate.
+# --------------------------------------------------------------------------
+
+RELATION_ONTOLOGY_CONTRACT = (
+    Path(__file__).resolve().parents[4] / "docs" / "contracts" / "relation-ontology.md"
+)
+
+
+def _contract_edge_types() -> set[str]:
+    """The `edge_type` column of the contract's 'Allowed edge types' table."""
+    text_md = RELATION_ONTOLOGY_CONTRACT.read_text(encoding="utf-8")
+    section = text_md.split("## Allowed edge types", 1)[1].split("\n## ", 1)[0]
+    edge_types: set[str] = set()
+    for line in section.splitlines():
+        if not line.startswith("|"):
+            continue
+        first_cell = line.split("|")[1].strip()
+        match = re.fullmatch(r"`([a-z_]+)`", first_cell)
+        if match:  # skips the header row and the |---| separator
+            edge_types.add(match.group(1))
+    return edge_types
+
+
+def test_every_contract_relation_is_accepted_by_the_edge_type_gate() -> None:
+    contract_types = _contract_edge_types()
+    assert len(contract_types) >= 5, (
+        f"parsed only {sorted(contract_types)} from {RELATION_ONTOLOGY_CONTRACT} — "
+        "the table parse silently broke; fix the parser, do not weaken the gate"
+    )
+    missing = contract_types - ALLOWED_EDGE_TYPES
+    assert not missing, (
+        f"relation-ontology.md allows {sorted(missing)} but publish_gates.ALLOWED_EDGE_TYPES "
+        "does not — the edge-evidence-integrity gate would reject a valid build "
+        "(contract-updated-but-enforcement-not drift)"
+    )
+
+
+def test_aliases_edge_type_is_gate_allowed() -> None:
+    # Regression pin for the live-build failure fixed in b6eb51a (PR-38 alias
+    # miner writes `aliases` edges; the gate must accept them).
+    assert "aliases" in ALLOWED_EDGE_TYPES

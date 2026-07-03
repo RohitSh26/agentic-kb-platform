@@ -29,6 +29,30 @@ from collections.abc import Sequence
 DENY_ALL_ACL: tuple[str, ...] = ("__no_team__",)
 
 
+def merge_path_acls(acl_rows: Sequence[Sequence[str]]) -> list[str]:
+    """Strictest-wins ACL across the source rows that resolve for ONE path.
+
+    Used when several `source_item` rows match one path (revisions of the same
+    file, or same-path files in more than one contributing repo): the merged ACL
+    is the teams authorised for EVERY row. Org-public rows (empty acl) impose no
+    constraint; only non-empty ACLs narrow.
+
+    Results:
+    - no rows / every row org-public => [] (org-public);
+    - a non-empty intersection => that team set;
+    - disjoint restrictions (rows share no team) => DENY_ALL_ACL — storing []
+      would widen to everyone at read (rbac.py treats [] as org-public), the
+      exact never-widen failure acl-source-visibility.md forbids.
+    """
+    constraints = [set(acl) for acl in acl_rows if acl]
+    if not constraints:
+        return []
+    intersection = constraints[0].intersection(*constraints[1:])
+    if not intersection:
+        return list(DENY_ALL_ACL)
+    return sorted(intersection)
+
+
 def commit_acl_intersection(
     target_paths: Sequence[str],
     path_acls: dict[str, list[str]],
@@ -50,16 +74,7 @@ def commit_acl_intersection(
     if not resolved:
         # Unknown provenance: we can vouch for no team => deny by default.
         return list(DENY_ALL_ACL)
-    # Org-public inputs (empty acl) impose no constraint; only non-empty ACLs
-    # narrow. If every resolved input is org-public, the artifact is org-public.
-    constraints = [set(acl) for acl in resolved if acl]
-    if not constraints:
-        return []
-    intersection = constraints[0].intersection(*constraints[1:])
-    if not intersection:
-        # Disjoint teams: no team can see every input => visible to nobody.
-        return list(DENY_ALL_ACL)
-    return sorted(intersection)
+    return merge_path_acls(resolved)
 
 
-__all__ = ["DENY_ALL_ACL", "commit_acl_intersection"]
+__all__ = ["DENY_ALL_ACL", "commit_acl_intersection", "merge_path_acls"]
