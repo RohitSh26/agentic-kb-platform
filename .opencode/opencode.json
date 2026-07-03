@@ -43,7 +43,9 @@
     },
     "code_reviewer": {
       "tools": {
-        "context-broker_kb_search": true
+        "context-broker_kb_search": true,
+        "read": true,
+        "grep": true
       }
     },
     "delivery_planner": {
