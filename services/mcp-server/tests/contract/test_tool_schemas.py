@@ -9,8 +9,11 @@ from pydantic import ValidationError
 from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 from agentic_mcp_server.mcp.tool_schemas import (
     MCP_SCHEMA_VERSION,
+    ConfidenceTier,
     CreatePackRequest,
     EvidenceCard,
+    KbSearchHit,
+    KbSearchRequest,
     ListRetrievalsRequest,
     OpenEvidenceResponse,
     ReadPackRequest,
@@ -31,6 +34,7 @@ EXPECTED_TOOLS = {
     "context.verify_answer",
     "context.platform_trust",
     "context.create_change_pack",
+    "kb_search",
 }
 
 
@@ -41,6 +45,37 @@ def test_registry_covers_the_v1_tool_surface() -> None:
 def test_bare_query_is_rejected() -> None:
     with pytest.raises(ValidationError):
         RequestMoreRequest.model_validate({"query": "give me everything"})
+
+
+def test_kb_search_accepts_exactly_a_bare_query() -> None:
+    """The ADR-0025 simple path: {"query": ...} IS the whole contract — no run/pack
+    handle, no justification fields — while anything extra still dies at validation."""
+    request = KbSearchRequest.model_validate({"query": "where is build_seq resolved?"})
+    assert request.query == "where is build_seq resolved?"
+    with pytest.raises(ValidationError):
+        KbSearchRequest.model_validate({"query": ""})
+    with pytest.raises(ValidationError):
+        KbSearchRequest.model_validate({"query": "x", "run_id": "run-1"})
+
+
+def test_kb_search_confidence_tiers_pin_the_contract_values() -> None:
+    """docs/proposals/2026-07-02-tool-design-first-kb-architecture.md §3 tiering."""
+    assert set(get_args(ConfidenceTier)) == {"ground_truth", "deterministic", "interpreted"}
+
+
+def test_kb_search_hits_default_to_interpreted_and_reject_unknown_tiers() -> None:
+    """Keyword hits are not cross-validated: `interpreted` unless a path (e.g. the
+    future graph-derived one) explicitly claims a stronger tier the Literal admits."""
+    hit = KbSearchHit(title="BudgetPolicy", artifact_type="code_symbol")
+    assert hit.confidence_tier == "interpreted"
+    deterministic = KbSearchHit(
+        title="BudgetPolicy", artifact_type="code_symbol", confidence_tier="deterministic"
+    )
+    assert deterministic.confidence_tier == "deterministic"
+    with pytest.raises(ValidationError):
+        KbSearchHit.model_validate(
+            {"title": "t", "artifact_type": "code_symbol", "confidence_tier": "certain"}
+        )
 
 
 def test_request_more_requires_full_justification() -> None:

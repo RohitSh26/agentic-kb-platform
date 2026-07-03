@@ -9,13 +9,13 @@ import re
 from dataclasses import dataclass, field
 
 from fastmcp.exceptions import ToolError
-from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.dependencies import get_access_token, get_context
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_mcp_server.auth.client_identity import ClientIdentity, ClientRegistry
 from agentic_mcp_server.auth.rbac import Requester, TeamAclAuthorization, teams_from_claims
 from agentic_mcp_server.context_broker.authorization import AuthorizationPolicy
-from agentic_mcp_server.context_broker.budgets import BudgetPolicy
+from agentic_mcp_server.context_broker.budgets import BudgetPolicy, KbSearchBudgetStore
 from agentic_mcp_server.context_broker.state import PackStore
 from agentic_mcp_server.infrastructure.entailment.client import EntailmentClient
 from agentic_mcp_server.infrastructure.search.search_client import SearchClient
@@ -65,6 +65,9 @@ class BrokerDeps:
     # unregistered, non-scope-gated, non-verification-required identity (existing
     # behaviour unchanged for deployments that ship no registry).
     client_registry: ClientRegistry = field(default_factory=ClientRegistry)
+    # kb_search budget windows (PR-37, ADR-0025 §4): per-(session, subject) dual-cap
+    # usage meters. In-process state like `packs`; the ledger is the durable record.
+    kb_search_usage: KbSearchBudgetStore = field(default_factory=KbSearchBudgetStore)
 
 
 # The subject is echoed verbatim into key=value structured logs across the broker
@@ -93,6 +96,20 @@ def current_requester() -> Requester:
     return Requester(
         subject=_sanitize_subject(subject), teams=teams_from_claims(token.claims or {})
     )
+
+
+def current_session_key() -> str:
+    """The MCP session id — kb_search's budget window key (ADR-0025 §4 per-task cap).
+
+    One agent run/connection = one MCP session on the streamable-HTTP transport,
+    so (session id, subject) is the per-task budget window; fastmcp generates an
+    id for non-HTTP transports too. Fails closed like ``current_requester``: a
+    call with no session must never fall into a shared (or fresh) budget window.
+    """
+    try:
+        return get_context().session_id
+    except RuntimeError as error:
+        raise ToolError("no active MCP session") from error
 
 
 def current_client_identity(registry: ClientRegistry) -> ClientIdentity:

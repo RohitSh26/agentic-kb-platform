@@ -34,6 +34,9 @@ TOOL_REQUIRED_SCOPES: dict[str, str] = {
     "context.request_more": SCOPE_CONTEXT_READ,
     "context.open_evidence": SCOPE_CONTEXT_READ,
     "context.create_change_pack": SCOPE_CONTEXT_READ,
+    # kb_search is the ADR-0025 read path: the same capability class as the context.*
+    # read tools, so a host that granted `context.read` for the read path gets it too.
+    "kb_search": SCOPE_CONTEXT_READ,
     "graph.get_neighbors": SCOPE_GRAPH_READ,
     "ledger.list_retrievals": SCOPE_LEDGER_READ,
     "context.verify_answer": SCOPE_VERIFY,

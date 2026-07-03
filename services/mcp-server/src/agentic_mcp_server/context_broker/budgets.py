@@ -8,6 +8,7 @@ entry in the allowance map, supplied per deployment via MCP_AGENT_ALLOWANCES
 (parsed by parse_agent_allowances below).
 """
 
+import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -40,6 +41,57 @@ class BudgetPolicy:
 
     def allowance_for(self, subject: str) -> AgentAllowance:
         return self.allowances.get(subject, self.default_allowance)
+
+
+def kb_budget_open(allowance: AgentAllowance, usage: AgentUsage) -> bool:
+    """kb_search answers only while BOTH caps remain (ADR-0025 §4).
+
+    The single source of truth for the dual cap, mirroring the proven
+    ``_kb_budget_open`` in scripts/kb_agent.py: exhausting EITHER the call
+    count OR the token cap closes the budget — one axis without the other is a
+    bug. Tokens are charged after each answer, so the final in-budget call may
+    overdraw the token cap; this check then refuses the next call.
+    """
+    return usage.requests < allowance.max_requests and usage.tokens < allowance.max_tokens
+
+
+@dataclass
+class KbSearchWindow:
+    """One (MCP session, subject) budget window for kb_search."""
+
+    usage: AgentUsage = field(default_factory=AgentUsage)
+    # serializes check-then-charge so a parallel burst of kb_search calls from one
+    # window cannot all pass the cap check before any of them charges (the same
+    # rule EvidencePackState.lock enforces for the pack meters)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+@dataclass
+class KbSearchBudgetStore:
+    """Session-scoped kb_search usage windows (ADR-0025 §4's per-task cap).
+
+    The kb_search request is a bare query (no run/pack handle by contract), so
+    the budget window is the pair (MCP session id, authenticated subject): one
+    agent run/connection = one task budget, and a new session starts fresh.
+    In-process state like PackStore — a runtime meter, never truth; the durable
+    record is the retrieval_event ledger. LRU-bounded to cap process memory in
+    a long-lived instance.
+    """
+
+    windows: dict[tuple[str, str], KbSearchWindow] = field(default_factory=dict)
+    max_windows: int = 1024
+
+    def window_for(self, session_key: str, subject: str) -> KbSearchWindow:
+        key = (session_key, subject)
+        window = self.windows.pop(key, None)
+        if window is None:
+            window = KbSearchWindow()
+            # evict the least-recently-used window (front of the insertion-ordered
+            # dict; the pop/re-insert below moves touched windows to the back)
+            while len(self.windows) >= self.max_windows:
+                del self.windows[next(iter(self.windows))]
+        self.windows[key] = window
+        return window
 
 
 _ALLOWANCE_KEYS = {"max_requests", "max_tokens"}

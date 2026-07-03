@@ -25,10 +25,14 @@ from agentic_mcp_server.context_broker import (
 from agentic_mcp_server.context_broker import (
     expand as expand_mod,
 )
+from agentic_mcp_server.context_broker import (
+    kb_search as kb_search_mod,
+)
 from agentic_mcp_server.context_broker.dependencies import (
     BrokerDeps,
     current_client_identity,
     current_requester,
+    current_session_key,
 )
 from agentic_mcp_server.context_broker.platform_trust import evaluate_platform_trust
 from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
@@ -43,6 +47,7 @@ from agentic_mcp_server.mcp.tool_schemas.context import (
 )
 from agentic_mcp_server.mcp.tool_schemas.graph import GetNeighborsRequest
 from agentic_mcp_server.mcp.tool_schemas.ledger import ListRetrievalsRequest
+from agentic_mcp_server.mcp.tool_schemas.search import KbSearchRequest
 from agentic_mcp_server.mcp.tool_schemas.verification import (
     PlatformTrustRequest,
     VerifyAnswerRequest,
@@ -99,6 +104,14 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         _client("context.create_change_pack")
         return await change_context.create_change_pack(deps, request, current_requester())
 
+    async def kb_search(request: KbSearchRequest) -> McpModel:
+        _client("kb_search")
+        # The budget window binds to (MCP session, authenticated subject) — both
+        # resolved server-side, never from request fields (unspoofable, like budgets).
+        return await kb_search_mod.kb_search(
+            deps, request, current_requester(), session_key=current_session_key()
+        )
+
     async def platform_trust(request: PlatformTrustRequest) -> McpModel:
         # Official-client gate: trusted ONLY for a verification_required client with a
         # valid, client-matched, passing receipt; structured denial otherwise; a
@@ -120,6 +133,7 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         "context.verify_answer": verify_answer,
         "context.platform_trust": platform_trust,
         "context.create_change_pack": create_change_pack,
+        "kb_search": kb_search,
     }
     for tool_name, handler in handlers.items():
         schema = TOOL_SCHEMAS[tool_name]

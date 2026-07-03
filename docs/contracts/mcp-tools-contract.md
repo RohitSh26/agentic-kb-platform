@@ -40,7 +40,12 @@
 > enforced; `truncated=true` when the budget cap was hit. If
 > `context_pack_id` is given, the expansion is charged against that pack's run
 > budget and new cards are registered into it so they are openable by handle.
-> Writes a `retrieval_event` row per call.
+> Writes a `retrieval_event` row per call; 1.9.0 = PR-37 (ADR-0025, ADR-0030):
+> adds `kb_search`, the budgeted KB-first retrieval tool — one `query` in,
+> ranked ACL-filtered hits out (`title`, `artifact_type`, `source_uri`,
+> `snippet`, `confidence_tier`), with a server-side dual cap (call count AND
+> cumulative tokens) per (MCP session, subject). Additive: every `context.*`
+> tool is unchanged and stays registered.
 
 ## The V1 tools
 
@@ -56,8 +61,16 @@
 | `context.verify_answer` | L0 provenance verifier; returns a verification receipt |
 | `context.platform_trust` | Official-client gate: is the client's answer platform-trusted? |
 | `context.create_change_pack` | BUILD-lane selector: the small file set (target/test/dependency) to edit for a code-change task |
+| `kb_search` | ADR-0025 KB-first retrieval: one budgeted, ACL-filtered ranked search over the active KB |
 
-There is **no** generic unrestricted `kb.search` tool in V1.
+There is **no unrestricted** KB search tool in V1. `kb_search` (1.9.0, ADR-0025)
+is deliberately simple to *call* — a bare `{"query": ...}` is its entire request —
+but it is **not** unrestricted: the server enforces a dual hard cap (call count
+AND cumulative tokens returned) per (MCP session, authenticated subject), filters
+every hit through the same team ACL as every other tool, and writes a
+`retrieval_event` row per call. The old broker flow (`context.*`) remains
+registered and optional — ADR-0025 keeps it available where citation-grade
+provenance is required; `kb_search` is the preferred first stop.
 
 ## Request highlights
 
@@ -90,6 +103,10 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   `verifier_levels` (phase 1: `["L0"]`). A request with no claims, or any claim
   with empty `evidence_ids`, fails schema validation. Full shape and the L0
   check semantics live in `verification-receipt.md`.
+- `kb_search`: `query` (non-empty). That is the whole request — no run/pack
+  handle, no justification fields (this tool is the ADR-0025 *simple* path; the
+  justified path stays `context.request_more`). Identity and budget bind to the
+  authenticated session, never to a request field.
 - `run_id` matches `^[A-Za-z0-9._-]{1,128}$` (log-injection guard).
 - `context.read_pack.role` is **free-form** — adopting teams name their own
   roles (`security_auditor` is as valid as `implementation`); the broker never
@@ -221,7 +238,25 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   `receipt_overall_not_passed`) — never a silent pass. A client that did **not**
   opt into `verification_required` gets `not_required` (its behaviour is
   unchanged).
-- `ledger.list_retrievals` returns one record per retrieval event:
+- `kb_search` returns `{results, budget_remaining, notice}`. Each hit carries
+  `title`, `artifact_type`, `source_uri`, `snippet` (untrusted retrieved text,
+  same discipline as card titles/summaries), and a `confidence_tier` ∈
+  `ground_truth | deterministic | interpreted`
+  (`docs/proposals/2026-07-02-tool-design-first-kb-architecture.md` §3).
+  Keyword-ranked hits are always `interpreted` (relevance-ranked, not
+  cross-validated); the field is the declared extension point for graph-derived
+  hits to carry `deterministic` once blast-radius wiring lands (follow-up PR —
+  no other tier is emitted today). `budget_remaining = {calls, tokens}` states
+  what is left of the caller's dual cap after this call (floored at 0). When the
+  budget closes, `notice` carries exactly: *"KB budget spent — work with what
+  you have, or read the specific files you still need."* — appended to the last
+  in-budget response and returned (with empty `results`, ledger `status="denied"`,
+  **never a tool error**) for every call after it, so the agent keeps working
+  with files instead of crashing (ADR-0025 §4). Hits are ranked by the standard
+  retrieval path (SearchClient relevance × transparent temporal/centrality
+  factors, semantic dedupe, 3–5 results max) and ledgered with
+  `run_id = "-"` (the request carries no run handle; the session is recorded in
+  `details`).
   `event_id`, `run_id`, `kb_version`, `agent_name`, `tool`, `status`,
   `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`. The non-run
   sentinel `run_id = "-"` is rejected (it aggregates every subject's
@@ -259,6 +294,20 @@ There is **no** generic unrestricted `kb.search` tool in V1.
   allowance by re-creating the pack. `create_pack` itself remains free of the
   follow-up request/token meter (that meter governs `request_more` /
   `open_evidence`); only its run-budget trim applies.
+- **`kb_search` enforces ADR-0025 §4's one restriction: a dual hard cap, in code.**
+  The caller's `AgentAllowance` (`MCP_AGENT_ALLOWANCES`, keyed by authenticated
+  subject — the same allowance map the `context.*` meter uses; unlisted subjects
+  get the conservative default) is enforced on **both axes independently**: the
+  tool answers only while `requests_used < max_requests` **and**
+  `tokens_used < max_tokens`. One axis without the other is a bug — exhausting
+  either closes the budget. Tokens are charged **after** each answer for the
+  exact serialized hits returned, so the final in-budget call may overdraw the
+  token cap; the next call is then refused. The budget window is the pair
+  (MCP session id, subject) — one agent run/connection = one task budget; a new
+  session gets a fresh window, and windows are held in bounded process memory
+  (V1 single instance, like pack state — the durable record is the ledger).
+  Check-then-charge is serialized per window, so a parallel burst of `kb_search`
+  calls cannot all pass the cap before any of them charges.
 - The broker makes **no LLM or embedding calls** in V1: pack summaries are
   assembled from registry artifacts, and semantic dedupe is a deterministic
   token-similarity measure. Retrieval relevance goes through the `SearchClient`

@@ -1,8 +1,8 @@
 """Versioned request/response schemas for MCP Context Broker tools.
 
-Every context.* / graph.* / ledger.* tool gets a request and response model
-here before it is implemented. The human-readable contract of record is
-docs/contracts/mcp-tools-contract.md; keep both in sync in the same PR.
+Every tool (context.* / graph.* / ledger.* / kb_search) gets a request and
+response model here before it is implemented. The human-readable contract of
+record is docs/contracts/mcp-tools-contract.md; keep both in sync in the same PR.
 """
 
 from agentic_mcp_server.mcp.tool_schemas.base import MCP_SCHEMA_VERSION, McpModel
@@ -30,6 +30,13 @@ from agentic_mcp_server.mcp.tool_schemas.ledger import (
     ListRetrievalsResponse,
     RetrievalEventRecord,
 )
+from agentic_mcp_server.mcp.tool_schemas.search import (
+    ConfidenceTier,
+    KbSearchBudget,
+    KbSearchHit,
+    KbSearchRequest,
+    KbSearchResponse,
+)
 from agentic_mcp_server.mcp.tool_schemas.verification import (
     RECEIPT_SCHEMA_VERSION,
     ClaimInput,
@@ -47,6 +54,7 @@ __all__ = [
     "AgentRole",
     "ClaimInput",
     "ClaimReceipt",
+    "ConfidenceTier",
     "CreatePackRequest",
     "CreatePackResponse",
     "EvidenceCard",
@@ -56,6 +64,10 @@ __all__ = [
     "GetNeighborsRequest",
     "GetNeighborsResponse",
     "GraphNeighbor",
+    "KbSearchBudget",
+    "KbSearchHit",
+    "KbSearchRequest",
+    "KbSearchResponse",
     "L0Checks",
     "ListRetrievalsRequest",
     "ListRetrievalsResponse",

@@ -29,6 +29,7 @@ from agentic_mcp_server.mcp.tool_schemas.ledger import (
     ListRetrievalsRequest,
     ListRetrievalsResponse,
 )
+from agentic_mcp_server.mcp.tool_schemas.search import KbSearchRequest, KbSearchResponse
 from agentic_mcp_server.mcp.tool_schemas.verification import (
     PlatformTrustDecision,
     PlatformTrustRequest,
@@ -109,5 +110,14 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
         "For a code-change task, return the small set of files to edit: the target file(s), "
         "the test file(s), and the top dependency file(s) — each with a reason, numeric "
         "confidence, and token estimate. Use this to gather BUILD context instead of grep.",
+    ),
+    # ADR-0025: the KB-first simple path. Already '_'-shaped, so the wire name is identical.
+    "kb_search": ToolSchema(
+        KbSearchRequest,
+        KbSearchResponse,
+        "Search the knowledge base (code + docs + tickets) for the right files and answers. "
+        "Prefer this FIRST to find where things are; cite the source_uri of results you use, "
+        "and do not re-read files it already answered. Budgeted — a per-task call + token cap "
+        "is enforced server-side; each response reports budget_remaining.",
     ),
 }

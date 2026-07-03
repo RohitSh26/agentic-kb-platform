@@ -26,6 +26,8 @@ def test_registered_client_needs_the_tool_scope() -> None:
     )
     assert client_may_call(reader, "context.create_pack") is True
     assert client_may_call(reader, "context.open_evidence") is True
+    # kb_search is the ADR-0025 read path: the context.read grant covers it.
+    assert client_may_call(reader, "kb_search") is True
     # Lacks the verify + graph + ledger scopes.
     assert client_may_call(reader, "context.verify_answer") is False
     assert client_may_call(reader, "graph.get_neighbors") is False
@@ -44,3 +46,4 @@ def test_verify_scope_gates_both_verify_and_platform_trust() -> None:
 def test_registered_client_with_no_scopes_is_denied_guarded_tools() -> None:
     client = ClientIdentity(client_id="empty", scopes=frozenset(), registered=True)
     assert client_may_call(client, "context.create_pack") is False
+    assert client_may_call(client, "kb_search") is False
