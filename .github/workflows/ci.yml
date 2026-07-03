@@ -85,6 +85,42 @@ jobs:
         working-directory: services/mcp-server
         run: uv run pytest
 
+  review-panel:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/review-panel
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentic_kb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/agentic_kb_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Sync
+        run: uv sync --locked
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Type-check
+        run: uv run pyright
+      - name: Tests
+        run: uv run pytest
+
   evals:
     runs-on: ubuntu-latest
     services:

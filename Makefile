@@ -1,4 +1,4 @@
-SERVICES := kb-builder mcp-server
+SERVICES := kb-builder mcp-server review-panel
 TEST_DATABASE_URL ?= postgresql+asyncpg://postgres:postgres@localhost:5432/agentic_kb_test
 
 .PHONY: sync lint types test verify migrate-test-db eval-run demo \
@@ -36,6 +36,12 @@ test-kb-builder:
 
 test-mcp-server:
 	cd services/mcp-server && TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run pytest
+
+# review-panel needs no registry migration: its checkpointer + draft store
+# bootstrap the dedicated review_panel schema themselves (DB-backed tests skip
+# without TEST_DATABASE_URL).
+test-review-panel:
+	cd services/review-panel && TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run pytest
 
 $(SERVICES:%=verify-%): verify-%: lint-% types-% test-%
 	@true
