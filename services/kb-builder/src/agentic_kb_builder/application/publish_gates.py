@@ -60,6 +60,11 @@ ALLOWED_EDGE_TYPES: frozenset[str] = frozenset(
         # type-references another, ingested whole-tree for symbol-level dependency.
         "uses",
         "references",
+        # Alias index (PR-38 / ADR-0030): alias_reference -> target artifact, evidence =
+        # the deterministic mining source (relation-ontology.md). Found missing by the
+        # gate itself on the first full build after PR-38 landed (2026-07-03) — the
+        # ontology contract had the row, this enforcement-side copy didn't.
+        "aliases",
     }
 )
 
