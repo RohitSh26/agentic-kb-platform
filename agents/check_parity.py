@@ -12,15 +12,20 @@ checklist in docs/contracts/portable-agent-framework.md:
 
 - tool parity: each rendering grants exactly the canon's allowed_tools
   (opencode agent file + opencode.json override; copilot agent file +
-  repository-settings union), broker namespace deny-by-default;
+  repository-settings union). `kb_search` is the one MCP tool (served by the
+  context-broker Context Broker) and is deny-by-default per the broker
+  namespace; the five ADR-0025 native tools (read_file, read_full,
+  list_files, grep, edit_file) render as each host's own built-in tool and
+  are deny-by-default per tool name;
 - body parity: the canonical instruction body verbatim, the budget lines,
-  the evidence-ID / request-more / untrusted-content rules, the output
-  schema name, and the rendering provenance comment;
+  the source-citation / open-question rule, the kb_search budget/fallback
+  discipline, the untrusted-content rule, the output schema name, and the
+  rendering provenance comment;
 - composition: deny-by-default `permission` blocks, subagent launching only
-  for pack-creating agents, copilot handoffs consistent with `agents`, and
-  skill grants that track the canon (`context-request-discipline` iff
-  `context.request_more`, `evidence-pack-orchestration` iff
-  `context.create_pack`, `evidence-citation` everywhere);
+  for the orchestrator (the agent whose canon sets
+  `requires_human_approval: true`), copilot handoffs consistent with
+  `agents`, and skill grants that track the canon (`kb-first-file-fallback`
+  iff `kb_search`, `evidence-citation` everywhere);
 - host validity: opencode modes and skill naming rules, copilot's 30k body
   cap, template description slots;
 - secrets: no credential markers anywhere, every Authorization value a
@@ -40,8 +45,29 @@ from pathlib import Path
 
 OPENCODE_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 COPILOT_MAX_BODY_CHARS = 30_000
-REQUEST_MORE_FIELDS = ("question", "why_needed", "decision_needed", "already_checked", "max_tokens")
 SECRET_MARKERS = ("ghp_", "github_pat_", "secret")
+
+# ADR-0025: only kb_search is broker-mediated (budgeted, server-enforced); the other five
+# canonical tools are host-native filesystem primitives restored directly to the agent. Multiple
+# canon entries legitimately collapse onto one host primitive (no host distinguishes a
+# "skeleton" read from a full read, and Copilot has one `search` alias for both grep and glob)
+# because the canon is more granular than any single host's tool surface — renderings dedupe
+# rather than inventing extra host tools to force a 1:1 count.
+OPENCODE_NATIVE_TOOLS = {
+    "read_file": "read",
+    "read_full": "read",
+    "list_files": "list",
+    "grep": "grep",
+    "edit_file": "edit",
+}
+COPILOT_NATIVE_TOOLS = {
+    "read_file": "read",
+    "read_full": "read",
+    "list_files": "search",  # Copilot's `search` alias covers both Grep and Glob
+    "grep": "search",
+    "edit_file": "edit",
+}
+NATIVE_TOOLS = frozenset(OPENCODE_NATIVE_TOOLS)
 AUTH_REFERENCE_RE = re.compile(
     r"^Bearer ("
     r"\$COPILOT_MCP_[A-Z0-9_]+"
@@ -50,6 +76,34 @@ AUTH_REFERENCE_RE = re.compile(
     r"|\{env:[A-Z0-9_]+\}"
     r")$"
 )
+
+
+def _opencode_tool(tool: str) -> str:
+    """Map one canonical tool to its OpenCode rendering. A known ADR-0025 native tool renders as
+    its OpenCode built-in id; anything else -- kb_search today, any MCP tool a team adds
+    tomorrow -- renders under the context-broker MCP namespace (unchanged pre-ADR-0025 rule)."""
+    return OPENCODE_NATIVE_TOOLS.get(tool, f"context-broker_{tool.replace('.', '_')}")
+
+
+def _copilot_tool(tool: str) -> str:
+    """Copilot counterpart of _opencode_tool: native tools use Copilot's own alias, everything
+    else is an MCP tool namespaced under the context-broker server."""
+    return COPILOT_NATIVE_TOOLS.get(tool, f"context-broker/{tool.replace('.', '_')}")
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    """First-occurrence-order dedupe. Several canon tools legitimately render to the same host
+    primitive (e.g. read_file/read_full both need OpenCode's one `read` tool) — the *set* of
+    rendered ids is what a host tools map/list can express; a plain map key can't repeat anyway."""
+    return list(dict.fromkeys(items))
+
+
+def _is_orchestrator(canon_fields: dict) -> bool:
+    """The ADR-0025 discriminator for 'may this agent launch subagents / run mode primary'.
+    context.create_pack no longer exists; requires_human_approval: true is its structural
+    replacement -- today set only on agents/orchestrator.md's canon, by construction (it is the
+    one role that gates a BUILD on human sign-off before fanning out to specialists)."""
+    return canon_fields.get("requires_human_approval") == "true"
 
 
 class ParseError(Exception):
@@ -230,11 +284,12 @@ class ParityChecker:
             if line not in body:
                 self.fail(f"{label}: budget line {line!r} missing from the body")
         lowered = body.lower()
-        if "evidence id" not in lowered or "open question" not in lowered:
-            self.fail(f"{label}: evidence-ID / open-question rule missing")
-        for field in REQUEST_MORE_FIELDS:
-            if field not in body:
-                self.fail(f"{label}: request_more field {field!r} missing")
+        if "cites a source" not in lowered or "open question" not in lowered:
+            self.fail(f"{label}: source-citation / open-question rule missing")
+        if "kb_search" not in body:
+            self.fail(f"{label}: kb_search (the budgeted KB-first tool) not named")
+        if "budget" not in lowered:
+            self.fail(f"{label}: kb_search budget/fallback discipline missing")
         if "untrusted" not in lowered:
             self.fail(f"{label}: untrusted-content rule missing")
         if str(canon_fields["output_schema"]) not in body:
@@ -258,12 +313,12 @@ class ParityChecker:
         canon_tools = list(canon_fields["allowed_tools"])
         if not isinstance(fields.get("description"), str) or not fields.get("description"):
             self.fail(f"{label}: description required")
-        creates_packs = "context.create_pack" in canon_tools
-        expected_mode = "primary" if creates_packs else "subagent"
+        is_orchestrator = _is_orchestrator(canon_fields)
+        expected_mode = "primary" if is_orchestrator else "subagent"
         if fields.get("mode") != expected_mode:
-            self.fail(f"{label}: mode must be {expected_mode!r} (create_pack grant decides)")
+            self.fail(f"{label}: mode must be {expected_mode!r} (requires_human_approval decides)")
         tools = fields.get("tools")
-        expected = [f"context-broker_{tool.replace('.', '_')}" for tool in canon_tools]
+        expected = _dedupe([_opencode_tool(tool) for tool in canon_tools])
         if not isinstance(tools, dict) or list(tools) != expected:
             self.fail(f"{label}: tools map drifted from canonical allowed_tools")
         if isinstance(tools, dict) and any(value != "true" for value in tools.values()):
@@ -273,7 +328,7 @@ class ParityChecker:
         if not isinstance(permission, dict):
             self.fail(f"{label}: permission block required (deny-by-default composition)")
         else:
-            self.check_opencode_permission(label, permission, canon_tools, roles, skills)
+            self.check_opencode_permission(label, permission, canon_tools, roles, skills, is_orchestrator)
         self.check_body(label, canon_fields, canon_body, role, body)
 
     def check_opencode_permission(
@@ -283,15 +338,15 @@ class ParityChecker:
         canon_tools: list[str],
         roles: list[str],
         skills: list[str],
+        is_orchestrator: bool,
     ) -> None:
-        creates_packs = "context.create_pack" in canon_tools
         task = permission.get("task")
         if not isinstance(task, dict) or task.get("*") != "deny":
             self.fail(f"{label}: permission.task must deny '*' by default")
         else:
             launchable = [key for key in task if key != "*"]
-            if launchable and not creates_packs:
-                self.fail(f"{label}: only pack-creating agents may launch subagents")
+            if launchable and not is_orchestrator:
+                self.fail(f"{label}: only the orchestrator (requires_human_approval) may launch subagents")
             for target in launchable:
                 if task[target] != "allow":
                     self.fail(f"{label}: permission.task[{target!r}] must be allow or absent")
@@ -307,10 +362,8 @@ class ParityChecker:
                     self.fail(f"{label}: permission.skill[{name!r}] must be allow or absent")
                 if name not in skills:
                     self.fail(f"{label}: skill {name!r} is not shipped in the skills trees")
-            if ("context-request-discipline" in allowed) != ("context.request_more" in canon_tools):
-                self.fail(f"{label}: context-request-discipline must track the request_more grant")
-            if ("evidence-pack-orchestration" in allowed) != creates_packs:
-                self.fail(f"{label}: evidence-pack-orchestration must track the create_pack grant")
+            if ("kb-first-file-fallback" in allowed) != ("kb_search" in canon_tools):
+                self.fail(f"{label}: kb-first-file-fallback must track the kb_search grant")
             if "evidence-citation" not in allowed:
                 self.fail(f"{label}: evidence-citation must be allowed for every agent")
 
@@ -340,13 +393,13 @@ class ParityChecker:
         if not isinstance(agents, list):
             self.fail(f"{label}: agents field required (empty list for specialists)")
             agents = []
-        creates_packs = "context.create_pack" in canon_tools
-        if agents and not creates_packs:
-            self.fail(f"{label}: only pack-creating agents may declare subagents")
+        is_orchestrator = _is_orchestrator(canon_fields)
+        if agents and not is_orchestrator:
+            self.fail(f"{label}: only the orchestrator (requires_human_approval) may declare subagents")
         for target in agents:
             if target not in canon_names.values():
                 self.fail(f"{label}: subagent {target!r} is not a canonical agent name")
-        expected = [f"context-broker/{tool.replace('.', '_')}" for tool in canon_tools]
+        expected = _dedupe([_copilot_tool(tool) for tool in canon_tools])
         if agents:
             expected = [*expected, "agent"]
         if fields.get("tools") != expected:
@@ -381,9 +434,15 @@ class ParityChecker:
         config = self.load_json(path)
         if not isinstance(config, dict):
             return
-        if config.get("tools") != {"context-broker_*": False}:
+        # deny-by-default extends past the broker namespace to every ADR-0025 native tool name,
+        # so a native grant is as visible and as intentional per-agent as an MCP grant always was
+        expected_global_off = {"context-broker_*": False} | {
+            name: False for name in sorted(set(OPENCODE_NATIVE_TOOLS.values()))
+        }
+        if config.get("tools") != expected_global_off:
             self.fail(
-                ".opencode/opencode.json: broker namespace must default off (context-broker_*: false)"
+                ".opencode/opencode.json: tools must default off "
+                f"({expected_global_off}) for the broker namespace and every native tool"
             )
         agents = config.get("agent", {})
         if set(agents) != set(roles):
@@ -395,7 +454,9 @@ class ParityChecker:
             # a role whose canon failed to parse has no tool list to compare against
             if role not in agents or role not in canon_tools_by_role:
                 continue
-            expected = {f"context-broker_{tool.replace('.', '_')}": True for tool in canon_tools_by_role[role]}
+            expected = {
+                name: True for name in _dedupe([_opencode_tool(t) for t in canon_tools_by_role[role]])
+            }
             if agents[role].get("tools") != expected:
                 self.fail(f".opencode/opencode.json: agent[{role!r}].tools drifted from canon")
 
@@ -413,7 +474,11 @@ class ParityChecker:
                 ".copilot/mcp/repository-settings.json: allowlist must enumerate tools, not '*'"
             )
             return
-        expected = sorted({tool for tools in canon_tools_by_role.values() for tool in tools})
+        # only MCP-routed tools belong in the broker's own allowlist -- native host tools
+        # (read/edit/search) are never routed through context-broker and have no row here
+        expected = sorted(
+            {tool for tools in canon_tools_by_role.values() for tool in tools if tool not in NATIVE_TOOLS}
+        )
         if not isinstance(allowed, list) or sorted(allowed) != expected:
             self.fail(
                 ".copilot/mcp/repository-settings.json: allowlist drifted from the canon union"

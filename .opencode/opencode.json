@@ -11,50 +11,92 @@
     }
   },
   "tools": {
-    "context-broker_*": false
+    "context-broker_*": false,
+    "read": false,
+    "edit": false,
+    "grep": false,
+    "list": false
   },
   "agent": {
     "orchestrator": {
       "tools": {
-        "context-broker_context_create_pack": true,
-        "context-broker_context_read_pack": true,
-        "context-broker_context_open_evidence": true,
-        "context-broker_context_expand": true,
-        "context-broker_context_verify_answer": true,
-        "context-broker_ledger_list_retrievals": true
+        "context-broker_kb_search": true,
+        "read": true,
+        "list": true,
+        "grep": true
       }
     },
     "implementation": {
       "tools": {
-        "context-broker_context_read_pack": true,
-        "context-broker_context_request_more": true,
-        "context-broker_context_open_evidence": true
+        "context-broker_kb_search": true,
+        "read": true,
+        "grep": true,
+        "edit": true
       }
     },
     "test_layer": {
       "tools": {
-        "context-broker_context_read_pack": true,
-        "context-broker_context_request_more": true,
-        "context-broker_context_open_evidence": true
+        "context-broker_kb_search": true,
+        "read": true,
+        "grep": true
       }
     },
     "code_reviewer": {
       "tools": {
-        "context-broker_context_read_pack": true,
-        "context-broker_context_request_more": true,
-        "context-broker_context_open_evidence": true
+        "context-broker_kb_search": true
       }
     },
     "delivery_planner": {
       "tools": {
-        "context-broker_context_read_pack": true,
-        "context-broker_context_request_more": true
+        "context-broker_kb_search": true
       }
     },
     "pr_planner": {
       "tools": {
-        "context-broker_context_read_pack": true,
-        "context-broker_context_request_more": true
+        "context-broker_kb_search": true
+      }
+    },
+    "adr_writer": {
+      "tools": {
+        "context-broker_kb_search": true,
+        "read": true,
+        "grep": true
+      }
+    },
+    "bug_reviewer": {
+      "tools": {
+        "context-broker_kb_search": true,
+        "read": true,
+        "grep": true
+      }
+    },
+    "infra_code": {
+      "tools": {
+        "context-broker_kb_search": true,
+        "read": true,
+        "grep": true,
+        "edit": true
+      }
+    },
+    "quality_reviewer": {
+      "tools": {
+        "context-broker_kb_search": true,
+        "read": true,
+        "grep": true
+      }
+    },
+    "security_reviewer": {
+      "tools": {
+        "context-broker_kb_search": true,
+        "read": true,
+        "grep": true
+      }
+    },
+    "test_coverage_reviewer": {
+      "tools": {
+        "context-broker_kb_search": true,
+        "read": true,
+        "grep": true
       }
     }
   }

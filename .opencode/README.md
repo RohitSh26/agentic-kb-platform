@@ -7,7 +7,7 @@ rendering preserves the canon's tool access, budgets, and framework rules. Do no
 rendered instruction bodies here — change `agents/*.md` and the tests will force this rendering
 to follow. The parity checklist lives in `docs/contracts/portable-agent-framework.md`.
 
-You can add your own agents next to the framework's six (canon manifest in `agents/`, a
+You can add your own agents next to the framework's twelve (canon manifest in `agents/`, a
 rendering here, an `opencode.json` entry) — run `python agents/check_parity.py` to verify your
 whole tree stays parity-clean without this repo's test suite (stdlib-only, CI-friendly).
 
@@ -17,6 +17,7 @@ whole tree stays parity-clean without this repo's test suite (stdlib-only, CI-fr
 |---|---|
 | `agents/orchestrator.md` (mode: primary) | `.opencode/agents/orchestrator.md` in your project (or `~/.config/opencode/agents/` globally) |
 | `agents/implementation.md`, `agents/test_layer.md`, `agents/code_reviewer.md`, `agents/delivery_planner.md`, `agents/pr_planner.md` (mode: subagent) | `.opencode/agents/<name>.md` in your project |
+| `agents/adr_writer.md`, `agents/infra_code.md`, `agents/bug_reviewer.md`, `agents/security_reviewer.md`, `agents/quality_reviewer.md`, `agents/test_coverage_reviewer.md` (mode: subagent, ADR-0030 — not yet invoked by the orchestrator) | `.opencode/agents/<name>.md` in your project |
 | `agents/_template.md` | copy to `.opencode/agents/<your-agent>.md`, fill in the `<!-- your agent description here -->` slots |
 | `skills/evidence-pack-orchestration/SKILL.md`, `skills/context-request-discipline/SKILL.md`, `skills/evidence-citation/SKILL.md` | `.opencode/skills/<name>/SKILL.md` in your project |
 | `opencode.json` | merge into your project's `opencode.json` (or `~/.config/opencode/opencode.json`) |
@@ -26,8 +27,9 @@ in its discovery location — set the broker URL and the one token and you are d
 
 ## The one credential to set
 
-`opencode.json` connects to the Context Broker as a remote MCP server named `context-broker`.
-Replace `https://<your-broker-host>/mcp/` with your broker URL and export:
+`opencode.json` connects to the Context Broker as a remote MCP server named `context-broker`
+(ADR-0025: the broker now serves exactly one tool, the budgeted `kb_search`). Replace
+`https://<your-broker-host>/mcp/` with your broker URL and export:
 
 ```sh
 export CONTEXT_BROKER_TOKEN=<your bearer token>
@@ -38,33 +40,46 @@ The config references it as `{env:CONTEXT_BROKER_TOKEN}` (OpenCode's environment
 
 ## Tool access model
 
-`opencode.json` disables the whole broker namespace globally (`"context-broker_*": false`) and
-re-enables exactly each agent's allowed tools per agent — the same lists appear in each agent
-file's `tools` frontmatter map. Only the orchestrator may `context.create_pack` and read the
-ledger; specialists get `context.read_pack` / `context.request_more` (and, where the canon
-allows, `context.open_evidence`). No host tools (file edit, bash, web) are enabled here — your
-team opts into those per agent.
+Each agent grants exactly its canonical `allowed_tools`, mapped through two different rules
+(`docs/contracts/portable-agent-framework.md` has the full table):
+
+- **`kb_search`** is the one MCP tool — budgeted and server-enforced. `opencode.json` disables
+  the whole broker namespace globally (`"context-broker_*": false`) and re-enables it per agent.
+- **Native tools** (`read`, `edit`, `grep`, `list` — OpenCode's own built-ins, mapped from the
+  canon's `read_file`/`read_full`/`edit_file`/`grep`/`list_files`) are restored directly to the
+  agent (ADR-0025: "native tools are never removed") and carry **no broker budget**.
+  `opencode.json` denies each of these four tool names globally too, then re-enables per agent
+  exactly what its canon grants — so an agent with no `edit_file` in its canon (e.g. the
+  planners) genuinely cannot edit, not just "isn't told to."
+
+No other host tools (`bash`, `write`, `webfetch`, …) are enabled here — your team opts into those
+per agent; no framework role needs them today.
 
 ## Composition
 
 Each agent's `permission` frontmatter declares composition natively, deny-by-default: `task`
 (launching subagents) and `skill` (loading skills) both deny `"*"`, then allow-list exactly what
-the role needs. The orchestrator may launch the five specialists (by filename) and load
-`evidence-pack-orchestration` + `evidence-citation`; specialists launch nothing and load
-`context-request-discipline` + `evidence-citation`. The template ships the specialist-shaped
-block.
+the role needs. Only the agent whose canon sets `requires_human_approval: true` (today, only the
+orchestrator) may launch subagents — it launches the five specialists (by filename). Every
+role, orchestrator included, loads the same two framework skills: `kb-first-file-fallback` +
+`evidence-citation` (ADR-0025 dropped the old orchestrator-only `evidence-pack-orchestration`
+skill — its short procedure now lives directly in the orchestrator's own canonical body). The
+template ships the specialist-shaped block.
 
 ## What the broker enforces regardless of these files
 
-Budgets (`max_context_calls`, `max_context_tokens`), tool policy, ACL filtering, the
-`context.request_more` field contract, and evidence-by-handle expansion are all enforced
+The `kb_search` budget (`max_context_calls`, `max_context_tokens`) and ACL filtering are enforced
 **server-side by the Context Broker per authenticated identity**. These files document the
 limits and teach the discipline; deleting or editing them cannot widen any agent's access or
-budget.
+budget. Native tools carry no broker budget — they are gated only by what each host's own config
+grants (see Tool access model above).
 
 ## Rendering provenance
 
-- Canonical manifests: `agents/*.md` version 1.0.
-- OpenCode format: agent frontmatter (`description`, `mode`, `tools` glob map with MCP tools
-  prefixed `<server>_`), `skills/<name>/SKILL.md` naming rules, and `opencode.json` `mcp`
-  remote-server shape per the OpenCode docs as of June 2026.
+- Canonical manifests: `agents/*.md`, version stated in each rendered body's own provenance
+  comment (`<!-- rendered from agents/<role>.md v<N> -->`) — versions differ per role as the
+  canon evolves; there is no single blanket version for the whole set.
+- OpenCode format: agent frontmatter (`description`, `mode`, `tools` glob map — MCP tools
+  prefixed `<server>_`, native tools by their own built-in id), `permission` (`task`/`skill`
+  deny-by-default), `skills/<name>/SKILL.md` naming rules, and `opencode.json` `mcp` remote-server
+  shape per the OpenCode docs as of July 2026.

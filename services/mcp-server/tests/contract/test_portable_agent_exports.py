@@ -41,11 +41,30 @@ PINNED_ROLES = (
     "pr_planner",
 )
 PINNED_SPECIALISTS = tuple(role for role in PINNED_ROLES if role != "orchestrator")
-PINNED_SKILLS = ("evidence-pack-orchestration", "context-request-discipline", "evidence-citation")
+PINNED_SKILLS = ("kb-first-file-fallback", "evidence-citation")
 OPENCODE_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 COPILOT_MAX_BODY_CHARS = 30_000
-REQUEST_MORE_FIELDS = ("question", "why_needed", "decision_needed", "already_checked", "max_tokens")
 SECRET_MARKERS = ("ghp_", "github_pat_", "secret")
+
+# ADR-0025: only kb_search is broker-mediated (budgeted, server-enforced); the other five
+# canonical tools are host-native filesystem primitives restored directly to the agent. Kept in
+# lockstep with agents/check_parity.py's copy (asserted below) since services do not import root
+# files (ADR-0008).
+OPENCODE_NATIVE_TOOLS = {
+    "read_file": "read",
+    "read_full": "read",
+    "list_files": "list",
+    "grep": "grep",
+    "edit_file": "edit",
+}
+COPILOT_NATIVE_TOOLS = {
+    "read_file": "read",
+    "read_full": "read",
+    "list_files": "search",  # Copilot's `search` alias covers both Grep and Glob
+    "grep": "search",
+    "edit_file": "edit",
+}
+NATIVE_TOOLS = frozenset(OPENCODE_NATIVE_TOOLS)
 # Reference-only credential shapes: $COPILOT_MCP_* / ${COPILOT_MCP_*} / ${input:...} / {env:...}
 AUTH_REFERENCE_RE = re.compile(
     r"^Bearer ("
@@ -90,10 +109,11 @@ def test_checker_constants_match_the_contract_test_copies() -> None:
     # the two copies agree so a fix in one can't silently diverge from the other
     constants = _checker_module_constants()
     assert constants["COPILOT_MAX_BODY_CHARS"] == COPILOT_MAX_BODY_CHARS
-    assert constants["REQUEST_MORE_FIELDS"] == REQUEST_MORE_FIELDS
     assert constants["SECRET_MARKERS"] == SECRET_MARKERS
     assert constants["OPENCODE_SKILL_NAME_RE"] == OPENCODE_SKILL_NAME_RE.pattern
     assert constants["AUTH_REFERENCE_RE"] == AUTH_REFERENCE_RE.pattern
+    assert constants["OPENCODE_NATIVE_TOOLS"] == OPENCODE_NATIVE_TOOLS
+    assert constants["COPILOT_NATIVE_TOOLS"] == COPILOT_NATIVE_TOOLS
 
 
 def _split(path: Path) -> tuple[list[str], str]:
@@ -225,8 +245,23 @@ def _canon_tools(role: str) -> list[str]:
     return tools
 
 
-def _creates_packs(role: str) -> bool:
-    return "context.create_pack" in _canon_tools(role)
+def _is_orchestrator(role: str) -> bool:
+    """ADR-0025 discriminator for 'may this agent launch subagents / run mode primary'.
+    context.create_pack no longer exists; requires_human_approval: true is its structural
+    replacement (today set only on agents/orchestrator.md's canon)."""
+    return _canon(role)[0].get("requires_human_approval") == "true"
+
+
+def _opencode_tool(tool: str) -> str:
+    return OPENCODE_NATIVE_TOOLS.get(tool, f"context-broker_{tool.replace('.', '_')}")
+
+
+def _copilot_tool(tool: str) -> str:
+    return COPILOT_NATIVE_TOOLS.get(tool, f"context-broker/{tool.replace('.', '_')}")
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(items))
 
 
 def _opencode_agent(role: str) -> tuple[dict[str, object], str]:
@@ -255,7 +290,7 @@ def _shipped_files() -> list[Path]:
 # --- the framework minimum is pinned ----------------------------------------------------------
 
 
-def test_the_six_pinned_roles_and_three_pinned_skills_always_exist() -> None:
+def test_the_six_pinned_roles_and_two_pinned_skills_always_exist() -> None:
     assert set(PINNED_ROLES) <= set(_discovered_roles()), "a framework role was removed"
     assert set(PINNED_SKILLS) <= set(_discovered_skills()), "a framework skill was removed"
 
@@ -273,7 +308,7 @@ def test_every_discovered_manifest_exists_in_both_renderings_plus_templates() ->
 
 def test_opencode_frontmatter_tools_exactly_match_canonical_allowed_tools() -> None:
     for role in _discovered_roles():
-        expected = [f"context-broker_{tool.replace('.', '_')}" for tool in _canon_tools(role)]
+        expected = _dedupe([_opencode_tool(tool) for tool in _canon_tools(role)])
         tools = _opencode_agent(role)[0]["tools"]
         assert isinstance(tools, dict), f"{role}: opencode tools must be a map"
         assert list(tools) == expected, f"{role}: opencode tools drifted from canon"
@@ -282,40 +317,30 @@ def test_opencode_frontmatter_tools_exactly_match_canonical_allowed_tools() -> N
 
 def test_opencode_json_per_agent_tools_exactly_match_canonical_allowed_tools() -> None:
     config = json.loads((OPENCODE_DIR / "opencode.json").read_text())
-    assert config["tools"] == {"context-broker_*": False}, "broker namespace must default off"
+    # deny-by-default extends past the broker namespace to every ADR-0025 native tool name
+    expected_global_off = {"context-broker_*": False} | {
+        name: False for name in sorted(set(OPENCODE_NATIVE_TOOLS.values()))
+    }
+    assert config["tools"] == expected_global_off, "broker + native tools must default off"
     agents = config["agent"]
     assert set(agents) == set(_discovered_roles()), (
         "opencode.json agent entries must cover exactly the manifests in agents/"
     )
     for role in _discovered_roles():
-        expected = {f"context-broker_{tool.replace('.', '_')}": True for tool in _canon_tools(role)}
+        expected = {name: True for name in _dedupe([_opencode_tool(t) for t in _canon_tools(role)])}
         assert agents[role]["tools"] == expected, f"{role}: opencode.json drifted from canon"
 
 
 def test_copilot_frontmatter_tools_exactly_match_canonical_allowed_tools() -> None:
     for role in _discovered_roles():
         fields, _ = _copilot_agent(role)
-        expected = [f"context-broker/{tool.replace('.', '_')}" for tool in _canon_tools(role)]
+        expected = _dedupe([_copilot_tool(tool) for tool in _canon_tools(role)])
         if fields.get("agents"):
             # the `agents` field requires the host `agent` tool — the single pinned
-            # exception to broker-only tool lists (composition, not a data tool)
+            # exception to tool-parity (composition, not a data tool)
             expected.append("agent")
         assert fields["tools"] == expected, f"{role}: copilot tools drifted from canon"
         assert fields["name"] == _canon(role)[0]["name"], f"{role}: copilot name drifted"
-
-
-def test_pack_creation_and_ledger_never_leak_beyond_their_canonical_grants() -> None:
-    for role in _discovered_roles():
-        canon_tools = _canon_tools(role)
-        renderings = (("opencode", _opencode_agent(role)[0]), ("copilot", _copilot_agent(role)[0]))
-        for host, fields in renderings:
-            tools = fields["tools"]
-            assert isinstance(tools, list | dict)
-            rendered = list(tools)
-            if "context.create_pack" not in canon_tools:
-                assert not any("create_pack" in t for t in rendered), f"{host}/{role}: pack leaked"
-            if "ledger.list_retrievals" not in canon_tools:
-                assert not any("ledger." in t for t in rendered), f"{host}/{role}: ledger leaked"
 
 
 def test_rendered_bodies_contain_the_canonical_instruction_body_verbatim() -> None:
@@ -333,19 +358,21 @@ def test_budget_numbers_in_every_rendered_body_match_the_canon() -> None:
             assert f"max_context_tokens: {fields['max_context_tokens']}" in body, f"{host}/{role}"
 
 
-def test_evidence_id_rule_in_every_rendered_body() -> None:
+def test_source_citation_rule_in_every_rendered_body() -> None:
     for role in _discovered_roles():
         for host, body in _rendered_bodies(role).items():
             lowered = body.lower()
-            assert "evidence id" in lowered, f"{host}/{role}: evidence-ID rule missing"
+            assert "cites a source" in lowered, f"{host}/{role}: source-citation rule missing"
             assert "open question" in lowered, f"{host}/{role}: open-question rule missing"
 
 
-def test_request_more_field_discipline_in_every_rendered_body() -> None:
+def test_kb_search_budget_discipline_in_every_rendered_body() -> None:
+    # replaces the retired context.request_more five-field justification contract: kb_search
+    # takes a plain query, so the equivalent discipline to pin is "budgeted, named, in every body"
     for role in _discovered_roles():
         for host, body in _rendered_bodies(role).items():
-            for field in REQUEST_MORE_FIELDS:
-                assert field in body, f"{host}/{role}: request_more field {field} missing"
+            assert "kb_search" in body, f"{host}/{role}: kb_search not named"
+            assert "budget" in body.lower(), f"{host}/{role}: kb_search budget discipline missing"
 
 
 def test_untrusted_content_rule_in_every_rendered_body() -> None:
@@ -373,7 +400,15 @@ def test_provenance_comment_in_every_rendered_body() -> None:
 def test_copilot_repository_settings_allowlist_is_the_union_of_canonical_tools() -> None:
     config = json.loads((COPILOT_DIR / "mcp" / "repository-settings.json").read_text())
     allowed = config["mcpServers"]["context-broker"]["tools"]
-    expected = sorted({tool for role in _discovered_roles() for tool in _canon_tools(role)})
+    # only MCP-routed tools belong here -- native host tools are never routed through the broker
+    expected = sorted(
+        {
+            tool
+            for role in _discovered_roles()
+            for tool in _canon_tools(role)
+            if tool not in NATIVE_TOOLS
+        }
+    )
     assert allowed != ["*"], "server-level allowlist must enumerate tools, not expose everything"
     assert sorted(allowed) == expected, "repository-settings allowlist drifted from canon union"
 
@@ -391,8 +426,8 @@ def test_copilot_orchestrator_agents_field_includes_the_five_pinned_specialists(
     assert set(agents) <= canonical_names, "orchestrator declares a non-canonical subagent"
 
 
-def test_copilot_non_pack_creators_and_template_declare_no_subagents() -> None:
-    names = [f"{role}.agent.md" for role in _discovered_roles() if not _creates_packs(role)]
+def test_copilot_non_orchestrators_and_template_declare_no_subagents() -> None:
+    names = [f"{role}.agent.md" for role in _discovered_roles() if not _is_orchestrator(role)]
     for name in (*names, "_template.agent.md"):
         fields, _ = _read(COPILOT_DIR / "agents" / name)
         assert fields["agents"] == [], f"{name}: specialists never spawn — agents must be []"
@@ -427,8 +462,8 @@ def test_opencode_orchestrator_task_permission_includes_the_five_pinned_speciali
     assert set(allowed) <= set(_discovered_roles()), "task target is not a manifest in agents/"
 
 
-def test_opencode_non_pack_creators_and_template_deny_all_task_launches() -> None:
-    names = [role for role in _discovered_roles() if not _creates_packs(role)]
+def test_opencode_non_orchestrators_and_template_deny_all_task_launches() -> None:
+    names = [role for role in _discovered_roles() if not _is_orchestrator(role)]
     for name in (*names, "_template"):
         fields, _ = _read(OPENCODE_DIR / "agents" / f"{name}.md")
         permission = fields["permission"]
@@ -448,18 +483,12 @@ def test_opencode_skill_permissions_deny_by_default_and_track_the_canonical_gran
         assert all(skill[key] == "allow" for key in allowed), f"{name}: non-allow skill entry"
         assert set(allowed) <= set(_discovered_skills()), f"{name}: allow-key not a shipped skill"
         assert "evidence-citation" in allowed, f"{name}: evidence-citation is framework-wide"
-        if name == "_template":
-            tools = fields["tools"]
-            assert isinstance(tools, dict)
-            creates_packs = "context-broker_context_create_pack" in tools
-        else:
-            creates_packs = _creates_packs(name)
-        assert ("evidence-pack-orchestration" in allowed) == creates_packs, (
-            f"{name}: evidence-pack-orchestration must track the create_pack grant"
-        )
 
 
-def test_request_discipline_skill_tracks_the_request_more_grant() -> None:
+def test_kb_first_file_fallback_skill_tracks_the_kb_search_grant() -> None:
+    # the ADR-0025 replacement for the retired evidence-pack-orchestration/context-request
+    # -discipline split: one skill, gated on the one remaining budgeted tool (kb_search is
+    # universal in the framework today, so this is a structural gate, not a coincidence)
     for name in (*_discovered_roles(), "_template"):
         fields, _ = _read(OPENCODE_DIR / "agents" / f"{name}.md")
         permission = fields["permission"]
@@ -469,21 +498,21 @@ def test_request_discipline_skill_tracks_the_request_more_grant() -> None:
         if name == "_template":
             tools = fields["tools"]
             assert isinstance(tools, dict)
-            has_request_more = "context-broker_context_request_more" in tools
+            has_kb_search = "context-broker_kb_search" in tools
         else:
-            has_request_more = "context.request_more" in _canon_tools(name)
-        has_discipline = skill.get("context-request-discipline") == "allow"
-        assert has_discipline == has_request_more, (
-            f"{name}: context-request-discipline must track the request_more grant"
+            has_kb_search = "kb_search" in _canon_tools(name)
+        has_fallback_skill = skill.get("kb-first-file-fallback") == "allow"
+        assert has_fallback_skill == has_kb_search, (
+            f"{name}: kb-first-file-fallback must track the kb_search grant"
         )
 
 
 # --- validity: each rendering is well-formed for its host ------------------------------------
 
 
-def test_opencode_modes_are_primary_for_pack_creators_and_subagent_for_the_rest() -> None:
+def test_opencode_modes_are_primary_for_the_orchestrator_and_subagent_for_the_rest() -> None:
     for role in _discovered_roles():
-        expected = "primary" if _creates_packs(role) else "subagent"
+        expected = "primary" if _is_orchestrator(role) else "subagent"
         assert _opencode_agent(role)[0]["mode"] == expected, f"{role}: wrong opencode mode"
     template, _ = _read(OPENCODE_DIR / "agents" / "_template.md")
     assert template["mode"] == "subagent"
@@ -612,7 +641,7 @@ def test_the_checker_flags_tool_drift_and_literal_credentials(tmp_path: Path) ->
     drifted = root / ".opencode" / "agents" / "code_reviewer.md"
     drifted.write_text(
         drifted.read_text().replace(
-            "context-broker_context_request_more: true",
+            "context-broker_kb_search: true",
             "context-broker_context_create_pack: true",
         )
     )
@@ -625,7 +654,12 @@ def test_the_checker_flags_tool_drift_and_literal_credentials(tmp_path: Path) ->
 
 
 def test_the_checker_accepts_a_team_added_agent(tmp_path: Path) -> None:
-    """The extensibility promise: a seventh agent rendered in parity passes everything."""
+    """The extensibility promise: one more agent, rendered in parity, passes everything.
+
+    Asserted against a count computed from the live roster rather than a hardcoded number:
+    the roster itself is discovery-driven and has already grown once (ADR-0030, 6 -> 12
+    roles) since this test was written -- a literal count would drift again next time.
+    """
     root = _copy_trees(tmp_path)
     renames = (("code_reviewer", "risk_auditor"), ("code_reviewer_agent", "risk_auditor_agent"))
 
@@ -648,4 +682,4 @@ def test_the_checker_accepts_a_team_added_agent(tmp_path: Path) -> None:
     config_path.write_text(json.dumps(config, indent=2))
     result = _run_checker(root)
     assert result.returncode == 0, f"team-added agent rejected:\n{result.stdout}{result.stderr}"
-    assert "7 agent(s)" in result.stdout
+    assert f"{len(_discovered_roles()) + 1} agent(s)" in result.stdout

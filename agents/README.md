@@ -4,12 +4,28 @@ These are the **product's** agents — the orchestrator and subagents the finish
 developers. They are NOT Claude Code subagents (those live in `.claude/agents/`).
 
 Format follows the blueprint's manifest style: YAML frontmatter declaring tool access
-(`allowed_tools` — context.\*/ledger.\* only, never unrestricted KB search), budgets
-(`max_context_calls`, `max_context_tokens`), `requires_evidence_ids`, and an `output_schema` name,
-plus a body that is the agent's instruction set. Server-side MCP policy enforces every limit even if
-a prompt fails. Output rules live in `docs/contracts/agent-output-contracts.md`; the concrete
-schemas (and the `AGENT_OUTPUT_SCHEMAS` registry the `output_schema` names resolve against) live in
-`services/mcp-server/src/agentic_mcp_server/agent_output_schemas/`.
+(`allowed_tools` — the budgeted `kb_search` tool plus whichever native tools the role needs
+(`read_file`, `read_full`, `list_files`, `grep`, `edit_file`); never unrestricted KB search — see
+ADR-0025), budgets (`max_context_calls`, `max_context_tokens`, now counted against `kb_search`
+calls/tokens, not the retired broker flow), `requires_evidence_ids`, and an `output_schema` name,
+plus a body that is the agent's instruction set. The `kb_search` tool enforces its own budget
+server-side even if a prompt fails. Output rules live in `docs/contracts/agent-output-contracts.md`;
+the concrete schemas (and the `AGENT_OUTPUT_SCHEMAS` registry the `output_schema` names resolve
+against) live in `services/mcp-server/src/agentic_mcp_server/agent_output_schemas/` — note
+`adr_draft_v1` (added for `adr_writer_agent`) is not yet registered there, a known follow-up.
+
+All twelve manifests in this directory are now **rendered** into `.opencode/`/`.copilot/` and held
+to the same checklist by `check_parity.py`: the original six — `orchestrator`,
+`implementation_agent`, `test_layer_agent`, `delivery_planner_agent`, `pr_planner_agent`,
+`code_reviewer_agent` (the ADR-0025/ADR-0009 rewrite) — plus six more authorized by ADR-0030 —
+`adr_writer_agent`, `infra_code_agent`, and a four-agent review panel (`bug_reviewer_agent`,
+`security_reviewer_agent`, `quality_reviewer_agent`, `test_coverage_reviewer_agent`, whose findings
+`code_reviewer_agent` reconciles as a synthesizer). ADR-0030 resolved the roster question raised by
+`docs/proposals/2026-07-02-v2-world-class-platform-architecture.md` (that proposal stays a proposal
+document; ADR-0030 is what makes the roster decision durable). One gap remains, tracked as its own
+ADR-0030 follow-up rather than a rendering gap: `agents/orchestrator.md` does not yet invoke any of
+the six new roles, so they are parity-clean and renderable but not yet reachable from the framework
+orchestrator.
 
 Budgets here must match `.claude/rules/token-budgets.md`; mcp-server's contract tests check the
 manifests against both the budget rules and the schema registry.
@@ -21,8 +37,9 @@ manifests against both the budget rules and the schema registry.
 > `docs/contracts/portable-agent-framework.md`). Change a manifest here and the contract tests
 > force the renderings to follow in the same PR.
 
-The pinning is **minimum + whatever exists**: the framework's six roles must stay, and any agent
-a team adds next to them is held to the same parity checklist. `check_parity.py` in this
+The pinning is **minimum + whatever exists**: the framework's six pinned roles must stay, and any
+agent a team adds next to them (the six proposal roles above included) is held to the same parity
+checklist. `check_parity.py` in this
 directory is the standalone, stdlib-only version of that checklist for adopters who copy
 `agents/` + `.copilot/` + `.opencode/` without this repo's test suite:
 

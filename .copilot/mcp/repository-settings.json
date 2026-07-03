@@ -4,13 +4,7 @@
       "type": "http",
       "url": "https://<your-broker-host>/mcp/",
       "tools": [
-        "context.create_pack",
-        "context.expand",
-        "context.open_evidence",
-        "context.read_pack",
-        "context.request_more",
-        "context.verify_answer",
-        "ledger.list_retrievals"
+        "kb_search"
       ],
       "headers": {
         "Authorization": "Bearer $COPILOT_MCP_CONTEXT_BROKER_TOKEN"
