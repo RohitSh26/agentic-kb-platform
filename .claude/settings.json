@@ -27,18 +27,25 @@
       "Bash(git branch:*)",
       "Read(./**)",
       "Edit(./**)",
-      "Write(./**)"
-    ],
-    "ask": [
+      "Write(./**)",
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(createdb:*)",
+      "Bash(dropdb:*)",
+      "Bash(make:*)",
+      "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(gh pr:*)",
+      "Bash(gh issue:*)",
+      "Bash(gh label:*)",
+      "Bash(git push --force:*)"
+    ],
+    "ask": [
       "Bash(alembic downgrade base:*)"
     ],
     "deny": [
       "Bash(rm -rf:*)",
       "Bash(git push --force:*)",
-      "Bash(curl:* | sh)",
-      "Bash(curl:* | bash)",
       "Read(./.env)",
       "Read(./.env.*)",
       "Read(./**/secrets/**)",

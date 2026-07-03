@@ -41,3 +41,6 @@ build-run*.md
 
 # Exported Obsidian vault (generated from Postgres, rebuildable, never committed)
 vault/
+
+# graphify scratch extraction output (audit runs)
+graphify-out/
