@@ -380,6 +380,13 @@ provenance is required; `kb_search` is the preferred first stop.
   (MCP session id, subject) — one agent run/connection = one task budget; a new
   session gets a fresh window, and windows are held in bounded process memory
   (V1 single instance, like pack state — the durable record is the ledger).
+  **Known limit (2026-07-03 architecture review):** because the window is
+  per-connection, "per-task" is enforceable only as "per-session" — a client
+  that reconnects mints a fresh budget. This is detectable (every call,
+  including denials, is a `retrieval_event` row keyed by subject), so abuse
+  monitoring belongs in the ledger/dashboard layer; a host-signaled task
+  boundary or TTL would need a request-schema extension and is deliberately
+  deferred until real usage data exists.
   Check-then-charge is serialized per window, so a parallel burst of `kb_search`
   calls cannot all pass the cap before any of them charges.
 - The broker makes **no LLM or embedding calls** in V1: pack summaries are

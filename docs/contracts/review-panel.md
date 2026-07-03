@@ -35,6 +35,12 @@ on (ADR-0008: no shared Python packages; small DTOs are duplicated).
 - One env, `REVIEW_PANEL_DATABASE_URL`, backs both the checkpointer and the draft store. Unset,
   both fall back to in-memory (single-process durability only; logged plainly as
   `event=persistence_fallback`).
+- **Alembic exemption (explicit).** The repo rule "every schema change is an Alembic revision
+  with a downgrade" applies to the Knowledge Registry, which kb-builder owns. The `review_panel`
+  schema is deliberately outside it: it holds only derived, recomputable state (checkpoints and
+  drafts — never truth, never served as evidence), is bootstrapped idempotently at startup, and
+  its rollback story is simply `DROP SCHEMA review_panel CASCADE` — nothing else references it.
+  Growing this schema beyond derived state would end the exemption and require an ADR.
 
 ## Draft table
 

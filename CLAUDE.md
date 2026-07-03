@@ -63,7 +63,13 @@ The blueprint is implementation-agnostic; these are the V1 choices recorded in `
 
 ```
 services/kb-builder  Self-contained build plane: connectors, docify, graphify, linker, indexing.
-                     OWNS the Postgres schema — Alembic migrations live here (migrations/).
+                     OWNS the Knowledge Registry (public) Postgres schema — Alembic migrations
+                     live here (migrations/).
+services/review-panel  Owned review DRAFT engine (ADR-0031): LangGraph fan-out of the four
+                     reviewer lenses → reconcile → stored draft; never posts to GitHub. Owns
+                     ONLY the dedicated `review_panel` Postgres schema (idempotent bootstrap
+                     DDL — a documented Alembic exemption; rollback = drop the schema; see
+                     docs/contracts/review-panel.md).
 services/mcp-server  Self-contained runtime plane: MCP Context Broker, auth, telemetry, tool
                      schemas, health. NEVER runs migrations or build-plane code.
 docs/contracts/      Markdown cross-service contracts — the ONLY thing the services share.
