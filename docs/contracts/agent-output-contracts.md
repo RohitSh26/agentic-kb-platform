@@ -39,6 +39,7 @@ Python authority: `services/mcp-server/src/agentic_mcp_server/agent_output_schem
 | `review_findings_v1` | `agents/code_reviewer.md` | `verdict` ∈ approve\|request_changes, `findings[]` (severity ∈ blocker\|major\|minor\|note, finding, `evidence_ids`), `open_questions[]` |
 | `delivery_plan_v1` | `agents/delivery_planner.md` | `rollout_steps[]` (description, `evidence_ids`), `monitoring[]`, `risks[]`, `open_questions[]` |
 | `pr_plan_v1` | `agents/pr_planner.md` | `prs[]` (title, scope, depends_on, `evidence_ids`), `open_questions[]` |
+| `adr_draft_v1` | `agents/adr_writer.md` | `title`, `status` (always `proposed` — accepting an ADR is a human act), `context[]` (evidenced claims), `decision`, `consequences[]` (evidenced claims), `alternatives_rejected[]` (alternative, why_rejected, `evidence_ids`), `follow_ups[]`, `open_questions[]` |
 
 Plans and step lists require at least one entry; finding/risk/monitoring
 lists may be empty. `open_questions` is free text by design — it is the only

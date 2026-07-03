@@ -4,6 +4,10 @@ Registry keys are the output_schema names declared in agents/*.md manifests —
 contract of record: docs/contracts/agent-output-contracts.md.
 """
 
+from agentic_mcp_server.agent_output_schemas.adr_draft_v1 import (
+    AdrDraftV1,
+    RejectedAlternative,
+)
 from agentic_mcp_server.agent_output_schemas.base import (
     AGENT_OUTPUT_SCHEMA_VERSION,
     AgentOutputComponent,
@@ -33,11 +37,13 @@ AGENT_OUTPUT_SCHEMAS: dict[str, type[AgentOutputModel]] = {
     "review_findings_v1": ReviewFindingsV1,
     "delivery_plan_v1": DeliveryPlanV1,
     "pr_plan_v1": PrPlanV1,
+    "adr_draft_v1": AdrDraftV1,
 }
 
 __all__ = [
     "AGENT_OUTPUT_SCHEMAS",
     "AGENT_OUTPUT_SCHEMA_VERSION",
+    "AdrDraftV1",
     "AgentOutputComponent",
     "AgentOutputModel",
     "AgentOutputValidationError",
@@ -50,6 +56,7 @@ __all__ = [
     "PlannedPr",
     "PlannedTest",
     "PrPlanV1",
+    "RejectedAlternative",
     "ReviewFinding",
     "ReviewFindingsV1",
     "RolloutStep",

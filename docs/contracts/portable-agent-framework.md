@@ -99,8 +99,10 @@ the documentation of the limit, never the limit itself.
 ## Composition (native subagent + skill declarations)
 
 The renderings also declare the framework's composition in each host's **native fields**. The
-composition is fixed by the canon: the orchestrator invokes the five specialists; specialists
-never invoke anyone.
+composition is fixed by the canon: the orchestrator invokes its build-lane specialists;
+specialists never invoke anyone. The four ADR-0030 panel reviewers are deliberately absent from
+the orchestrator's allowlists — they run only in the backend review workflow (GitHub Actions on
+PR open), never launched in-session.
 
 For **team-added agents** the rule is structural, keyed to the `requires_human_approval` field:
 an agent whose canon does **not** set `requires_human_approval: true` is a specialist — OpenCode
@@ -117,8 +119,8 @@ reachable from the framework orchestrator — a valid choice).
 
 | Role | May invoke (subagents) | Framework skills |
 |---|---|---|
-| orchestrator | the five specialists | `kb-first-file-fallback` · `evidence-citation` |
-| the five specialists + template | none | `kb-first-file-fallback` · `evidence-citation` |
+| orchestrator | the five pinned specialists + `adr_writer`, `infra_code` (ADR-0030) | `kb-first-file-fallback` · `evidence-citation` |
+| every other role + template | none | `kb-first-file-fallback` · `evidence-citation` |
 
 > "template" here is the rendering skeletons `_template.*` only — there is no `agents/_template.md`
 > canon; it is grouped with the specialists because it carries the same specialist-shaped grants.
@@ -129,8 +131,8 @@ reachable from the framework orchestrator — a valid choice).
 > body instead of a separate skill module).
 
 - **Copilot** (`*.agent.md`, VS Code custom-agent fields): the orchestrator declares
-  `agents: [<the five specialist names>]` and `handoffs:` whose targets are those same five
-  names; every specialist and the template declare `agents: []`. Because the `agents` field
+  `agents: [<its invocable specialist names>]` and `handoffs:` whose targets are those same
+  names, in order; every specialist and the template declare `agents: []`. Because the `agents` field
   requires it, the orchestrator's `tools` list carries `agent` **in addition to** its mapped
   tools — the single permitted exception to tool-parity item 1. It is a composition affordance,
   not a data tool, and the parity test pins it to the orchestrator only. Copilot has no native
@@ -139,7 +141,8 @@ reachable from the framework orchestrator — a valid choice).
 - **OpenCode** (`permission` frontmatter): every agent denies `"*"` for both `task` (launching
   subagents) and `skill` (loading skills), then allow-lists exactly its row above. Subagent
   identifiers are agent filenames (`implementation`, `test_layer`, `code_reviewer`,
-  `delivery_planner`, `pr_planner`); skill identifiers are shipped skill names.
+  `delivery_planner`, `pr_planner`, `adr_writer`, `infra_code`); skill identifiers are shipped
+  skill names.
 
 Skill assignment follows the canon: `kb-first-file-fallback` only where the canon grants
 `kb_search` (every framework role today, so in practice everywhere — the gate is structural, not
@@ -199,10 +202,13 @@ header value found in the MCP configs must match one of the reference patterns a
    rewritten for ADR-0025. ADR-0030 (accepted) made that roster decision durable and authorized
    rendering them; they are now rendered in `.opencode/`/`.copilot/` and held to the same parity bar
    as any other discovered agent — checked exactly like the pre-existing
-   `test_the_checker_accepts_a_team_added_agent` extensibility path, not a special case. They are
-   still not referenced by `agents/orchestrator.md`'s own task/agents allowlist, so per the
-   "otherwise it simply is not reachable — a valid choice" rule above they remain unreachable from
-   the framework orchestrator — tracked as its own ADR-0030 follow-up, not a rendering gap.
+   `test_the_checker_accepts_a_team_added_agent` extensibility path, not a special case. The
+   ADR-0030 follow-up wiring the orchestrator has since landed: `adr_writer` and `infra_code` are
+   on the orchestrator's task/agents allowlists as build-lane specialists, while the four panel
+   reviewers deliberately are not — they run only in the backend review workflow (GitHub Actions
+   on PR open, LangGraph fan-out reconciled by `code_reviewer_agent`), so per the "otherwise it
+   simply is not reachable — a valid choice" rule above they stay unreachable from the framework
+   orchestrator by design.
 
 ## Versioning
 

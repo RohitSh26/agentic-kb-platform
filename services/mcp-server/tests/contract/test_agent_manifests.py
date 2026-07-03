@@ -6,8 +6,7 @@ the budgeted `kb_search` tool (registered in TOOL_SCHEMAS — PR-37 made the
 grant real) plus native tools from the fixed ADR-0025 host-side vocabulary;
 no manifest grants any OTHER search surface; budgets stay within the
 .claude/rules/token-budgets.md ceilings; and every output_schema resolves in
-AGENT_OUTPUT_SCHEMAS (the one known gap, adr_draft_v1, is pinned as a strict
-xfail until its tracked ADR-0030 follow-up registers it).
+AGENT_OUTPUT_SCHEMAS.
 """
 
 from pathlib import Path
@@ -43,10 +42,6 @@ BUDGET_RULES: dict[str, tuple[int, int]] = {
 # so they never appear in TOOL_SCHEMAS. A manifest may grant only these + registered
 # broker tools — an unknown name is a manifest typo the runtime could not serve.
 NATIVE_TOOLS = {"read_file", "read_full", "grep", "edit_file", "list_files"}
-
-# Output schemas a manifest references that are known-unregistered, each pinned by
-# its own strict-xfail test below so the gap flips loudly when the follow-up lands.
-KNOWN_UNREGISTERED_OUTPUT_SCHEMAS = {"adr_draft_v1"}
 
 pytestmark = pytest.mark.skipif(
     not AGENTS_DIR.is_dir(), reason="agents/ manifests not present in this checkout"
@@ -127,19 +122,12 @@ def test_no_manifest_grants_the_retired_mandatory_broker_flow() -> None:
 
 def test_every_output_schema_resolves_in_the_registry() -> None:
     for name, fields in _manifests().items():
-        schema = fields["output_schema"]
-        if schema in KNOWN_UNREGISTERED_OUTPUT_SCHEMAS:
-            continue  # pinned by its own strict-xfail test below
-        assert schema in AGENT_OUTPUT_SCHEMAS, f"{name}: unknown output_schema"
+        assert fields["output_schema"] in AGENT_OUTPUT_SCHEMAS, f"{name}: unknown output_schema"
 
 
-@pytest.mark.xfail(
-    reason="adr_draft_v1 registration is a tracked ADR-0030 follow-up, out of PR-37 scope",
-    strict=True,
-)
 def test_adr_writer_output_schema_is_registered() -> None:
-    """Strict: the moment the follow-up registers adr_draft_v1 this XPASSes and fails
-    the suite, forcing removal of the marker AND of the KNOWN_UNREGISTERED entry."""
+    """adr_draft_v1 landed via its ADR-0030 follow-up; pin it by name so a registry
+    regression names the manifest that breaks, not just a generic resolve failure."""
     assert "adr_draft_v1" in AGENT_OUTPUT_SCHEMAS
 
 

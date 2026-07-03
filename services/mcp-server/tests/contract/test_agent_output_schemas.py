@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from agentic_mcp_server.agent_output_schemas import (
     AGENT_OUTPUT_SCHEMA_VERSION,
     AGENT_OUTPUT_SCHEMAS,
+    AdrDraftV1,
     AgentOutputModel,
     AgentOutputValidationError,
     EvidencedClaim,
@@ -22,6 +23,7 @@ from agentic_mcp_server.agent_output_schemas import (
     PlannedTest,
     PlanPhase,
     PrPlanV1,
+    RejectedAlternative,
     ReviewFinding,
     ReviewFindingsV1,
     RolloutStep,
@@ -47,7 +49,7 @@ def _plan(evidence_id: str = EVIDENCE_ID) -> ImplementationPlanV1:
     )
 
 
-def test_registry_covers_all_six_schemas_and_extends_the_base() -> None:
+def test_registry_covers_all_seven_schemas_and_extends_the_base() -> None:
     assert set(AGENT_OUTPUT_SCHEMAS) == {
         "phased_pr_plan_v1",
         "implementation_plan_v1",
@@ -55,6 +57,7 @@ def test_registry_covers_all_six_schemas_and_extends_the_base() -> None:
         "review_findings_v1",
         "delivery_plan_v1",
         "pr_plan_v1",
+        "adr_draft_v1",
     }
     for model in AGENT_OUTPUT_SCHEMAS.values():
         assert issubclass(model, AgentOutputModel)
@@ -75,6 +78,13 @@ def test_outputs_carry_the_schema_version() -> None:
         lambda: ReviewFinding(severity="major", finding="x", evidence_ids=[]),
         lambda: RolloutStep(description="x", evidence_ids=[]),
         lambda: PlannedPr(title="x", scope="y", evidence_ids=[]),
+        lambda: RejectedAlternative(alternative="x", why_rejected="y", evidence_ids=[]),
+        lambda: AdrDraftV1(
+            title="x",
+            context=[EvidencedClaim(claim="y", evidence_ids=[])],
+            decision="z",
+            consequences=[EvidencedClaim(claim="w", evidence_ids=["e1"])],
+        ),
         lambda: PlanPhase(
             name="x",
             goal="y",

@@ -11,8 +11,7 @@ calls/tokens, not the retired broker flow), `requires_evidence_ids`, and an `out
 plus a body that is the agent's instruction set. The `kb_search` tool enforces its own budget
 server-side even if a prompt fails. Output rules live in `docs/contracts/agent-output-contracts.md`;
 the concrete schemas (and the `AGENT_OUTPUT_SCHEMAS` registry the `output_schema` names resolve
-against) live in `services/mcp-server/src/agentic_mcp_server/agent_output_schemas/` — note
-`adr_draft_v1` (added for `adr_writer_agent`) is not yet registered there, a known follow-up.
+against) live in `services/mcp-server/src/agentic_mcp_server/agent_output_schemas/`.
 
 All twelve manifests in this directory are now **rendered** into `.opencode/`/`.copilot/` and held
 to the same checklist by `check_parity.py`: the original six — `orchestrator`,
@@ -22,10 +21,10 @@ to the same checklist by `check_parity.py`: the original six — `orchestrator`,
 `security_reviewer_agent`, `quality_reviewer_agent`, `test_coverage_reviewer_agent`, whose findings
 `code_reviewer_agent` reconciles as a synthesizer). ADR-0030 resolved the roster question raised by
 `docs/proposals/2026-07-02-v2-world-class-platform-architecture.md` (that proposal stays a proposal
-document; ADR-0030 is what makes the roster decision durable). One gap remains, tracked as its own
-ADR-0030 follow-up rather than a rendering gap: `agents/orchestrator.md` does not yet invoke any of
-the six new roles, so they are parity-clean and renderable but not yet reachable from the framework
-orchestrator.
+document; ADR-0030 is what makes the roster decision durable). `agents/orchestrator.md` reaches
+`adr_writer_agent` and `infra_code_agent` as BUILD-lane specialists; the four panel reviewers are
+deliberately NOT on its allowlists — they run only in the backend review workflow (GitHub Actions
+on PR open, LangGraph fan-out, reconciled by `code_reviewer_agent`), never in-session.
 
 Budgets here must match `.claude/rules/token-budgets.md`; mcp-server's contract tests check the
 manifests against both the budget rules and the schema registry.
