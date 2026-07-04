@@ -11,11 +11,12 @@ import logging
 import time
 import uuid
 
-from fastmcp.exceptions import ToolError
-
 from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
-from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.error_ledger import (
+    LedgeredToolError,
+    write_error_event,
+)
 from agentic_mcp_server.context_broker.retrieval import authorization_decision
 from agentic_mcp_server.context_broker.state import UnknownPackError
 from agentic_mcp_server.context_broker.untrusted import scan_for_injection
@@ -46,7 +47,7 @@ async def open_evidence(
             subject=requester.subject,
             query_text=request.context_pack_id,
         )
-        raise ToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
+        raise LedgeredToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
 
     async def write_audit_error() -> None:
         await write_error_event(
@@ -64,7 +65,7 @@ async def open_evidence(
         await write_audit_error()
         # same message as the ACL-denied branch: not-in-pack vs restricted
         # must be indistinguishable to the caller
-        raise ToolError(f"evidence not available: {request.evidence_id}")
+        raise LedgeredToolError(f"evidence not available: {request.evidence_id}")
 
     async with deps.session_factory() as session:
         artifacts = await fetch_artifacts(session, [card.artifact_id], pack.build_seq)
@@ -78,7 +79,7 @@ async def open_evidence(
             suppressed_artifact_ids=[card.artifact_id],
         )
         await write_audit_error()
-        raise ToolError(f"evidence not available: {request.evidence_id}")
+        raise LedgeredToolError(f"evidence not available: {request.evidence_id}")
     body = allowed[0].body_text or ""
 
     cost = min(estimate_tokens(body), request.max_tokens)
@@ -126,7 +127,7 @@ async def open_evidence(
     async with pack.lock:
         if cost > pack.run_remaining_tokens:
             await write_ledger("denied", 0)
-            raise ToolError(
+            raise LedgeredToolError(
                 f"run budget exceeded: expanding {request.evidence_id} costs {cost} tokens "
                 f"but only {pack.run_remaining_tokens} remain"
             )
@@ -135,7 +136,7 @@ async def open_evidence(
         usage = pack.usage_for(requester.subject)
         if usage.tokens + cost > allowance.max_tokens:
             await write_ledger("denied", 0)
-            raise ToolError(
+            raise LedgeredToolError(
                 f"agent token allowance exceeded: expanding {request.evidence_id} costs {cost} "
                 f"tokens but {usage.tokens} of {allowance.max_tokens} are already used"
             )

@@ -16,14 +16,16 @@ import uuid
 from dataclasses import dataclass
 from typing import cast
 
-from fastmcp.exceptions import ToolError
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.constants import MSG_NO_ACTIVE_VERSION, NO_RUN_SENTINEL
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
-from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.error_ledger import (
+    LedgeredToolError,
+    write_error_event,
+)
 from agentic_mcp_server.context_broker.task_context_nodes import (
     BlastResolution,
     NodeSpan,
@@ -349,7 +351,7 @@ async def get_task_context(
             subject=requester.subject,
             query_text=request.task_description,
         )
-        raise ToolError(MSG_NO_ACTIVE_VERSION)
+        raise LedgeredToolError(MSG_NO_ACTIVE_VERSION)
 
     ctx = TaskContextCtx(
         deps=deps,

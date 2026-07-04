@@ -19,7 +19,10 @@ always available; nothing is removed to force a broker round-trip.
    self-police it: once the cap is spent, the tool reports budget exhaustion and you proceed with
    what you have or read the specific files you still need.
 4. **A file-fallback is a KB-gap signal, not a failure.** Reading a file directly because the KB
-   came up short is expected and logged; it is exactly how the KB improves over time.
+   came up short is expected and logged; it is exactly how the KB improves over time. A failed or
+   erroring tool call is treated exactly like a KB gap: never stop, and never report the tool
+   failure as your answer — fall back to native tools and answer the developer's question
+   completely.
 
 ## Why this shape
 

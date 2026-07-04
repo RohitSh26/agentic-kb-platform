@@ -79,7 +79,11 @@ table: `tool` ← `tool_name`, `evidence_ids` ← `reused_evidence_ids` ∪
 `'approved'`; added by kb-builder migration 0007 — values are the broker's
 outcome statuses `approved`/`reused`/`denied`/`needs_human_approval` plus the
 ledger-only status `error`, written when a call fails before producing a
-response, e.g. unknown handles or no active `kb_version`). On `error` rows the
+response — an anticipated failure (unknown handles, no active `kb_version`)
+ledgers itself at the call site; an unexpected mid-flight exception is
+ledgered exactly once by the uniform tool wrapper (`mcp/tool_handlers.py`,
+see `mcp-tools-contract.md`), which also refunds any budget charge the call
+made before it crashed. On `error` rows the
 broker writes the sentinel `"-"` for `run_id`/`kb_version` values it could not
 resolve. Evidence ids are artifact UUIDs rendered as strings in V1, which is
 why the `*_evidence_ids` columns are UUID arrays.
@@ -99,6 +103,7 @@ never blocks on observability. Shape is per `tool_name`:
 | `graph.get_neighbors` | `{artifact_id, depth, trust_floor, neighbors_by_type:{<edge_type>:n,...}}` |
 | `context.verify_answer` | `{answer_id, claims:[{claim_id, checks:{...}, ok}], overall}` |
 | `governance.checkpoint` | `{from_agent, to_agent, plan_summary, decision, edits}` |
+| any tool, on an unexpected `error` row written by the uniform tool wrapper | `{exception_type}` |
 
 The `governance.checkpoint` event is written by `record_checkpoint()` in the
 mcp-server; `tool_name` is `"governance.checkpoint"` and `status` is the gate

@@ -12,11 +12,12 @@ import time
 import uuid
 from typing import Literal
 
-from fastmcp.exceptions import ToolError
-
 from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
-from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.error_ledger import (
+    LedgeredToolError,
+    write_error_event,
+)
 from agentic_mcp_server.context_broker.retrieval import (
     authorization_decision,
     card_tokens,
@@ -51,7 +52,7 @@ async def request_more(
             subject=requester.subject,
             query_text=request.context_pack_id,
         )
-        raise ToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
+        raise LedgeredToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
 
     normalized = normalize_query(request.question)
 

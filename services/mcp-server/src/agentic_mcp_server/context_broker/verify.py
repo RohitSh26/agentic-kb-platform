@@ -44,8 +44,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from fastmcp.exceptions import ToolError
-
 from agentic_mcp_server.auth.client_identity import ClientIdentity
 from agentic_mcp_server.auth.rbac import Requester, acl_admits
 from agentic_mcp_server.context_broker.claim_ledger import adjudicate_typed_fact
@@ -55,7 +53,10 @@ from agentic_mcp_server.context_broker.entailment import (
     REASON_ENTAILMENT_UNSUPPORTED,
     run_l3_entailment,
 )
-from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.error_ledger import (
+    LedgeredToolError,
+    write_error_event,
+)
 from agentic_mcp_server.context_broker.receipt_signing import sign_receipt
 from agentic_mcp_server.context_broker.trust import CLAIM_SUPPORTING
 from agentic_mcp_server.infrastructure.postgres.active_kb_version import fetch_active_version
@@ -532,7 +533,7 @@ async def verify_answer(
                 subject=requester.subject,
                 query_text=request.answer_id,
             )
-            raise ToolError(MSG_NO_ACTIVE_VERSION)
+            raise LedgeredToolError(MSG_NO_ACTIVE_VERSION)
         active_version = active.kb_version
 
         # null graph_version ⇒ active; a pinned version must equal the served

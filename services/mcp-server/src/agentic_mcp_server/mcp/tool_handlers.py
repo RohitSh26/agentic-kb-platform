@@ -4,8 +4,15 @@ Each handler binds a tool name from TOOL_SCHEMAS to its broker implementation.
 Identity is resolved per call from the authenticated session (never from
 request fields), and fastmcp validates I/O against the versioned schemas via
 the annotations set here.
+
+Every handler is also wrapped by ``_ledgered`` below: the one place in the
+broker responsible for the ledger's completeness guarantee (an unexpected
+exception must still produce exactly one ``retrieval_event`` row and must
+still reach the MCP client, never be swallowed here).
 """
 
+import contextlib
+import logging
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -37,6 +44,11 @@ from agentic_mcp_server.context_broker.dependencies import (
     current_requester,
     current_session_key,
 )
+from agentic_mcp_server.context_broker.error_ledger import (
+    UNRESOLVED,
+    LedgeredToolError,
+    write_error_event,
+)
 from agentic_mcp_server.context_broker.platform_trust import evaluate_platform_trust
 from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 from agentic_mcp_server.mcp.tool_schemas.base import McpModel
@@ -58,6 +70,60 @@ from agentic_mcp_server.mcp.tool_schemas.verification import (
 )
 
 HandlerFn = Callable[..., Coroutine[Any, Any, McpModel]]
+
+logger = logging.getLogger(__name__)
+
+
+async def _write_unexpected_error(deps: BrokerDeps, tool_name: str, exc: Exception) -> None:
+    """Best-effort single ledger row for an exception no handler already ledgered.
+
+    Never lets a broken ledger mask the original failure: if the write itself
+    raises (DB fully down), that is logged with structured fields and
+    swallowed here — the caller re-raises ``exc`` regardless.
+    """
+    subject = UNRESOLVED
+    with contextlib.suppress(Exception):
+        subject = current_requester().subject
+    try:
+        await write_error_event(
+            deps,
+            tool_name=tool_name,
+            subject=subject,
+            details={"exception_type": type(exc).__name__},
+        )
+    except Exception as ledger_exc:
+        logger.error(
+            "event=error_ledger_write_failed tool_name=%s exception_type=%s "
+            "ledger_exception_type=%s",
+            tool_name,
+            type(exc).__name__,
+            type(ledger_exc).__name__,
+            exc_info=True,
+        )
+
+
+def _ledgered(deps: BrokerDeps, tool_name: str, handler: HandlerFn) -> HandlerFn:
+    """Uniform error-ledger wrapper: the ledger is complete by construction.
+
+    ``LedgeredToolError`` marks a call site that already wrote its own
+    retrieval_event (error_ledger.write_error_event) immediately before
+    raising — those pass through untouched so the row is never doubled. Any
+    other exception is unexpected: this is the sole remaining place that owes
+    the ledger a row for it. Either way the exception always propagates —
+    a tool failure is surfaced to the MCP client, never swallowed, so the
+    host can fall back to native tools.
+    """
+
+    async def _wrapped(request: McpModel) -> McpModel:
+        try:
+            return await handler(request)
+        except LedgeredToolError:
+            raise
+        except Exception as exc:
+            await _write_unexpected_error(deps, tool_name, exc)
+            raise
+
+    return _wrapped
 
 
 def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
@@ -133,7 +199,7 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
             client, request.receipt, signing_key_env=deps.settings.signing_key_env
         )
 
-    handlers: dict[str, HandlerFn] = {
+    raw_handlers: dict[str, HandlerFn] = {
         "context.create_pack": create_pack,
         "context.read_pack": read_pack,
         "context.request_more": request_more_handler,
@@ -147,10 +213,16 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         "kb_search": kb_search,
         "get_task_context": get_task_context,
     }
-    for tool_name, handler in handlers.items():
+    handlers: dict[str, HandlerFn] = {}
+    for tool_name, handler in raw_handlers.items():
         schema = TOOL_SCHEMAS[tool_name]
-        handler.__name__ = tool_name.replace(".", "_")
+        # Every tool call goes through the uniform error-ledger wrapper — one
+        # idiom for the whole surface, applied here rather than in each broker
+        # module (see _ledgered's docstring).
+        wrapped = _ledgered(deps, tool_name, handler)
+        wrapped.__name__ = tool_name.replace(".", "_")
         # fastmcp derives input/output schemas from these annotations, keeping
         # the wire contract pinned to the versioned schema registry
-        handler.__annotations__ = {"request": schema.request, "return": schema.response}
+        wrapped.__annotations__ = {"request": schema.request, "return": schema.response}
+        handlers[tool_name] = wrapped
     return handlers

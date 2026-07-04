@@ -382,11 +382,9 @@ provenance is required; `kb_search` is the preferred first stop.
   (V1 single instance, like pack state — the durable record is the ledger).
   **Known limit (2026-07-03 architecture review):** because the window is
   per-connection, "per-task" is enforceable only as "per-session" — a client
-  that reconnects mints a fresh budget. This is detectable (every call,
-  including denials, is a `retrieval_event` row keyed by subject), so abuse
-  monitoring belongs in the ledger/dashboard layer; a host-signaled task
-  boundary or TTL would need a request-schema extension and is deliberately
-  deferred until real usage data exists.
+  that reconnects mints a fresh budget. A host-signaled task boundary or TTL
+  would need a request-schema extension and is deliberately deferred until
+  real usage data exists.
   Check-then-charge is serialized per window, so a parallel burst of `kb_search`
   calls cannot all pass the cap before any of them charges.
 - The broker makes **no LLM or embedding calls** in V1: pack summaries are
@@ -394,8 +392,19 @@ provenance is required; `kb_search` is the preferred first stop.
   token-similarity measure. Retrieval relevance goes through the `SearchClient`
   interface (Postgres keyword implementation locally; the Azure AI Search
   implementation stays behind the same interface).
-- Every call writes a `retrieval_event` row (see
-  `postgres-knowledge-registry.md`).
+- **The ledger is complete by construction, including crashes.** Every call
+  writes exactly one `retrieval_event` row — `approved`, `denied`, or `error`
+  (see `postgres-knowledge-registry.md`) — even when the call fails
+  unexpectedly mid-flight. A uniform tool wrapper (`mcp/tool_handlers.py`)
+  ledgers any exception a handler has not already ledgered itself (a
+  `LedgeredToolError` marks the ones that have, so no call is ever double-
+  ledgered), and refunds any budget charge made before the crash (e.g.
+  `kb_search`'s call/token counters, restored under the same window lock the
+  charge used). A failing platform never silently vanishes from the ledger or
+  eats an agent's budget, and the exception always still reaches the caller.
+  If the error-ledger write itself fails (the database is fully down), the
+  original exception still surfaces — never masked by the ledger failure —
+  and the ledger-write failure is logged with structured fields.
 - Results are filtered by the requester's authorization before returning
   (PR-13: `team_acl_v1`). The requester is the authenticated session subject
   plus its team set, taken from the bearer token's `groups`/`roles` claims —

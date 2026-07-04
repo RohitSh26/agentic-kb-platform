@@ -23,12 +23,13 @@ import logging
 import time
 import uuid
 
-from fastmcp.exceptions import ToolError
-
 from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.constants import MSG_NO_ACTIVE_VERSION, NO_RUN_SENTINEL
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
-from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.error_ledger import (
+    LedgeredToolError,
+    write_error_event,
+)
 from agentic_mcp_server.context_broker.retrieval import (
     authorization_decision,
     build_card,
@@ -134,7 +135,7 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
             subject=requester.subject,
             query_text=str(request.seed_artifact_ids),
         )
-        raise ToolError(MSG_NO_ACTIVE_VERSION)
+        raise LedgeredToolError(MSG_NO_ACTIVE_VERSION)
     kb_version = active.kb_version
     build_seq = active.build_seq
 
@@ -150,7 +151,7 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
                 subject=requester.subject,
                 query_text=request.context_pack_id,
             )
-            raise ToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
+            raise LedgeredToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
 
     # Effective budget: request value clamped to server max, and further clamped
     # to the pack's remaining tokens if a pack was supplied.

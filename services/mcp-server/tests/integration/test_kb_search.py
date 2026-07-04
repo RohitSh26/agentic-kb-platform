@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 import pytest
 from broker_test_support import (
     KB_VERSION,
+    RaisingSearchClient,
     clean_registry,
     fetch_ledger_rows,
     insert_artifact,
@@ -270,6 +271,41 @@ async def test_no_active_kb_version_errors_and_writes_an_error_row(
     async with factory() as session:
         rows = await fetch_ledger_rows(session, NO_RUN_SENTINEL)
     assert [(row.tool_name, row.status) for row in rows] == [("kb_search", "error")]
+
+
+async def test_search_backend_crash_refunds_the_charge_and_writes_no_row(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """An unexpected mid-flight failure (the search backend down, not an
+    anticipated ToolError) must never eat the agent's budget. kb_search itself
+    must NOT write a ledger row for its own crash either — that is the uniform
+    tool wrapper's job (mcp/tool_handlers.py); a row here too would double-ledger
+    the same failed call once the wrapper adds its own.
+    """
+    search = RaisingSearchClient(fail_on="boom")
+    async with factory() as session:
+        await _seed_payment_artifact(session, search.inner)
+    deps = make_broker_deps(factory, search, budget_policy=_policy(1, 100_000))
+
+    with pytest.raises(RuntimeError, match="search backend unavailable"):
+        await kb_search(deps, KbSearchRequest(query="boom"), REQUESTER, session_key=SESSION)
+
+    window = deps.kb_search_usage.window_for(SESSION, SUBJECT)
+    assert window.usage.requests == 0
+    assert window.usage.tokens == 0
+    async with factory() as session:
+        assert await fetch_ledger_rows(session, NO_RUN_SENTINEL) == []
+
+    # the refund actually restores the budget: a working call afterwards still
+    # spends the agent's one allowed request, not its (already exhausted) second
+    recovered = await kb_search(
+        deps, KbSearchRequest(query="payment validation"), REQUESTER, session_key=SESSION
+    )
+    assert recovered.results
+    assert recovered.budget_remaining.calls == 0
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, NO_RUN_SENTINEL)
+    assert [row.status for row in rows] == ["approved"]
 
 
 async def test_no_hit_search_still_charges_a_call_and_is_ledgered(

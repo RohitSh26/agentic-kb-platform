@@ -5,6 +5,7 @@ externally migrated TEST_DATABASE_URL (kb-builder `make migrate-test-db`).
 """
 
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
@@ -14,7 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from agentic_mcp_server.context_broker.budgets import BudgetPolicy
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps, BrokerSettings
 from agentic_mcp_server.infrastructure.entailment.client import EntailmentClient
-from agentic_mcp_server.infrastructure.search.search_client import FakeSearchClient
+from agentic_mcp_server.infrastructure.search.search_client import (
+    FakeSearchClient,
+    SearchClient,
+    SearchHit,
+)
 
 KB_VERSION = "kb-test"
 
@@ -252,9 +257,27 @@ async def fetch_ledger_rows(session: AsyncSession, run_id: str) -> list[Row[Any]
     return list(result)
 
 
+@dataclass
+class RaisingSearchClient:
+    """A SearchClient that crashes on one designated query, delegating to a real
+    FakeSearchClient otherwise. Simulates an unexpected mid-flight platform
+    failure (the search backend down) — as opposed to an anticipated ToolError
+    like "no active kb_version" — so error-ledger/refund tests can trigger a
+    genuine unhandled exception through the normal retrieval path.
+    """
+
+    fail_on: str
+    inner: FakeSearchClient = field(default_factory=FakeSearchClient)
+
+    async def search(self, query: str, *, build_seq: int, top: int) -> list[SearchHit]:
+        if query == self.fail_on:
+            raise RuntimeError("search backend unavailable")
+        return await self.inner.search(query, build_seq=build_seq, top=top)
+
+
 def make_broker_deps(
     session_factory: async_sessionmaker[AsyncSession],
-    search_client: FakeSearchClient,
+    search_client: SearchClient,
     *,
     settings: BrokerSettings | None = None,
     budget_policy: BudgetPolicy | None = None,

@@ -9,12 +9,13 @@ import logging
 import time
 import uuid
 
-from fastmcp.exceptions import ToolError
-
 from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.constants import MSG_NO_ACTIVE_VERSION
 from agentic_mcp_server.context_broker.dependencies import BrokerDeps
-from agentic_mcp_server.context_broker.error_ledger import write_error_event
+from agentic_mcp_server.context_broker.error_ledger import (
+    LedgeredToolError,
+    write_error_event,
+)
 from agentic_mcp_server.context_broker.retrieval import (
     authorization_decision,
     card_tokens,
@@ -99,7 +100,7 @@ async def create_pack(
             run_id=request.run_id,
             query_text=query,
         )
-        raise ToolError(MSG_NO_ACTIVE_VERSION)
+        raise LedgeredToolError(MSG_NO_ACTIVE_VERSION)
     kb_version = active.kb_version
 
     cards, _ = await retrieve_cards(
@@ -212,7 +213,7 @@ async def read_pack(
             subject=requester.subject,
             query_text=request.context_pack_id,
         )
-        raise ToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
+        raise LedgeredToolError(f"unknown context_pack_id: {request.context_pack_id}") from None
 
     # a pack handle is not a grant: cards were filtered against the creator's
     # teams, so re-apply the ACL for the reading requester before serving them
