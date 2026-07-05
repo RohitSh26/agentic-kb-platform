@@ -1,37 +1,69 @@
-# 09 — GitHub Copilot CLI against the broker (the product runtime)
+# 09 — GitHub Copilot CLI against the broker
 
-> Drive a **real external agent — the GitHub Copilot CLI, using its own model** — against our
-> MCP Context Broker. This proves the product thesis end-to-end: a third-party agent gets
-> context only through the governed broker, and our **budget + trust + audit** apply to it.
-> Every command below was run on macOS; it actually consumed Copilot AI credits.
+> Drive a **real external agent — the GitHub Copilot CLI, using its own model** — against the MCP
+> Context Broker, through the repo's **committed, policy-carrying MCP configuration**. This is the
+> non-IDE variant of the VS Code flow (dev-guide [00](00-getting-started.md) Parts 6–8): a
+> third-party agent asks your KB questions via the budgeted `kb_search` tool, and every call —
+> including the ones the budget refused — lands in the retrieval ledger.
 
-> Scope note: the Copilot CLI runs **one** agent (Copilot's model) with tools. The full
-> **gated multi-agent orchestration** (orchestrator → subagents, human-approval gate at every
-> delegation, ADR-0021) is the Groq runner in `dev-guide 00 Part 10`. This doc is the single-agent
-> product runtime — Copilot calling our broker.
+## The one design point to understand first
 
----
+The framework ships its Copilot MCP configuration at
+**`.copilot/mcp/repository-settings.json`**, and that file deliberately exposes **one tool**:
 
-## 0. Prerequisites
+```json
+{
+  "mcpServers": {
+    "context-broker": {
+      "type": "http",
+      "url": "https://<your-broker-host>/mcp/",
+      "tools": [
+        "kb_search"
+      ],
+      "headers": {
+        "Authorization": "Bearer $COPILOT_MCP_CONTEXT_BROKER_TOKEN"
+      }
+    }
+  }
+}
+```
 
+`"tools": ["kb_search"]` is the point (ADR-0025): a Copilot host gets the **budgeted, ACL-filtered
+`kb_search`** and keeps its own native file tools — it does not get the broker's other eleven
+tools. The budget and ACL are enforced **server-side per authenticated identity** either way
+(deleting this file cannot widen anything), but the allowlist keeps the host's tool surface
+matching the framework's design.
+
+**Do not wire the broker with an ad-hoc `copilot mcp add` instead.** That creates a server entry
+*without* the `tools` allowlist, so the CLI would see and offer the broker's entire tool surface —
+bypassing the committed kb_search-only policy. Use the committed config, adapted only in URL and
+token, for both deployment shapes:
+
+| Deployment | Where the config goes |
+|---|---|
+| Copilot cloud coding agent / org rollout | Repository settings → Copilot → MCP servers: paste the file's contents; create the Copilot environment value `COPILOT_MCP_CONTEXT_BROKER_TOKEN` (Copilot only exposes values whose names start with `COPILOT_MCP_`) |
+| Copilot **CLI** on your machine (this guide) | Merge the same `mcpServers` block into `~/.copilot/mcp-config.json` (§3 below) |
+
+`.copilot/README.md` documents both shapes plus the agent renderings that go with them.
+
+## 1. Prerequisites
+
+- A **built KB and the broker running locally** — the quickstart
+  ([00-quickstart.md](00-quickstart.md)) gets you there in one command; you need `/health` → `ok`
+  on `http://127.0.0.1:8765`.
 - A **GitHub account with a Copilot license**, logged in via `gh` (`gh auth status`).
-- A **built KB** + the **broker running** (dev-guide 00 Parts 3–5; `/health` → ok on `:8765`).
-- **Node 18+** and npm.
+- **Node.js + npm** for the CLI itself.
 
----
-
-## 1. Install the Copilot CLI
+## 2. Install and authenticate the CLI
 
 ```sh
 npm install -g @github/copilot
-copilot --version            # GitHub Copilot CLI 1.0.x
+copilot --version
 ```
 
-## 2. Authenticate (headless, via your gh token)
-
-The CLI accepts a token from `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`. The **`gh`
-OAuth token is a supported type** (classic `ghp_` PATs are not) — so a Copilot-licensed `gh`
-login authenticates non-interactively:
+The CLI accepts a token from `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`, and the `gh`
+OAuth token is a supported type (classic `ghp_` PATs are not) — so a Copilot-licensed `gh` login
+authenticates non-interactively:
 
 ```sh
 export GH_TOKEN="$(gh auth token)"
@@ -40,69 +72,119 @@ copilot -p "Reply with exactly: AUTH_OK" --allow-all-tools   # prints AUTH_OK
 
 (Interactive alternative: `copilot login` — browser device flow.)
 
-## 3. Wire our broker as an MCP server
+## 3. Point the CLI at the broker — via the committed config
+
+Take the committed server block, change only the URL (your local broker) — the token header stays
+a **reference by name**, never a pasted value:
 
 ```sh
-copilot mcp add --transport http context-broker http://127.0.0.1:8765/mcp/ \
-  --header "Authorization: Bearer local-dev-token"
-copilot mcp list             # context-broker (http) under "User servers"
+mkdir -p ~/.copilot
+cat > ~/.copilot/mcp-config.json <<'EOF'
+{
+  "mcpServers": {
+    "context-broker": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp/",
+      "tools": [
+        "kb_search"
+      ],
+      "headers": {
+        "Authorization": "Bearer local-dev-token"
+      }
+    }
+  }
+}
+EOF
+copilot mcp list        # context-broker (http)
 ```
 
-This writes `~/.copilot/mcp-config.json`. The `local-dev-token` is the loopback dev-auth bearer
-(ADR-0016); in production this is a real Entra token and an `https://` broker URL.
+> If you already have other servers in `~/.copilot/mcp-config.json`, merge the `context-broker`
+> entry into your existing `mcpServers` object instead of overwriting the file.
 
-## 4. Simulate a human request (non-interactive)
+Against the local broker in local-dev auth mode (ADR-0016, loopback-only), any non-empty bearer
+authorizes as the `local-dev` subject — which is why a literal `local-dev-token` placeholder is
+fine here. Against a **production** broker you keep the committed file's
+`$COPILOT_MCP_CONTEXT_BROKER_TOKEN` reference and supply a real Entra token through the Copilot
+environment — a token value never lands in a config file either way.
 
-With the broker running, give Copilot a task and tell it to get context **only** through the
-broker. `--allow-all-tools` runs without interactive permission prompts.
+## 4. Ask a real question
 
 ```sh
-export GH_TOKEN="$(gh auth token)"
-copilot -p 'You have an MCP server "context-broker" serving a knowledge graph of THIS codebase.
-Use ONLY its tools — do not read files from disk.
-(1) call context.create_pack with run_id="copilot-demo-1", a task, retrieval_profile "default",
-    budget_tokens 8000, intent "how_does_x_work".
-(2) call context.expand on the top cards artifact_ids, trust_floor "EXTRACTED".
-(3) Answer in 4-5 sentences and list the evidence_ids you used.
-Question: How does the MCP Context Broker enforce a per-agent token budget?' \
-  --allow-all-tools \
-  --disable-mcp-server agentic-kb --disable-mcp-server github --disable-mcp-server postgres-dev
+copilot -p 'Using the context-broker kb_search tool, answer: how does the KB build
+decide it can skip calling the LLM for an unchanged document? Search the KB before
+reading any file, and cite the source_uri of what you used.' --allow-all-tools
 ```
 
-## 5. Replay — the broker's audit of what Copilot did
+**What happens, step by step:**
+
+1. Copilot's model sees exactly one broker tool — `kb_search` — plus its own native tools.
+2. It calls `kb_search` with `{"query": ...}` (that is the whole request; identity and budget bind
+   to the authenticated session, not to anything the model sends).
+3. The broker runs the standard retrieval path — ACL filter, semantic dedupe, temporal +
+   centrality re-weighting, 3–5 ranked hits — and answers with `results` (title, artifact type,
+   `source_uri`, snippet, confidence tier) plus `budget_remaining` (`{calls, tokens}`).
+4. Copilot answers from the snippets, typically citing `source_uri`s like
+   `services/kb-builder/src/agentic_kb_builder/application/cache_gates.py`.
+
+If the model keeps searching, the **dual budget cap** (call count AND cumulative tokens per
+session, enforced in the tool — not the prompt) eventually closes. The tool then returns empty
+results with the notice *"KB budget spent — work with what you have, or read the specific files
+you still need."* — a contractual outcome, never a crash, so the agent keeps working with its
+file tools.
+
+## 5. What the ledger records
+
+Every `kb_search` call — answered or refused — writes one `retrieval_event` row. `kb_search`
+carries no run handle, so its rows use the non-run sentinel `run_id = "-"` and record the session
+in `details`; inspect them with SQL (the run-scoped `replay` CLI and `ledger.list_retrievals` are
+for run-scoped tools):
 
 ```sh
-DATABASE_URL="postgresql+asyncpg://$USER@localhost:5432/agentic_kb" \
-  uv run --project services/mcp-server python -m agentic_mcp_server.replay copilot-demo-1
+psql agentic_kb -c "
+  SELECT status, tokens_returned, details, created_at
+  FROM retrieval_event
+  WHERE tool_name = 'kb_search'
+  ORDER BY created_at DESC LIMIT 10;"
 ```
 
----
-
-## What this run actually showed (verified)
-
-Copilot called our broker and **hit our governance** — the most convincing possible proof:
+You should see rows like:
 
 ```
-context.create_pack  [approved]  task=...per-agent token budgets...  cards=5
-context.expand       [approved]  seeds=3 -> 30 cards (capped), truncated
-context.open_evidence[denied]    agent token allowance exceeded: ... of 2500 used
-context.read_pack    [reused]
-context.open_evidence[denied]    (over budget again)
+ status   | tokens_returned | details
+----------+-----------------+------------------------------------------------------------------
+ approved |             412 | {"session": "…", "calls_used": 1, "tokens_used": 412,
+          |                 |  "max_requests": 50, "max_tokens": 50000}
+ denied   |               0 | {"session": "…", "calls_used": 50, …}
 ```
 
-- Copilot retrieved via `create_pack`, **expanded the graph** (3 seeds → the closest connected
-  cards, capped at **30 / ~4,000 tokens** — BFS closest-first), then tried to open raw evidence
-  and was **rejected by the per-agent token budget** (the 2,500-token agent allowance, distinct
-  from the 8,000 run budget). It adapted via `context.read_pack` and answered, **citing the real
-  evidence IDs**.
-- Every call — including the **denied** ones — is in the ledger and renders in `replay`. The
-  trust/budget/audit layer governed a real third-party agent, exactly as designed.
+- `approved` rows carry the tokens charged and the returned artifact ids — the audit of exactly
+  what knowledge a third-party agent received.
+- `denied` rows are the budget doing its job (the dual cap closed); raise the cap for your local
+  subject via `MCP_AGENT_ALLOWANCES` on the broker if you want a longer session.
+- Answered-but-thin `kb_search` results also feed the dashboard's **KB-gap proxy**
+  (`v_retrieval_health.kb_search_zero_thin_rate` — see
+  [08 — Observability](08-observability.md)): the signal that agents asked for knowledge the KB
+  doesn't hold yet.
+
+That triplet — server-enforced budget, ACL-filtered results, a complete ledger — is the product
+thesis demonstrated on an agent we don't control.
+
+## Scope note
+
+The Copilot CLI here runs **one** agent (Copilot's model) with one governed retrieval tool. Two
+other runtimes exist for comparison: the VS Code + Copilot flow
+([00](00-getting-started.md) Parts 6–8, same broker, full tool surface) and the terminal
+multi-agent runner (`scripts/agent_runner.py`, [00](00-getting-started.md) Part 10), which drives
+the **governed `context.*` lanes** — evidence packs, human-approval gates, verification receipts —
+for when citation-grade provenance is the goal.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `copilot` auth fails | Your `gh` account lacks a Copilot license, or run `copilot login` (device flow). Classic `ghp_` PATs aren't accepted. |
-| Copilot can't reach `context-broker` | The broker isn't running — start dev-guide 00 Part 5 first; confirm `curl :8765/health`. |
-| Copilot reads files instead of the broker | Add `--disable-mcp-server github/postgres-dev` and instruct it to use only `context-broker`; or restrict with `--available-tools`. |
-| `agent token allowance exceeded` | Working as intended (per-agent budget). Raise it via `MCP_AGENT_ALLOWANCES` on the broker if you want a bigger cap. |
+| `copilot` auth fails | Your `gh` account lacks a Copilot license, or use `copilot login` (device flow). Classic `ghp_` PATs aren't accepted for the CLI token env vars. |
+| Copilot can't reach `context-broker` | The broker isn't running — start it (quickstart "Connect a host", or dev-guide 00 Part 5); confirm `curl http://127.0.0.1:8765/health` → `ok`. |
+| Copilot answers without calling `kb_search` | Say so in the prompt ("search the KB before reading any file"), and confirm the server shows up in `copilot mcp list`. |
+| More tools than `kb_search` show up | The server entry is missing its `"tools": ["kb_search"]` allowlist — you added it ad-hoc. Replace it with the committed block (§3). |
+| Every call comes back `denied` | The session budget is spent. New session, or raise `MCP_AGENT_ALLOWANCES` for your subject on the broker and restart it. |
+| `401` on tool calls | The broker isn't in local-dev mode (or isn't on loopback), so the placeholder bearer is rejected — restart it as in dev-guide 00 Part 5, or supply a real Entra token. |

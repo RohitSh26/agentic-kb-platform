@@ -15,7 +15,7 @@
 One-time setup (each service is its own `uv` project — ADR-0008):
 
 ```sh
-make sync                     # uv sync in services/kb-builder, services/mcp-server, and evals
+make sync                     # uv sync in services/kb-builder, services/mcp-server, services/review-panel, and evals
 createdb agentic_kb_test      # dedicated test database (any name works)
 ```
 
@@ -25,9 +25,10 @@ This is the definition of "done" for any change. CI (`.github/workflows/ci.yml`)
 service with the same steps against a Postgres 16 service container:
 
 ```sh
-make verify                   # lint + types + tests for all three projects (both services + evals)
+make verify                   # lint + types + tests for all four projects (three services + evals)
 make verify-kb-builder        # or just one
 make verify-mcp-server
+make verify-review-panel
 make verify-evals
 ```
 
@@ -151,6 +152,13 @@ uv run python -m agentic_kb_builder.build --workspace ../.. --sources ./sources.
 Flags: `--no-activate` builds without flipping the active version; `--no-git-metadata` skips the
 commit connector; `--allow-large-delta` overrides *only* the symbol-count-delta publish gate (e.g. a
 first build or a big refactor — recorded on `kb_build_run` and logged; no other gate is overridable).
+Full flag table: [04 — KB-builder testing](04-kb-builder-testing.md) §5.
+
+One failure mode worth knowing: the build takes a Postgres **advisory lock** so only one builder
+can write a registry at a time. If another build (or a hung one) holds it, the CLI logs
+`event=builder_lock_held reason=another_builder_is_running` and exits immediately with
+`build aborted: another builder is running` — it never queues. Let the other build finish (or kill
+its process) and re-run.
 
 `--backend production` swaps the local-FS fetch for the real GitHub/ADO backends (ADR-0015): GitHub
 REST pinned to a commit SHA, ADO Wiki pinned to the wiki git head, ADO Work Items via a WIQL

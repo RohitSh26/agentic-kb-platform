@@ -12,25 +12,30 @@ agent re-reading the world on every task. A nightly build ingests code, wikis, d
 into a **Postgres Knowledge Registry** (artifacts + graph edges), enriches them with LLM-generated
 semantic knowledge (**Docify**) and code-structure knowledge (**Graphify**), links the two layers
 together (**Linker**), and projects the result into Azure AI Search for retrieval. At runtime, a
-remote **MCP Context Broker** serves that knowledge to a human-approved orchestrator and its
-subagents through one shared, budgeted **Evidence Pack**. The pattern is *not* "many agents with KB
-access" — it is **"many controlled specialists using one shared Evidence Pack governed by an MCP
-Context Broker."**
+remote **MCP Context Broker** serves that knowledge to **twelve controlled specialist roles**
+(ADR-0030): the everyday surface is the budgeted `kb_search` and the one-call `get_task_context`
+(KB preferred-first, never a gate — ADR-0025), with the governed, shared **Evidence Pack** flow
+available where a claim must be citation-grade. The pattern is *not* "many agents with
+unrestricted KB access" — it is **"many controlled specialists sharing one budgeted, ledgered
+knowledge door governed by an MCP Context Broker."**
 
-Canonical reference: `docs/architecture/00-overview.md`. Decisions: `docs/adr/0001`–`0015`.
-Build units: `docs/pr-briefs/PR-01`–`PR-33`.
+Canonical reference: `docs/architecture/00-overview.md`. Decisions: `docs/adr/0001`–`0032`.
+Build units: `docs/pr-briefs/PR-01`–`PR-40` (all implemented).
 
-## The two planes
+## The three services (plus the benchmark layer)
 
 | Plane | What it does | Where it lives | Status |
 |---|---|---|---|
-| **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation + publish gates | `services/kb-builder` | Implemented through PR-33: connectors (local-FS + production GitHub/ADO, ADR-0015) → build engine → docify (Graphify LLM doc extraction, ADR-0023) → graphify (whole-tree extractor) → linker (deterministic + cross-domain + candidate→LLM judge) → version-membership invalidation → search indexer → enforcing publish gates; a single `build` CLI (`python -m agentic_kb_builder.build`) drives it end to end |
-| **Runtime plane** | Serves agent requests through MCP: evidence packs, budgets, trust-aware graph traversal, the verifier ladder + signed receipts, client identity, intent-aware ranking, retrieval ledger | `services/mcp-server` | Implemented (PR-09 server base; PR-10 Context Broker; PR-11 agent manifests + output schemas; PR-13 security hardening: `team_acl_v1` filtering, injection flagging, audit logging; PR-23/24/30/31 the verifier ladder L0→L3 + signed receipts; PR-32 client/app identity + scopes; PR-33 temporal/intent ranking) |
-| **Benchmark layer** | Dev-only eval harness: runs the §13 benchmark cases through the real broker, computes token-cost + golden-query evidence-recall metrics, diffs against a committed baseline | `evals/` | Implemented (PR-12; golden queries PR-25; contracts in `docs/contracts/evals-report.md` + `golden-query-evals.md`) |
+| **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation + publish gates | `services/kb-builder` | Implemented through PR-38: connectors (local-FS + production GitHub/ADO, ADR-0015) → build engine (**per-source incremental commits**, ADR-0029; crash-durable model-output cache, ADR-0027/PR-35; single-builder advisory lock) → docify (Graphify LLM doc extraction, ADR-0023) → graphify (whole-tree extractor + deterministic `search_text`, PR-34) → linker (deterministic + cross-domain + candidate→LLM judge) → alias index (PR-38) → centrality prior (ADR-0028/PR-36) → version-membership invalidation → search indexer → enforcing publish gates; a single `build` CLI (`python -m agentic_kb_builder.build`) drives it end to end. Migration head: `0021_trace_span` |
+| **Runtime plane** | Serves agent requests through MCP — **12 tools at `MCP_SCHEMA_VERSION` 1.10.0**: the budgeted `kb_search` (PR-37, ADR-0025) and `get_task_context` (PR-39, ADR-0030 — a zero-LLM LangGraph fan-out) as the primary retrieval surface, plus the governed evidence packs, budgets, trust-aware graph traversal, the verifier ladder + signed receipts, client identity, intent-aware ranking, the retrieval ledger, and Postgres-first tracing (ADR-0032) | `services/mcp-server` | Implemented (PR-09 server base; PR-10 Context Broker; PR-11 agent manifests + output schemas; PR-13 security hardening: `team_acl_v1` filtering, injection flagging, audit logging; PR-23/24/30/31 the verifier ladder L0→L3 + signed receipts; PR-32 client/app identity + scopes; PR-33 temporal/intent ranking; PR-37 `kb_search`; PR-39 `get_task_context` + `trace_span` tracing) |
+| **Review draft engine** | On-demand, **dev-gated** PR review drafts (ADR-0031): LangGraph fan-out of the four reviewer lenses → deterministic reconcile → one stored draft. **Never posts to GitHub** — the developer pulls, edits, and publishes under their own auth | `services/review-panel` | Implemented (PR-40); owns only the dedicated `review_panel` Postgres schema (idempotent bootstrap DDL — a documented Alembic exemption). Operations guide: [06 — Review panel](06-review-panel.md) |
+| **Benchmark layer** | Dev-only eval harness: benchmark + golden-query cases through the real broker, token-cost metrics, baseline diffs — consolidated into the tiered `run_all.py` (`make eval-all`) | `evals/` | Implemented (PR-12; golden queries PR-25; consolidated tiers: `docs/architecture/evaluation-system.md`; contracts in `docs/contracts/evals-report.md` + `golden-query-evals.md`) |
 
 Nothing is shared at runtime (ADR-0008): each service is a self-contained `uv` project, and the
 only cross-service agreements are the markdown contracts in `docs/contracts/`, pinned by contract
-tests on both sides. kb-builder owns the Postgres schema and all Alembic migrations.
+tests on both sides. kb-builder owns the Knowledge Registry (public schema) and all its Alembic
+migrations; review-panel's dedicated `review_panel` schema is the one documented exemption
+(bootstrap DDL, rollback = drop the schema — `docs/contracts/review-panel.md`).
 
 ## Why Postgres-first (ADR-0002, ADR-0003)
 
@@ -59,6 +64,16 @@ Freshness-by-the-minute is not worth an event-driven cloud. The build runs night
 
 The non-negotiable rule (invariant 4): **cache hit ⇒ no model call.** Cost control is structural,
 not a prompt suggestion.
+
+Two later decisions harden this against interruption. The generation/embedding gates are backed by
+a **crash-durable model-output cache** (ADR-0027, PR-35: `doc_extraction_output` /
+`embedding_output`, written on a separate connection, fail-soft — a cache problem degrades to a
+paid model call, never a crashed build). And the build **commits per source** (ADR-0029,
+superseding ADR-0027's end-of-build atomic write): completed knowledge lands as it is produced, an
+interrupted build keeps everything already committed, and one source's failure
+(`event=build_source_failed`) rolls back only that source and never aborts the rest — only
+*activation* stays atomic (ADR-0013). A Postgres advisory lock keeps builders single-writer
+(`event=builder_lock_held` ⇒ a second builder aborts immediately).
 
 ## kb_version lifecycle: interval membership, not a label (invariant 5, ADR-0013)
 
@@ -316,5 +331,5 @@ via a new ADR. Default answer is no.
 | 3 | Token saving enforced in code (budget + compression), not prompts; KB preferred-first, not a gate | `kb_search` per-task call+token cap in the tool (ADR-0025); Context Broker budgets + ledger under a per-pack lock (PR-10); `entailment_cache` gates L3 model calls (PR-31); deterministic skeleton-first reads + `read_full` (ADR-0026, `scripts/codeskeleton.py`); `.claude/rules/token-budgets.md` |
 | 4 | Incremental build; cache hit ⇒ no model call | `GenerationCacheGate` / `EmbeddingCacheGate` in `agentic_kb_builder/application/cache_gates.py`; `relationship_judgment_cache` (PR-29) + `entailment_cache` (PR-31); content-hash skip in `application/build_runner.py` |
 | 5 | kb_version active only after validation + publish gates | `application/active_version.py` (interval membership, ADR-0013) + `application/publish_gates.py` + `application/invalidation.py` + unique partial index on `kb_build_run` |
-| 6 | Agents never touch stores/secrets (scoped workspace + budgeted KB, not a mandatory broker round-trip); retrieved text untrusted | No DB/Search/model credentials agent-side; governance at the identity/ACL + ledger layers with file-fallback logged as a KB-gap signal (ADR-0025); Entra JWKS auth boundary + schema-encoded policy in `agentic_mcp_server/mcp/tool_schemas` (PR-09); `team_acl_v1` filtering at every retrieval surface, fail-closed identity, advisory injection flagging, and audit logging in `auth/rbac.py` / `domain/untrusted.py` / `telemetry/audit.py` (PR-13) |
+| 6 | Agents never touch stores/secrets (scoped workspace + budgeted KB, not a mandatory broker round-trip); retrieved text untrusted | No DB/Search/model credentials agent-side; governance at the identity/ACL + ledger layers with file-fallback logged as a KB-gap signal (ADR-0025); Entra JWKS auth boundary + schema-encoded policy in `agentic_mcp_server/mcp/tool_schemas` (PR-09); `team_acl_v1` filtering at every retrieval surface, fail-closed identity, advisory injection flagging, and audit logging in `auth/rbac.py` / `context_broker/untrusted.py` / `telemetry/audit.py` (PR-13) |
 | 7 | Every claim cites evidence; no fabrication | Evidence cards by handle (PR-10); `agent_output_schemas` make unevidenced claims unconstructible and reject unknown evidence IDs (PR-11); linker stale-edge deletion in `linker/write_edges.py` |

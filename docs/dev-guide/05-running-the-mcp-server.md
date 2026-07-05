@@ -20,6 +20,36 @@ requires a valid bearer token. §4 covers exactly how to get one locally.
 
 ---
 
+## 0. The primary tool, in twenty seconds: `kb_search`
+
+Before the governed walkthrough, here is the call agents actually make all day. With the server
+running (§3) and a bearer in hand (§4):
+
+```python
+import asyncio
+from fastmcp import Client
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp/", auth="<bearer-from-§4>") as client:
+        hits = await client.call_tool("kb_search", {"request": {
+            "query": "where is the per-agent token budget enforced?",
+        }})
+        for hit in hits.data["results"]:
+            print(hit["title"], "→", hit["source_uri"], f"[{hit['confidence_tier']}]")
+        print("budget left:", hits.data["budget_remaining"])   # {"calls": N, "tokens": M}
+
+asyncio.run(main())
+```
+
+That one `query` field is the **entire request** — identity, ACL filtering, and the dual
+call+token budget all bind to the authenticated session, never to request fields. When the
+session budget closes, the tool returns empty results with the notice *"KB budget spent — work
+with what you have, or read the specific files you still need."* (ledgered `denied`, never a tool
+error). Every call writes a `retrieval_event` row. Full contract:
+`docs/contracts/mcp-tools-contract.md`.
+
+---
+
 ## 1. Prerequisites
 
 You need network reach to the **Postgres that holds the built KB** and either **uv** (to run the
@@ -337,5 +367,6 @@ broker that has nothing to serve.
 
 - **Build a KB** — that's the build plane (doc 04). The server never builds and never migrates.
 - **Run migrations** — kb-builder owns the schema (ADR-0008); the server image has no Alembic.
-- **Turn auth off** — there is no such switch (invariant 6). Local-dev auth is a *proposal*
-  (ADR-0016), not a shipped feature.
+- **Turn auth off** — there is no such switch (invariant 6). Local-dev auth (§4b, ADR-0016) is a
+  loopback-only *identity substitute*, not an auth bypass: every request still flows through the
+  same ACL / scope / trust checks.

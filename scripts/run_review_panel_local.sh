@@ -9,7 +9,7 @@
 # LLM_API_KEY) are needed only when no stored draft exists for the current
 # head SHA. Optional: GITHUB_TOKEN (read-only PR fetch for private repos),
 # REVIEW_PANEL_DATABASE_URL (durable checkpoints + draft store),
-# REVIEW_PANEL_MCP_URL for kb_search, LANGSMITH_TRACING=true for tracing.
+# REVIEW_PANEL_MCP_URL for kb_search, TRACE_SINK=postgres for tracing (ADR-0032).
 # Secrets stay in env / .env — never on the command line. The draft JSON is
 # printed on stdout; logs go to stderr.
 set -euo pipefail
