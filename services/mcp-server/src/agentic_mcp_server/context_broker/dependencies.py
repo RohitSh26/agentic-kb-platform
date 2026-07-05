@@ -5,6 +5,7 @@ team claims), never from request fields like agent_name or role — those are
 correlation and view selectors only.
 """
 
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -18,7 +19,9 @@ from agentic_mcp_server.context_broker.authorization import AuthorizationPolicy
 from agentic_mcp_server.context_broker.budgets import BudgetPolicy, KbSearchBudgetStore
 from agentic_mcp_server.context_broker.state import PackStore
 from agentic_mcp_server.infrastructure.entailment.client import EntailmentClient
+from agentic_mcp_server.infrastructure.postgres.trace_spans import PostgresTraceSink
 from agentic_mcp_server.infrastructure.search.search_client import SearchClient
+from agentic_mcp_server.infrastructure.tracing.trace_sink import NullTraceSink, TraceSink
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,32 @@ class BrokerDeps:
     # kb_search budget windows (PR-37, ADR-0025 §4): per-(session, subject) dual-cap
     # usage meters. In-process state like `packs`; the ledger is the durable record.
     kb_search_usage: KbSearchBudgetStore = field(default_factory=KbSearchBudgetStore)
+    # Per-step tracing (ADR-0032): the port graph code depends on. Defaults to the safe,
+    # inert NullTraceSink for anything that builds BrokerDeps directly (e.g. tests) —
+    # the real server's "postgres when a database is configured" default is applied
+    # once, at startup wiring, via `select_trace_sink` below.
+    trace_sink: TraceSink = field(default_factory=NullTraceSink)
+
+
+def select_trace_sink(
+    session_factory: async_sessionmaker[AsyncSession] | None,
+) -> TraceSink:
+    """Resolve the real server's `TraceSink` from `TRACE_SINK` (ADR-0032 §4).
+
+    Called once, at startup wiring (`mcp/server.py: create_app`) — never from graph or
+    tool code, which depends only on the `TraceSink` port via `BrokerDeps.trace_sink`.
+    `TRACE_SINK` unset or `"postgres"` ⇒ Postgres when a database is configured, else
+    the inert `NullTraceSink`; `TRACE_SINK=none` ⇒ `NullTraceSink` unconditionally;
+    any other value is a startup configuration error, not a silent fallback.
+    """
+    choice = os.environ.get("TRACE_SINK", "").strip().lower()
+    if choice == "none":
+        return NullTraceSink()
+    if choice not in ("", "postgres"):
+        raise RuntimeError(f"invalid TRACE_SINK={choice!r}; expected 'postgres' or 'none'")
+    if session_factory is not None:
+        return PostgresTraceSink(session_factory)
+    return NullTraceSink()
 
 
 # The subject is echoed verbatim into key=value structured logs across the broker

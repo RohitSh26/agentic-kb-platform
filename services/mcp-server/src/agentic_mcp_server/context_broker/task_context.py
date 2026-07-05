@@ -14,7 +14,8 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import cast
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -45,6 +46,7 @@ from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
     RetrievalEventInsert,
     insert_event,
 )
+from agentic_mcp_server.infrastructure.tracing.trace_sink import Span, emit_span
 from agentic_mcp_server.mcp.tool_schemas.task_context import (
     BlastRadius,
     BlastRadiusEntity,
@@ -335,6 +337,95 @@ async def run_task_context_graph(ctx: TaskContextCtx) -> TaskContextRunResult:
     )
 
 
+# --------------------------------------------------------------------------- tracing
+
+
+def _node_span_attributes(node: str, response: GetTaskContextResponse) -> dict[str, Any]:
+    """Safe, aggregate-only metadata per node (ADR-0032 "No-content rule") — counts and
+    ids-cardinality drawn from the already-synthesized (floor-filtered, budget-trimmed)
+    response, never raw scope/blast/convention/commit text."""
+    if node == "resolve_scope":
+        return {
+            "entities": len(response.resolved_scope.entities),
+            "ambiguous": len(response.resolved_scope.ambiguous_candidates),
+        }
+    if node == "blast_radius":
+        return {
+            "callers": len(response.blast_radius.callers),
+            "callees": len(response.blast_radius.callees),
+            "tests": len(response.blast_radius.tests),
+        }
+    if node == "conventions":
+        return {"conventions": len(response.conventions)}
+    if node == "similar_prior_changes":
+        return {"prior_changes": len(response.similar_prior_changes)}
+    if node == "synthesize":
+        return {
+            "tokens": response.budget_used.tokens,
+            "calls_used": response.budget_used.calls,
+            "evidence_ids": len(response.evidence_ids),
+            "open_questions": len(response.open_questions),
+        }
+    return {}  # "broaden" carries no extra metadata beyond its timing
+
+
+def _to_wall(*, mono_reference: float, wall_reference: datetime, mono_value: float) -> datetime:
+    """Convert a `time.monotonic()` reading to wall-clock, via one fixed (mono, wall)
+    reference pair taken at the same instant — monotonic values have no fixed epoch
+    across processes, so they are never stored directly (docs/contracts/tracing.md)."""
+    return wall_reference + timedelta(seconds=mono_value - mono_reference)
+
+
+def _task_context_spans(
+    *,
+    trace_id: str,
+    root_span_id: uuid.UUID,
+    mono_reference: float,
+    wall_reference: datetime,
+    node_spans: tuple[NodeSpan, ...],
+    response: GetTaskContextResponse,
+    root_ended_at: datetime,
+    root_attributes: dict[str, Any],
+) -> list[Span]:
+    """One root span for the call plus one span per graph node that actually ran."""
+    spans = [
+        Span(
+            trace_id=trace_id,
+            span_id=root_span_id,
+            parent_span_id=None,
+            name=_TOOL_NAME,
+            service="mcp-server",
+            started_at=wall_reference,
+            ended_at=root_ended_at,
+            status="ok",
+            attributes=root_attributes,
+        )
+    ]
+    for node_span in node_spans:
+        spans.append(
+            Span(
+                trace_id=trace_id,
+                span_id=uuid.uuid4(),
+                parent_span_id=root_span_id,
+                name=node_span.node,
+                service="mcp-server",
+                started_at=_to_wall(
+                    mono_reference=mono_reference,
+                    wall_reference=wall_reference,
+                    mono_value=node_span.started,
+                ),
+                ended_at=_to_wall(
+                    mono_reference=mono_reference,
+                    wall_reference=wall_reference,
+                    mono_value=node_span.ended,
+                ),
+                status="ok",
+                attributes=_node_span_attributes(node_span.node, response),
+            )
+        )
+    return spans
+
+
 # -------------------------------------------------------------------------- tool entry
 
 
@@ -342,6 +433,7 @@ async def get_task_context(
     deps: BrokerDeps, request: GetTaskContextRequest, requester: Requester
 ) -> GetTaskContextResponse:
     started = time.monotonic()
+    wall_started = datetime.now(UTC)
     async with deps.session_factory() as session:
         active = await fetch_active_version(session)
     if active is None:
@@ -396,6 +488,17 @@ async def get_task_context(
                 },
             ),
         )
+    for span in _task_context_spans(
+        trace_id=str(uuid.uuid4()),
+        root_span_id=uuid.uuid4(),
+        mono_reference=started,
+        wall_reference=wall_started,
+        node_spans=run.node_spans,
+        response=response,
+        root_ended_at=datetime.now(UTC),
+        root_attributes={"retried": run.retried, "calls_used": run.calls_used},
+    ):
+        await emit_span(deps.trace_sink, span)
     audit_context_access(
         tool=_TOOL_NAME,
         requester=requester,

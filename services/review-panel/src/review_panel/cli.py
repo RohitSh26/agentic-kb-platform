@@ -31,6 +31,8 @@ from review_panel.infrastructure.draft_store import (
 from review_panel.infrastructure.github_client import HttpxGitHubClient
 from review_panel.infrastructure.kb_search import KBSearchClient, McpHttpKBSearch, NullKBSearch
 from review_panel.infrastructure.model_client import create_model_client, load_model_settings
+from review_panel.infrastructure.postgres_trace_sink import postgres_trace_sink
+from review_panel.infrastructure.trace_sink import NullTraceSink, TraceSink
 from review_panel.structured_logging import configure_logging, get_logger
 
 logger = get_logger("review_panel.cli")
@@ -47,6 +49,7 @@ async def _compute(
     github: HttpxGitHubClient,
     store: DraftStore,
     checkpointer: BaseCheckpointSaver[str],
+    trace_sink: TraceSink,
     pr: PRContext,
 ) -> DraftOutcome:
     # model settings are loaded ONLY on the compute path — fetching a stored
@@ -59,6 +62,7 @@ async def _compute(
         prompts=load_panel_prompts(config.agents_dir),
         store=store,
         model_label=f"{settings.provider}:{settings.model}",
+        trace_sink=trace_sink,
     )
     logger.info(
         "event=panel_start repo=%s pr=%s head_sha=%s provider=%s model=%s langsmith_tracing=%s",
@@ -91,11 +95,22 @@ async def run_draft(repo: str, pr_number: int) -> int:
             logger.warning("event=persistence_fallback kind=memory durable=false")
             checkpointer = InMemorySaver()
             store = InMemoryDraftStore()
+
+        trace_sink: TraceSink
+        if config.trace_sink not in ("", "postgres", "none"):
+            raise RuntimeError(
+                f"invalid TRACE_SINK={config.trace_sink!r}; expected 'postgres' or 'none'"
+            )
+        if config.trace_sink != "none" and config.database_url:
+            trace_sink = await stack.enter_async_context(postgres_trace_sink(config.database_url))
+        else:
+            trace_sink = NullTraceSink()
+
         pr, stored = await get_stored_draft(github, store, repo, pr_number)
         if stored is not None:
             outcome = DraftOutcome(draft=stored, source="stored")
         else:
-            outcome = await _compute(config, github, store, checkpointer, pr)
+            outcome = await _compute(config, github, store, checkpointer, trace_sink, pr)
         logger.info(
             "event=draft_done draft_key=%s source=%s findings=%s",
             outcome.draft.draft_key,

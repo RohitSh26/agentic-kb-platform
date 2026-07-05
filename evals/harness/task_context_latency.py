@@ -63,7 +63,7 @@ async def probe(database_url: str, tasks: Sequence[str]) -> list[LatencyResult]:
     import time
 
     from agentic_mcp_server.auth.rbac import Requester
-    from agentic_mcp_server.context_broker.dependencies import BrokerDeps
+    from agentic_mcp_server.context_broker.dependencies import BrokerDeps, select_trace_sink
     from agentic_mcp_server.context_broker.task_context import get_task_context
     from agentic_mcp_server.infrastructure.postgres.keyword_search import (
         PostgresKeywordSearchClient,
@@ -74,8 +74,12 @@ async def probe(database_url: str, tasks: Sequence[str]) -> list[LatencyResult]:
     engine = create_async_engine(database_url)
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
+        # Same TRACE_SINK resolution as the real server (ADR-0032): until real hosts
+        # connect, eval traffic is the only traffic — probes must produce spans too.
         deps = BrokerDeps(
-            session_factory=factory, search_client=PostgresKeywordSearchClient(factory)
+            session_factory=factory,
+            search_client=PostgresKeywordSearchClient(factory),
+            trace_sink=select_trace_sink(factory),
         )
         requester = Requester(subject="eval-t2-latency", teams=frozenset())
         results: list[LatencyResult] = []

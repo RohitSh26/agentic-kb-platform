@@ -11,6 +11,9 @@ hydration -> ACL -> rank/dedupe) — no new search or ranking logic here.
 
 import logging
 import time
+import uuid
+from datetime import UTC, datetime
+from typing import Any
 
 from agentic_mcp_server.auth.rbac import Requester
 from agentic_mcp_server.context_broker.budgets import AgentAllowance, AgentUsage, kb_budget_open
@@ -29,6 +32,7 @@ from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
     RetrievalEventInsert,
     insert_event,
 )
+from agentic_mcp_server.infrastructure.tracing.trace_sink import Span, SpanStatus, emit_span
 from agentic_mcp_server.mcp.tool_schemas.search import (
     KbSearchBudget,
     KbSearchHit,
@@ -70,10 +74,35 @@ def _remaining(allowance: AgentAllowance, usage: AgentUsage) -> KbSearchBudget:
     )
 
 
+async def _emit_kb_search_span(
+    deps: BrokerDeps,
+    *,
+    wall_started: datetime,
+    status: SpanStatus,
+    attributes: dict[str, Any],
+) -> None:
+    """One root span per call (ADR-0032) — no children, no LangGraph involved."""
+    await emit_span(
+        deps.trace_sink,
+        Span(
+            trace_id=str(uuid.uuid4()),
+            span_id=uuid.uuid4(),
+            parent_span_id=None,
+            name=_TOOL_NAME,
+            service="mcp-server",
+            started_at=wall_started,
+            ended_at=datetime.now(UTC),
+            status=status,
+            attributes=attributes,
+        ),
+    )
+
+
 async def kb_search(
     deps: BrokerDeps, request: KbSearchRequest, requester: Requester, *, session_key: str
 ) -> KbSearchResponse:
     started = time.monotonic()
+    wall_started = datetime.now(UTC)
     async with deps.session_factory() as session:
         active = await fetch_active_version(session)
     if active is None:
@@ -124,6 +153,12 @@ async def kb_search(
                 window.usage.tokens,
                 allowance.max_tokens,
             )
+            await _emit_kb_search_span(
+                deps,
+                wall_started=wall_started,
+                status="ok",
+                attributes={"budget_status": "denied", "results": 0},
+            )
             return KbSearchResponse(
                 results=[],
                 budget_remaining=_remaining(allowance, window.usage),
@@ -163,7 +198,7 @@ async def kb_search(
             remaining = _remaining(allowance, window.usage)
             calls_used, tokens_used = window.usage.requests, window.usage.tokens
             await write_ledger("approved", returned=artifacts, tokens=tokens)
-        except Exception:
+        except Exception as exc:
             refunded_tokens = window.usage.tokens - tokens_before
             window.usage.requests, window.usage.tokens = requests_before, tokens_before
             logger.warning(
@@ -171,10 +206,26 @@ async def kb_search(
                 requester.subject,
                 refunded_tokens,
             )
+            await _emit_kb_search_span(
+                deps,
+                wall_started=wall_started,
+                status="error",
+                attributes={"exception_type": type(exc).__name__},
+            )
             # Not ledgered here: the uniform tool wrapper (mcp/tool_handlers.py)
             # writes the single error retrieval_event for this call.
             raise
 
+    await _emit_kb_search_span(
+        deps,
+        wall_started=wall_started,
+        status="ok",
+        attributes={
+            "budget_status": "spent" if spent else "approved",
+            "results": len(hits),
+            "tokens": tokens,
+        },
+    )
     logger.info(
         "broker.kb_search subject=%s status=approved results=%d tokens_returned=%d "
         "calls_used=%d/%d tokens_used=%d/%d budget_spent=%s",

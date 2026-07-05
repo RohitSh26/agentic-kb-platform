@@ -32,6 +32,10 @@ class PanelConfig:
     mcp_url: str | None
     mcp_token: str | None
     langsmith_tracing: bool
+    #: raw TRACE_SINK value (ADR-0032): "" (unset) or "postgres" -> Postgres when
+    #: database_url is set, else NullTraceSink; "none" -> NullTraceSink always.
+    #: Resolved into a concrete TraceSink in cli.py, alongside the checkpointer/store.
+    trace_sink: str
 
 
 def load_config() -> PanelConfig:
@@ -43,6 +47,9 @@ def load_config() -> PanelConfig:
         database_url=os.environ.get("REVIEW_PANEL_DATABASE_URL") or None,
         mcp_url=os.environ.get("REVIEW_PANEL_MCP_URL") or None,
         mcp_token=os.environ.get("REVIEW_PANEL_MCP_TOKEN") or None,
-        # LangGraph/LangSmith pick the env up natively; surfaced here for the boot log only
+        # LangGraph/LangSmith's native env instrumentation stays inert (ADR-0032 —
+        # Postgres tracing behind TraceSink is the actual observability story);
+        # surfaced here for the boot log only.
         langsmith_tracing=env_flag("LANGSMITH_TRACING") or env_flag("LANGCHAIN_TRACING_V2"),
+        trace_sink=os.environ.get("TRACE_SINK", "").strip().lower(),
     )

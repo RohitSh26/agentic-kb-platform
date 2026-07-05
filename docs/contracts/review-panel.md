@@ -23,9 +23,10 @@ on (ADR-0008: no shared Python packages; small DTOs are duplicated).
 ## Storage ownership
 
 - The service owns the dedicated Postgres schema **`review_panel`** and nothing else. It contains
-  the LangGraph checkpointer's tables plus the `review_draft` table, both created idempotently at
-  startup (`CREATE SCHEMA IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`; the connection's
-  `search_path` is pinned to `review_panel`, so no other schema is reachable).
+  the LangGraph checkpointer's tables plus the `review_draft` and `trace_span` (ADR-0032 — see
+  "Tracing" below) tables, all created idempotently at startup (`CREATE SCHEMA IF NOT EXISTS` /
+  `CREATE TABLE IF NOT EXISTS`; the connection's `search_path` is pinned to `review_panel`, so no
+  other schema is reachable).
 - kb-builder remains the sole owner of the Knowledge Registry (public schema). The review panel
   never reads or writes any registry table (`source_item`, `knowledge_artifact`,
   `knowledge_edge`, `generation_cache`, `embedding_cache`, `kb_build_run`, `retrieval_event`);
@@ -37,10 +38,11 @@ on (ADR-0008: no shared Python packages; small DTOs are duplicated).
   `event=persistence_fallback`).
 - **Alembic exemption (explicit).** The repo rule "every schema change is an Alembic revision
   with a downgrade" applies to the Knowledge Registry, which kb-builder owns. The `review_panel`
-  schema is deliberately outside it: it holds only derived, recomputable state (checkpoints and
-  drafts — never truth, never served as evidence), is bootstrapped idempotently at startup, and
-  its rollback story is simply `DROP SCHEMA review_panel CASCADE` — nothing else references it.
-  Growing this schema beyond derived state would end the exemption and require an ADR.
+  schema is deliberately outside it: it holds only derived, recomputable state (checkpoints,
+  drafts, and — per ADR-0032 — trace spans; never truth, never served as evidence), is
+  bootstrapped idempotently at startup, and its rollback story is simply
+  `DROP SCHEMA review_panel CASCADE` — nothing else references it. Growing this schema beyond
+  derived state would end the exemption and require an ADR.
 
 ## Draft table
 
@@ -155,6 +157,33 @@ exactly as before — nothing is ever stored from unvalidated output. Nothing in
 can add tools, alter the draft key, or cause anything to be published — there is no publish path
 to escalate to (asserted by `tests/integration/test_injection.py`).
 
+## Tracing (ADR-0032)
+
+Per-step tracing lives in this service's own `trace_span` table (`review_panel` schema,
+bootstrapped idempotently alongside `review_draft`), behind a `TraceSink` port duplicated from
+mcp-server's (never shared, ADR-0008). Full span shape + fail-soft rule: `docs/contracts/tracing.md`.
+
+- **Root span**: one per `compute_draft` attempt (an initial run or a crash-resume), name
+  `review_panel.draft_run`. **Node spans**: `load_pr`, `review_bug`/`review_security`/
+  `review_quality`/`review_test_coverage`, `reconcile`, `store_draft` — one per node that actually
+  executes in that attempt (a resumed run's already-completed nodes do not re-emit).
+- **`trace_id` = the draft's key** (`<repo>#<pr>@<head_sha>`) — deterministic and stable across a
+  crash + resume, so a resumed attempt's spans correlate with the interrupted attempt's under the
+  same trace, unlike a fresh random id.
+- **Never checkpointed.** Spans are emitted directly from each node closure via
+  `PanelDependencies.trace_sink` and never enter `PanelState` — the LangGraph checkpointer persists
+  only graph state, never trace data, so tracing cannot affect or be affected by crash-resume
+  semantics.
+- **Env**: `TRACE_SINK=postgres|none` (default `postgres` when `REVIEW_PANEL_DATABASE_URL` is set,
+  else `NullTraceSink`, exactly like the checkpointer/draft-store fallback).
+- LangChain's native `LANGSMITH_*` env instrumentation remains inert (surfaced only in the
+  `panel_start` boot log) and is not part of the tracing story — see ADR-0032, which withdraws the
+  LangSmith commitment made on paper by ADR-0030 §4 before ever activating it.
+- **No-content rule, service-specific additions**: on top of `docs/contracts/tracing.md`'s shared
+  forbidden-key set, this service's `Span.__post_init__` also rejects `diff`, `pr_body`,
+  `pr_title`, and `kb_context` — the literal PR/KB fields a node closure has in scope and could
+  otherwise pass into `attributes` by mistake.
+
 ## Optional KB access
 
 When `REVIEW_PANEL_MCP_URL` is set, the service performs one `kb_search` MCP tools/call over
@@ -172,7 +201,8 @@ are fail-soft: the panel logs and reviews without KB context.
 | `REVIEW_PANEL_DATABASE_URL` | Postgres URL for checkpointer + draft store. Unset ⇒ in-memory fallback (logged plainly). |
 | `REVIEW_PANEL_AGENTS_DIR` | Path to the canonical `agents/` directory |
 | `REVIEW_PANEL_MCP_URL` / `REVIEW_PANEL_MCP_TOKEN` | Optional MCP endpoint for `kb_search` |
-| `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` | Env-gated tracing (ADR-0030 §4); the suite passes with neither set |
+| `TRACE_SINK` | `postgres` (default when `REVIEW_PANEL_DATABASE_URL` is set) or `none` — per-step tracing (ADR-0032) |
+| `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` | Inert — LangChain's native env instrumentation, surfaced only in the boot log; not the tracing story (ADR-0032 withdraws ADR-0030 §4's LangSmith commitment). The suite passes with neither set |
 
 Delivery: the CLI + `scripts/run_review_panel_local.sh`. Tests follow mcp-server's
 `TEST_DATABASE_URL` convention: DB-backed tests skip without it; everything else is hermetic.

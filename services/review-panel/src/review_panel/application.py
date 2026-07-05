@@ -8,6 +8,7 @@ Idempotency + durability policy lives here, not in tool wiring:
 """
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -19,6 +20,7 @@ from review_panel.graph.build import build_panel_graph
 from review_panel.graph.nodes import PanelDependencies
 from review_panel.infrastructure.draft_store import DraftStore
 from review_panel.infrastructure.github_client import GitHubClient
+from review_panel.infrastructure.trace_sink import Span, SpanStatus, emit_span
 from review_panel.structured_logging import get_logger
 
 logger = get_logger("review_panel.application")
@@ -75,7 +77,31 @@ async def compute_draft(
                 "event=panel_thread_cleared thread_id=%s reason=completed_without_stored_draft",
                 key,
             )
-    result = await graph.ainvoke(None if resuming else {"pr": pr}, config)
+    span_started = datetime.now(UTC)
+    status: SpanStatus = "ok"
+    try:
+        result = await graph.ainvoke(None if resuming else {"pr": pr}, config)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        # Root span for this ONE draft-run attempt (ADR-0032). Its own span_id doubles
+        # as the parent every node span in this attempt points at
+        # (PanelDependencies.trace_root_span_id) — never checkpointed state.
+        await emit_span(
+            deps.trace_sink,
+            Span(
+                trace_id=key,
+                span_id=deps.trace_root_span_id,
+                parent_span_id=None,
+                name="review_panel.draft_run",
+                service="review-panel",
+                started_at=span_started,
+                ended_at=datetime.now(UTC),
+                status=status,
+                attributes={"resuming": resuming},
+            ),
+        )
     draft = cast(ReviewDraft, result["draft"])
     return DraftOutcome(draft=draft, source="resumed" if resuming else "computed")
 

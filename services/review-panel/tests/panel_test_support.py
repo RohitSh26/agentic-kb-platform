@@ -26,6 +26,7 @@ from review_panel.graph.prompts import PanelPrompts, load_panel_prompts
 from review_panel.graph.state import PanelState
 from review_panel.infrastructure.draft_store import InMemoryDraftStore
 from review_panel.infrastructure.model_client import ModelClient
+from review_panel.infrastructure.trace_sink import NullTraceSink, Span, TraceSink
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
@@ -205,6 +206,14 @@ class FakeGitHubClient:
         return self.pr
 
 
+class RaisingTraceSink:
+    """A TraceSink that always raises — proves emit_span's fail-soft boundary (ADR-0032
+    §3) holds: a draft run must complete even when tracing itself is completely broken."""
+
+    async def emit(self, span: Span) -> None:
+        raise RuntimeError("trace sink unavailable")
+
+
 class FakeKBSearch:
     def __init__(self, result: str = "") -> None:
         self.result = result
@@ -241,6 +250,7 @@ def make_deps(
     kb: FakeKBSearch | None = None,
     store: InMemoryDraftStore | None = None,
     pr: PRContext | None = None,
+    trace_sink: TraceSink | None = None,
 ) -> tuple[PanelDependencies, FakeModelClient, FakeGitHubClient, InMemoryDraftStore]: ...
 
 
@@ -252,6 +262,7 @@ def make_deps(
     kb: FakeKBSearch | None = None,
     store: InMemoryDraftStore | None = None,
     pr: PRContext | None = None,
+    trace_sink: TraceSink | None = None,
 ) -> tuple[PanelDependencies, FakeModelClient, FakeGitHubClient, InMemoryDraftStore]: ...
 
 
@@ -263,6 +274,7 @@ def make_deps(
     kb: FakeKBSearch | None = None,
     store: InMemoryDraftStore | None = None,
     pr: PRContext | None = None,
+    trace_sink: TraceSink | None = None,
 ) -> tuple[PanelDependencies, ModelClient, FakeGitHubClient, InMemoryDraftStore]: ...
 
 
@@ -273,11 +285,13 @@ def make_deps(
     kb: FakeKBSearch | None = None,
     store: InMemoryDraftStore | None = None,
     pr: PRContext | None = None,
+    trace_sink: TraceSink | None = None,
 ) -> tuple[PanelDependencies, ModelClient, FakeGitHubClient, InMemoryDraftStore]:
     """Build a full fake dependency set. `model` defaults to `FakeModelClient` (and the
     return type reflects that — see the overloads); passing any other `ModelClient`
     (e.g. `ScriptedModelClient`) is returned as-is, correctly typed, for tests that
-    need a script the default fake can't express."""
+    need a script the default fake can't express. `trace_sink` defaults to the inert
+    `NullTraceSink`; pass an `InMemoryTraceSink` to assert on emitted spans."""
     the_pr = pr or make_pr()
     the_model = model or FakeModelClient()
     the_github = github or FakeGitHubClient(the_pr)
@@ -289,6 +303,7 @@ def make_deps(
         prompts=real_prompts(),
         store=the_store,
         model_label="fake:panel-test",
+        trace_sink=trace_sink or NullTraceSink(),
     )
     return deps, the_model, the_github, the_store
 

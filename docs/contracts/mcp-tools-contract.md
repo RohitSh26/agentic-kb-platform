@@ -321,8 +321,11 @@ provenance is required; `kb_search` is the preferred first stop.
     genuinely parallel pure-retrieval nodes (`resolve_scope`, `blast_radius`,
     `conventions`, `similar_prior_changes`) joined by a `synthesize` node, with
     ONE conditional broadened retry when scope resolves empty, then an honest
-    answer with what is known. Zero LLM calls at query time. LangSmith tracing
-    is env-gated (`LANGSMITH_TRACING`); nothing requires it to be set.
+    answer with what is known. Zero LLM calls at query time. Per-step tracing
+    (ADR-0032) emits one root span plus one span per node to Postgres via the
+    `TraceSink` port (`TRACE_SINK=postgres|none`, default `postgres`) — fail-soft
+    always, no budget charge. LangChain's native `LANGSMITH_*` env instrumentation
+    remains inert and is not part of the tracing story.
   - Ledger + ACL: one `retrieval_event` per call (`tool_name="get_task_context"`,
     `run_id="-"`, `returned_artifact_ids` = the evidence ids, `tokens_returned` =
     `budget_used.tokens`; ledger-only `error` status when no active kb_version).

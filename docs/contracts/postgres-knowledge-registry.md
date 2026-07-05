@@ -43,6 +43,7 @@ and the migrations. Summary:
 | `embedding_cache` | Embedding call gate, keyed `(artifact_id, text_hash, embedding_model)`. The vector itself is stored as a float array (`ARRAY(double precision)` — no pgvector in V1), so the Search index rebuilds without re-embedding. | kb-builder |
 | `kb_build_run` | One row per nightly build: `kb_version`, `build_seq` (monotonic BIGINT, UNIQUE — the interval-membership cutoff), `status` (`running`/`completed`/`failed`/`validation_failed`/`active`/`superseded`), counters, timestamps. | kb-builder |
 | `retrieval_event` | Ledger: one row per MCP retrieval call — `run_id`, `context_pack_id`, `agent_name`, `tool_name`, `status`, `query_text`/`normalized_query`, `retrieval_profile`, `kb_version`, `source_filters`, `returned_artifact_ids`, `reused_evidence_ids`, `new_evidence_ids`, `cache_hit`, `semantic_reuse`, `tokens_returned`, `latency_ms`, `created_at`, `details` (nullable JSONB — per-tool observability payload; see below). | **mcp-server** |
+| `trace_span` | Per-step tracing (ADR-0032): `span_id`, `trace_id`, `parent_span_id`, `name`, `service`, `started_at`/`ended_at`, `status` (`ok`/`error`), `attributes` (nullable JSONB, aggregate-only), `created_at`. Migration `0021_trace_span`. Full shape and the `TraceSink` port: `tracing.md`. | **mcp-server** |
 
 ## Columns mcp-server depends on (pinned by its contract tests)
 

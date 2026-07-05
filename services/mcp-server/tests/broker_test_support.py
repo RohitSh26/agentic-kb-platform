@@ -20,6 +20,7 @@ from agentic_mcp_server.infrastructure.search.search_client import (
     SearchClient,
     SearchHit,
 )
+from agentic_mcp_server.infrastructure.tracing.trace_sink import NullTraceSink, Span, TraceSink
 
 KB_VERSION = "kb-test"
 
@@ -275,6 +276,17 @@ class RaisingSearchClient:
         return await self.inner.search(query, build_seq=build_seq, top=top)
 
 
+@dataclass
+class RaisingTraceSink:
+    """A TraceSink that always raises — proves emit_span's fail-soft boundary (ADR-0032
+    §3) holds regardless of which adapter sits behind the port: a tool call must
+    complete (and its retrieval_event must still read "approved") even when tracing
+    itself is completely broken."""
+
+    async def emit(self, span: Span) -> None:
+        raise RuntimeError("trace sink unavailable")
+
+
 def make_broker_deps(
     session_factory: async_sessionmaker[AsyncSession],
     search_client: SearchClient,
@@ -282,6 +294,7 @@ def make_broker_deps(
     settings: BrokerSettings | None = None,
     budget_policy: BudgetPolicy | None = None,
     entailment_client: EntailmentClient | None = None,
+    trace_sink: TraceSink | None = None,
 ) -> BrokerDeps:
     return BrokerDeps(
         session_factory=session_factory,
@@ -289,4 +302,5 @@ def make_broker_deps(
         settings=settings or BrokerSettings(),
         budget_policy=budget_policy or BudgetPolicy(),
         entailment_client=entailment_client,
+        trace_sink=trace_sink or NullTraceSink(),
     )

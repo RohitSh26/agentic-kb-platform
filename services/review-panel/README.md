@@ -16,8 +16,11 @@ developer's own authorization. Contract: `docs/contracts/review-panel.md`.
   fallback runs the single bounded job (logged plainly; no cross-process durability).
 - Untrusted-content discipline: PR/diff/KB text is fenced, model output is schema-validated
   (`review_findings_v1`), and the GitHub adapter is read-only by construction.
-- LangSmith tracing is env-gated (`LANGSMITH_TRACING` + `LANGSMITH_API_KEY`); the whole test
-  suite is hermetic and needs no LLM/LangSmith/GitHub credentials.
+- Per-step tracing (ADR-0032): one root span per draft-run attempt plus one span per graph node,
+  written to a `trace_span` table in the `review_panel` schema behind a `TraceSink` port
+  (`TRACE_SINK=postgres|none`); fail-soft always, never checkpointed state. No hosted tracing
+  SaaS — LangChain's native `LANGSMITH_*` env instrumentation remains inert and unconfigured; the
+  whole test suite is hermetic and needs no LLM/LangSmith/GitHub credentials.
 
 ## Run
 
