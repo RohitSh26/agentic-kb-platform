@@ -46,12 +46,12 @@ flowchart TD
     subgraph OBS["observability"]
         LED[("retrieval ledger — every call:<br/>tokens · latency · denials · errors")]:::store
         LOGS["structured logs (all paths)"]:::shipped
-        LSMITH["LangSmith tracing — wired, env-gated<br/>(activates with a deployment env)"]:::planned
-        DASH["cost/usage dashboard (ADR-0014)"]:::planned
+        TRACE["per-step traces → Postgres<br/>TraceSink port (ADR-0032) — no SaaS,<br/>Langfuse-swappable later"]:::planned
+        DASH["cost/usage dashboard (ADR-0014)<br/>make dashboard — SHIPPED"]:::shipped
     end
     WRAP --> LED
     LED -.-> DASH
-    LSMITH -.-> DASH
+    TRACE -.-> DASH
 
     subgraph HOSTS["host surfaces — external, fed via MCP; 12-role manifests rendered + parity-pinned"]
         OC["OpenCode<br/>subagent delegation"]:::external
