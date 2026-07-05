@@ -552,14 +552,14 @@ class _RegistrySwapConnector:
 
 @requires_db
 async def test_build_aborts_before_invalidation_when_its_run_row_vanishes(
-    session: AsyncSession,
+    session: AsyncSession, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Zombie-build circuit breaker: if the build's own kb_build_run row is gone
     by finalize time, the registry was reset/swapped mid-build — the build must
     abort loudly BEFORE the deletion sweep, leaving zero tombstones behind."""
     assert TEST_DATABASE_URL is not None
     runner = _runner(session, "kb-zombie")
-    with pytest.raises(BuildEnvironmentLostError):
+    with caplog.at_level("WARNING"), pytest.raises(BuildEnvironmentLostError):
         await runner.run(
             [
                 _connector({"a.md": "alpha", "b.md": "beta"}),
@@ -582,6 +582,10 @@ async def test_build_aborts_before_invalidation_when_its_run_row_vanishes(
         )
     ).scalar_one()
     assert invalidated == 0
+    # The zombie-build symmetry fix: the run's OWN kb_build_run row is gone (the
+    # swap deleted it), so _finish_run's failure-path UPDATE matches zero rows —
+    # that must be a loud WARNING, never a silent no-op that looks recorded.
+    assert any("event=build_run_finish_missing" in record.getMessage() for record in caplog.records)
 
 
 @requires_db

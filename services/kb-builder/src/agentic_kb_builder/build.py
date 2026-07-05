@@ -31,6 +31,10 @@ from agentic_kb_builder.application.build_runner import (
     Embedder,
     SearchIndexer,
 )
+from agentic_kb_builder.application.builder_lock import (
+    BuilderLockUnavailableError,
+    acquire_builder_lock,
+)
 from agentic_kb_builder.application.publish_gates import make_publish_gate_validator
 from agentic_kb_builder.connectors import (
     GitMetadataConnector,
@@ -291,7 +295,11 @@ async def _main(args: argparse.Namespace) -> int:
     durable_cache = make_durable_output_cache()
     collaborators: Collaborators | None = None
     try:
-        async with factory() as session:
+        # Single-builder advisory lock (task #33): refuse to start a second build
+        # while another one holds it, rather than racing on the registry (the
+        # 2026-07-05 zombie incident). Held on its own dedicated connection for
+        # this whole `async with` — see builder_lock.py.
+        async with acquire_builder_lock(engine), factory() as session:
             collaborators = default_collaborators(session, index_path=index_path)
             run = await run_build(
                 session,
@@ -307,6 +315,9 @@ async def _main(args: argparse.Namespace) -> int:
                 durable_cache=durable_cache,
             )
             active = await get_active_kb_version(session)
+    except BuilderLockUnavailableError as error:
+        print(f"build aborted: {error}")
+        return 1
     finally:
         if collaborators is not None and isinstance(
             collaborators.similarity, EmbeddingSimilarityProvider

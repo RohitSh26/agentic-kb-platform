@@ -9,6 +9,11 @@ from agentic_kb_builder.application.build_runner import (
     DocExtractor,
     SearchIndexer,
 )
+from agentic_kb_builder.application.builder_lock import (
+    BUILDER_LOCK_KEY,
+    BuilderLockUnavailableError,
+    acquire_builder_lock,
+)
 from agentic_kb_builder.application.cache_gates import (
     EmbeddingCacheGate,
     GenerationCacheGate,
@@ -25,8 +30,10 @@ from agentic_kb_builder.domain.embedding_port import Embedder, EmbeddingResult
 
 __all__ = [
     "ALLOWED_EDGE_TYPES",
+    "BUILDER_LOCK_KEY",
     "BuildEnvironmentLostError",
     "BuildRunner",
+    "BuilderLockUnavailableError",
     "DocExtractor",
     "Embedder",
     "EmbeddingCacheGate",
@@ -35,6 +42,7 @@ __all__ = [
     "GenerationCacheGate",
     "SearchIndexer",
     "ValidationHook",
+    "acquire_builder_lock",
     "activate_kb_version",
     "code_graph_cache_key",
     "compose_gates",

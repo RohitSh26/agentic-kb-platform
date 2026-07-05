@@ -475,7 +475,7 @@ class BuildRunner:
         status: str,
         error_summary: str | None = None,
     ) -> None:
-        await self._session.execute(
+        result = await self._session.execute(
             update(KbBuildRun)
             .where(KbBuildRun.build_id == build_id)
             .values(
@@ -490,13 +490,36 @@ class BuildRunner:
                 search_docs_upserted=counters.search_docs_upserted,
                 extractor_failures=counters.extractor_failures,
             )
+            .returning(KbBuildRun.build_id)
         )
+        # Symmetry with _assert_run_row_alive (the zombie-build postmortem): that
+        # guard already aborts loudly before finalize when the run row is gone. The
+        # FAILURE path has no equivalent guard — it always reaches here, so a
+        # vanished row (the exact zombie-build shape: the registry was reset/swapped
+        # mid-build) was previously a silent no-op that looked like the failure got
+        # recorded when it never did. Surface it instead of no-oping quietly.
+        if result.scalar_one_or_none() is None:
+            logger.warning(
+                "event=build_run_finish_missing build_id=%s status=%s "
+                "reason=run_row_vanished action=finish_was_a_noop",
+                build_id,
+                status,
+            )
 
     async def _touch_last_seen(self, fetched: NormalizedContent) -> uuid.UUID | None:
         # acl_teams rides along: an ACL-only config change (an access
         # revocation) must land even when content_hash is unchanged. The returned
         # source_id marks the source SEEN this build (excludes it from the deletion
         # sweep) and feeds ACL propagation onto its live artifacts.
+        # Deliberately does NOT heal repo/branch/path/external_id (task #30): those
+        # only refresh on a genuine _upsert_source_item conflict (content changed —
+        # see its comment). A source whose content never changes takes this fast
+        # path on every build, so a provenance-only correction (e.g. a connector
+        # that newly stamps repo) reaches an already-existing row of it only via a
+        # from-scratch rebuild, not an incremental one. Accepted, narrow gap: this
+        # path's job is last_seen_at + ACL, not identity, and it fires on every
+        # unchanged source, so folding identity writes in here would make every
+        # untouched build re-write four columns on rows that never asked to change.
         source_id = (
             await self._session.execute(
                 update(SourceItem)
@@ -542,6 +565,20 @@ class BuildRunner:
                 constraint="uq_source_item_source_type_source_uri",
                 set_={
                     "source_version": ref.source_version,
+                    # Identity/provenance columns heal to the CURRENT connector state on
+                    # every genuine re-upsert (task #30): the connector's SourceRef is the
+                    # authoritative source of these values (connectors rule,
+                    # .claude/rules/connectors.md), never whatever an earlier build happened
+                    # to observe. Without this a row inserted before a connector started
+                    # stamping repo/branch/external_id (e.g. 08d5492) stayed stale forever;
+                    # only a from-scratch rebuild picked up the fix. This only fires on a
+                    # CONFLICT — i.e. the source's content actually changed this build; an
+                    # unchanged source takes the `_touch_last_seen` fast path instead (see
+                    # its docstring) and is not healed by this alone.
+                    "repo": ref.repo,
+                    "branch": ref.branch,
+                    "path": ref.path,
+                    "external_id": ref.external_id,
                     "acl_teams": list(ref.acl_teams),
                     "content_hash": fetched.content_hash,
                     "last_seen_at": text("now()"),

@@ -353,6 +353,113 @@ async def test_cache_hit_prevents_model_calls_even_when_source_looks_changed(
 
 
 @requires_db
+async def test_reupsert_heals_stale_identity_columns(session: AsyncSession) -> None:
+    """Task #30: a source_item row's repo/branch/path/external_id were only ever
+    SET at insert time — an on_conflict_do_update that skipped them left a row
+    inserted before a connector started stamping them (e.g. repo=NULL) stale
+    forever, even once the connector caught up. A genuine re-upsert (content
+    actually changed, so the ON CONFLICT branch runs) now heals every identity
+    column to the connector's CURRENT SourceRef. The healing is source_item-only:
+    the docify artifact this source produces is untouched (the generation-cache
+    hit on unchanged real content replays its SAME artifact id, no duplicate).
+    The alias miner (PR-38) separately reacts to the renamed path by minting a
+    new `alias_reference` phrase artifact/edge — expected, orthogonal behavior
+    (covered by its own tests), not a symptom of this fix, so this test does not
+    assert on it."""
+    uri = "https://github.com/o/r/blob/sha1/docs/stale.md"
+    ref_before = SourceRef(
+        source_type="github_doc",
+        source_uri=uri,
+        source_version="sha1",
+        repo=None,
+        branch=None,
+        path="docs/old-name.md",
+        external_id=None,
+    )
+    runner, *_ = _runner(session)
+    await runner.run(
+        [GitHubDocConnector(FakeBackend([ref_before], {uri: "Some prose to summarize.\n"}))]
+    )
+    await session.commit()
+
+    # Select individual COLUMNS (not the mapped SourceItem entity): with
+    # expire_on_commit=False an entity-level select would return the SAME cached
+    # identity-mapped object on a later re-select, masking the very update this
+    # test proves (the established idiom elsewhere in this file, e.g.
+    # test_first_build_processes_then_unchanged_build_skips_everything).
+    source_id_before, repo_before, branch_before, external_id_before = (
+        await session.execute(
+            select(
+                SourceItem.source_id, SourceItem.repo, SourceItem.branch, SourceItem.external_id
+            ).where(SourceItem.source_uri == uri)
+        )
+    ).one()
+    assert (repo_before, branch_before, external_id_before) == (None, None, None)
+    summary_ids_before = set(
+        (
+            await session.execute(
+                select(KnowledgeArtifact.artifact_id).where(
+                    KnowledgeArtifact.source_id == source_id_before,
+                    KnowledgeArtifact.artifact_type == "summary",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(summary_ids_before) == 1
+
+    # Force a genuine re-upsert (mirrors the retry idiom above): the stored
+    # content_hash no longer matches the real content, so _is_unchanged is False
+    # and _upsert_source_item's ON CONFLICT branch runs again — exactly as it
+    # would for a source whose content genuinely changed. The connector NOW
+    # stamps repo/branch/path/external_id, as it would after e.g. 08d5492.
+    await session.execute(update(SourceItem).values(content_hash="stale"))
+    await session.commit()
+    ref_after = ref_before.model_copy(
+        update={"repo": "o/r", "branch": "main", "path": "docs/new-name.md", "external_id": "42"}
+    )
+    runner2, *_ = _runner(session, "v-test.2")
+    await runner2.run(
+        [GitHubDocConnector(FakeBackend([ref_after], {uri: "Some prose to summarize.\n"}))]
+    )
+    await session.commit()
+
+    source_id_after, repo_after, branch_after, path_after, external_id_after = (
+        await session.execute(
+            select(
+                SourceItem.source_id,
+                SourceItem.repo,
+                SourceItem.branch,
+                SourceItem.path,
+                SourceItem.external_id,
+            ).where(SourceItem.source_uri == uri)
+        )
+    ).one()
+    assert source_id_after == source_id_before
+    assert repo_after == "o/r"
+    assert branch_after == "main"
+    assert path_after == "docs/new-name.md"
+    assert external_id_after == "42"
+
+    # The healing is identity-columns-only: the docify generation-cache hit (same
+    # real content) replays the SAME summary artifact id — no duplicate/rewritten row.
+    summary_ids_after = set(
+        (
+            await session.execute(
+                select(KnowledgeArtifact.artifact_id).where(
+                    KnowledgeArtifact.source_id == source_id_after,
+                    KnowledgeArtifact.artifact_type == "summary",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert summary_ids_after == summary_ids_before
+
+
+@requires_db
 async def test_one_source_failure_is_skipped_not_fatal_and_others_persist(
     session: AsyncSession,
 ) -> None:

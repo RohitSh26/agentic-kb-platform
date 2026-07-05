@@ -65,6 +65,16 @@ guess):
 History survives the rename: `prior_identity_id` chains the lineage and the old artifact stays a
 member of every prior version.
 
+## Single-builder advisory lock (build start, task #33)
+
+The guards below neutralize the *damage* two interleaved builders can do to one registry, but they
+do not stop the race from starting. Before it does anything, a build takes a Postgres
+session-level advisory lock (`pg_try_advisory_lock` on a fixed key derived from the constant string
+`agentic_kb_builder`), held on a dedicated connection for the whole build and released on exit
+(normal or crashed). A second builder that cannot acquire it aborts immediately with a structured
+`event=builder_lock_held` — it never blocks, queues, or races the first builder to see whether the
+guards below catch the collision after the fact.
+
 ## Invalidation pass (end of build, BEFORE activation)
 
 Version-scoped — never a physical DELETE of live rows that prior versions serve. The pass is
