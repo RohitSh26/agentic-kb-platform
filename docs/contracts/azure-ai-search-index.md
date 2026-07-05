@@ -25,7 +25,7 @@ Code authority: `services/kb-builder/src/agentic_kb_builder/indexing/search_docu
 | `doc_id` | string, key | `str(artifact_id)` — stable across rebuilds |
 | `artifact_id` | UUID | FK back to `knowledge_artifact` (the truth) |
 | `artifact_type` | string | concept / summary / chunk / source_backed_fact / code_symbol / commit / alias_reference |
-| `source_type` | string | github_code / github_doc / azure_wiki / ado_card |
+| `source_type` | string | github_code / github_doc / azure_wiki / ado_card / git_metadata |
 | `source_uri` | string | provenance pointer |
 | `title` | string? | |
 | `body_text` | string | the only servable text in the index |

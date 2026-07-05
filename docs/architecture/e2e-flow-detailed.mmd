@@ -46,7 +46,7 @@ flowchart TD
     subgraph OBS["observability"]
         LED[("retrieval ledger — every call:<br/>tokens · latency · denials · errors")]:::store
         LOGS["structured logs (all paths)"]:::shipped
-        TRACE["per-step traces → Postgres<br/>TraceSink port (ADR-0032) — no SaaS,<br/>Langfuse-swappable later"]:::planned
+        TRACE["per-step traces → Postgres<br/>TraceSink port (ADR-0032) — no SaaS,<br/>Langfuse-swappable later"]:::shipped
         DASH["cost/usage dashboard (ADR-0014)<br/>make dashboard — SHIPPED"]:::shipped
     end
     WRAP --> LED

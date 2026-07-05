@@ -1,5 +1,11 @@
 # Proposal — Phased Build Plan for the Tool-Design-First KB Architecture
 
+> **Status: superseded twice — first by `2026-07-02-v2-phased-build-plan.md` (v2, same day), then
+> by ADR-0030 (accepted 2026-07-02) which settled the execution-substrate question this plan and
+> its v2 successor were both built to validate (Anthropic Managed Agents, rejected).** Historical
+> design record — do not use for onboarding. Current references: ADR-0030, ADR-0031, ADR-0032,
+> `docs/contracts/`.
+
 ## Status
 
 Proposal, not an ADR. Task 4 of the 2026-07-02 ground-up-rebuild analysis. Companion document:

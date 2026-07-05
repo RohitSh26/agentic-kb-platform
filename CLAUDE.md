@@ -9,7 +9,8 @@ A cost-conscious, **Postgres-first**, **nightly-built** knowledge platform serve
 **remote MCP Context Broker** to human-approved orchestrator and subagent markdown files.
 
 The key pattern is **not** "many agents with KB access." It is **"many controlled specialists
-using one shared Evidence Pack governed by an MCP Context Broker."**
+sharing one governed Context Broker"** — budgeted `kb_search` first (ADR-0025), with the shared
+Evidence Pack as the optional governed path for citation-grade provenance.
 
 Full design: `docs/architecture/00-overview.md`. Decisions: `docs/adr/`. Build units: `docs/pr-briefs/`.
 

@@ -101,8 +101,10 @@ the documentation of the limit, never the limit itself.
 The renderings also declare the framework's composition in each host's **native fields**. The
 composition is fixed by the canon: the orchestrator invokes its build-lane specialists;
 specialists never invoke anyone. The four ADR-0030 panel reviewers are deliberately absent from
-the orchestrator's allowlists — they run only in the backend review workflow (GitHub Actions on
-PR open), never launched in-session.
+the orchestrator's allowlists — they run only in the ADR-0031 dev-gated review-panel draft engine
+(on-demand, via `scripts/run_review_panel_local.sh` / `uv run review-panel draft`; there is no
+GitHub Actions review workflow), never launched in-session, and the panel only ever produces a
+stored draft — it never posts to GitHub.
 
 For **team-added agents** the rule is structural, keyed to the `requires_human_approval` field:
 an agent whose canon does **not** set `requires_human_approval: true` is a specialist — OpenCode
@@ -205,10 +207,12 @@ header value found in the MCP configs must match one of the reference patterns a
    `test_the_checker_accepts_a_team_added_agent` extensibility path, not a special case. The
    ADR-0030 follow-up wiring the orchestrator has since landed: `adr_writer` and `infra_code` are
    on the orchestrator's task/agents allowlists as build-lane specialists, while the four panel
-   reviewers deliberately are not — they run only in the backend review workflow (GitHub Actions
-   on PR open, LangGraph fan-out reconciled by `code_reviewer_agent`), so per the "otherwise it
-   simply is not reachable — a valid choice" rule above they stay unreachable from the framework
-   orchestrator by design.
+   reviewers deliberately are not — they run only in the ADR-0031 dev-gated review-panel draft
+   engine (on-demand, via `scripts/run_review_panel_local.sh` / `uv run review-panel draft`; a
+   LangGraph fan-out over the four lenses, joined by `services/review-panel`'s `reconcile()` step
+   — there is no GitHub Actions review workflow and the panel never auto-posts, only drafts), so
+   per the "otherwise it simply is not reachable — a valid choice" rule above they stay unreachable
+   from the framework orchestrator by design.
 
 ## Versioning
 

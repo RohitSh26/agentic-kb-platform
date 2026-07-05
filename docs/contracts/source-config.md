@@ -164,6 +164,12 @@ version: 1
 defaults:
   acl_teams: []
 
+# Optional. git_metadata mines the LOCAL --workspace's own git history (no sources: entry
+# of its own). Omit this block when every enabled github_code/github_doc source below
+# shares one repo — that shared value is derived automatically (see above).
+git_metadata:
+  repo: RohitSh26/agentic-kb-platform
+
 sources:
   - name: platform-code
     type: github_code
@@ -183,6 +189,9 @@ sources:
     include:
       - "docs/**/*.md"
       - "README.md"
+    auth:
+      # auth.token_env is OPTIONAL in the schema — omit it ONLY for a PUBLIC repo.
+      token_env: GITHUB_TOKEN
 
   - name: platform-wiki
     type: azure_wiki
@@ -231,14 +240,17 @@ sources:
 - `FilteredFetchBackend` applies `include`/`exclude` to `list_sources()` output — an excluded path
   is never fetched, hashed, or stored.
 - `acl_teams` flows `sources.yaml` → `SourceRef` → `source_item.acl_teams` on insert **and**
-  update. (Propagation onto derived `knowledge_artifact` rows is a recorded follow-up; until it
-  lands, artifact-level ACLs remain org-public.)
+  update, and propagates onto every derived `knowledge_artifact` row at write time — the source's
+  ACL, never widened, never invented from model output (`docify/write.py:41`, `graphify/write.py:50`;
+  ADR-0023 §3). This landed; it is no longer a follow-up.
 - Structured log on load: `event=source_config_loaded sources=N github_code=N ...` — never a token
   value, never a token env-var's *value*.
 
 ## What this contract does not cover
 
-The real GitHub/Azure DevOps API `FetchBackend` implementations (recorded follow-up). The factory
-seam `connectors_from_config(config, backend_factory, *, authenticates=..., locally_fetchable_only=...)`
-is where they plug in;
-this schema is deliberately sufficient to drive them when they land.
+The production `FetchBackend` implementations for all four source types (`github_rest.py`,
+`ado_wiki_backend.py`, `ado_work_item_backend.py`, wired via `production_factory.py`) have
+shipped — this is no longer a follow-up. The remaining connector backlog item is **managed-identity
+auth**: V1 authenticates every remote source with a PAT (`auth.token_env`) only; swapping in managed
+identity is a future change behind the same `connectors_from_config(config, backend_factory, *,
+authenticates=..., locally_fetchable_only=...)` factory seam, with no schema change expected.

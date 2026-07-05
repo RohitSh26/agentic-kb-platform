@@ -43,7 +43,26 @@ and the migrations. Summary:
 | `embedding_cache` | Embedding call gate, keyed `(artifact_id, text_hash, embedding_model)`. The vector itself is stored as a float array (`ARRAY(double precision)` — no pgvector in V1), so the Search index rebuilds without re-embedding. | kb-builder |
 | `kb_build_run` | One row per nightly build: `kb_version`, `build_seq` (monotonic BIGINT, UNIQUE — the interval-membership cutoff), `status` (`running`/`completed`/`failed`/`validation_failed`/`active`/`superseded`), counters, timestamps. | kb-builder |
 | `retrieval_event` | Ledger: one row per MCP retrieval call — `run_id`, `context_pack_id`, `agent_name`, `tool_name`, `status`, `query_text`/`normalized_query`, `retrieval_profile`, `kb_version`, `source_filters`, `returned_artifact_ids`, `reused_evidence_ids`, `new_evidence_ids`, `cache_hit`, `semantic_reuse`, `tokens_returned`, `latency_ms`, `created_at`, `details` (nullable JSONB — per-tool observability payload; see below). | **mcp-server** |
+| `relationship_candidate` | Phase-3B audit/measurement row: a cross-domain artifact pair the cheap generator flagged for the LLM judge (`from_artifact_id`, `to_artifact_id`, `signals` JSONB, `candidate_recall_bucket`, `kb_version` label). Migration `0013`. Never served through MCP — no membership columns. | kb-builder |
+| `relationship_judgment_cache` | Cache gate for the phase-3B LLM judge, keyed `(hash_a, hash_b, relation_schema_version, prompt_version, model_version)`; stores the verdict (`relation_type`, `trust_bucket`, `supporting_quote`, `reason`). Migration `0014`. Cache-only — never served. | kb-builder |
+| `entailment_cache` | Cache gate for the L3 verifier's LLM-entailment check, keyed `(claim_hash, evidence_ids_hash, prompt_version, model_version)`; stores `entailed` (bool) + `reason` only — no claim/evidence text. Migration `0015`. Schema owned by kb-builder; read/written at runtime by **mcp-server**'s L3 verifier via raw SQL (never migrations) — same split as `retrieval_event`. | kb-builder (schema) / mcp-server (read-write) |
+| `doc_extraction_output` | Crash-durable model-output cache (ADR-0027): the raw `DocExtractionResult` JSON keyed only by `cache_key` (content_hash + prompt_version + model_name + model_params_hash + output_schema_version) — no FK into build-scoped artifacts, so it survives a build rollback. Migration `0018`. | kb-builder |
+| `embedding_output` | Crash-durable embedding-vector cache (ADR-0027), keyed `(text_hash, embedding_model)` only — the vector is a pure function of text + model. Migration `0018`. | kb-builder |
 | `trace_span` | Per-step tracing (ADR-0032): `span_id`, `trace_id`, `parent_span_id`, `name`, `service`, `started_at`/`ended_at`, `status` (`ok`/`error`), `attributes` (nullable JSONB, aggregate-only), `created_at`. Migration `0021_trace_span`. Full shape and the `TraceSink` port: `tracing.md`. | **mcp-server** |
+
+## Views (ADR-0014 dashboard, migration `0020`)
+
+Four read-only, aggregate-only views over `retrieval_event` and `kb_build_run` — pure
+projections (no tables, no columns, no data); downgrade drops them and loses nothing
+(invariant 1). They read ledger metadata only, never `query_text` / `normalized_query`
+/ `body_text`. Full shape and the dashboard that reads them: `observability-dashboard.md`.
+
+| View | Purpose |
+|---|---|
+| `v_retrieval_health` | Daily approved/reused/denied/needs_human_approval/error counts, error rate, evidence-reuse rate, semantic-cache-hit rate, cache-hit rate, and the `kb_search` zero/thin-result rate (the ADR-0025 KB-gap proxy). |
+| `v_token_economics` | Daily runs, distinct agents, events, tokens charged, tokens per run, retrieval calls per agent. |
+| `v_build_health` | Per-build duration, sources seen/changed, artifacts created/updated/deleted, LLM/embedding call counts (and per-changed-source ratios), extractor failures, failed gate, active-build age. |
+| `v_budget_adherence` | Per-run/per-agent token and follow-up-request usage against the `.claude/rules/token-budgets.md` literals, flagging over-budget runs/agents. |
 
 ## Columns mcp-server depends on (pinned by its contract tests)
 
@@ -98,6 +117,8 @@ never blocks on observability. Shape is per `tool_name`:
 
 | `tool_name` | Shape |
 |---|---|
+| `kb_search` | `{session, calls_used, tokens_used, max_requests, max_tokens}` — the primary retrieval path's per-session budget window (`kb_search.py:135`). `run_id` is the `NO_RUN_SENTINEL` (`"-"`); it is session-, not run-, scoped. |
+| `get_task_context` | `{entities, ambiguous_candidates, callers, callees, tests, conventions, similar_prior_changes, open_questions, calls_used, retried, confidence_floor, node_latency_ms, tracing}` — the LangGraph backend's per-node counts + timing (`task_context.py:474`). `run_id` is also `NO_RUN_SENTINEL`. |
 | `context.create_pack` | `{task, candidates_considered, cards:[{artifact_id,title,score,card_type}], budget:{allowed,used,remaining}}` |
 | `context.expand` | `{seed_artifact_ids, tiers:["EXTRACTED",...], edge_types_followed:{<edge_type>:n,...}, cards_added, truncated, tokens}` |
 | `context.open_evidence` | `{evidence_id, level, injection_flagged, tokens}` |

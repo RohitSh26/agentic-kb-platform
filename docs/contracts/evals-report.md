@@ -4,6 +4,9 @@ Version: 1.0.0. Producer: `evals/run.py`. Consumers: the `eval-runner` build sub
 `token-budget-eval` skill. Metric names are pinned to docs/architecture/00-overview.md §13 —
 renaming one is a breaking change to this contract and to both consumers.
 
+Run the full suite (retrieval cases + agent-task cases + this report) with `evals/run_all.py`
+(`make eval-all` from the repo root); it is what produces the checked-in `evals/report_all.md`.
+
 ## Metrics
 
 Every report and baseline carries exactly these eleven metrics, each as

@@ -1,5 +1,10 @@
 # Proposal v2 — Phased Build Plan for the World-Class Platform
 
+> **Status: superseded by ADR-0030 (accepted 2026-07-02).** Historical design record — do not use
+> for onboarding. Phases 0 and 3 below are built on provisioning an Anthropic Managed Agents
+> execution substrate, which ADR-0030 evaluated and explicitly rejected (see its Alternatives
+> rejected). Current references: ADR-0030, ADR-0031, ADR-0032, `docs/contracts/`.
+
 ## Status
 
 Proposal, not an ADR. Supersedes `2026-07-02-phased-build-plan.md` (v1). Companion:

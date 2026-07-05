@@ -385,3 +385,13 @@ overwritten by a later run with different numbers (a new dated file is added ins
 
 No variable is required to run `evals/run_all.py` itself — every tier it can't satisfy skips with
 the reason above, and the run still exits `0`.
+
+## 8. Diagrams
+
+Two sequence diagrams in this directory illustrate flows this document scores: `seq-task-flow.mmd`
+(the `get_task_context` resolve → blast-radius → conventions → similar-changes → synthesize path
+T2's latency probe and T3's A/B harness exercise) and `seq-review-flow.mmd` (the review-panel
+fan-out/reconcile/draft path T4's injection and dev-gate fixtures protect).
+`e2e-flow-detailed.mmd` is the whole-pipeline diagram (build → registry → MCP tools → host
+surfaces → review draft engine); it is broader than this document's scope and is the natural
+companion to `00-overview.md`.

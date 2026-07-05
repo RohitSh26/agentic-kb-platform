@@ -1,8 +1,14 @@
 # Contract: Evidence Pack
 
-> The unit of context the MCP Context Broker serves to agents. One pack per run,
-> shared by all subagents — "many controlled specialists using one shared
-> Evidence Pack," not many agents with KB access.
+> **ADR-0025 status note:** the Evidence Pack is no longer the mandatory retrieval path. Agents
+> use the budgeted `kb_search` tool first (with native file reads as fallback); `create_pack →
+> open_evidence → verify_answer` is demoted-but-registered — an optional, still-governed path for
+> when citation-grade provenance is required. Everything below describes that governed path, which
+> this contract still pins byte-for-byte.
+
+> The unit of context the MCP Context Broker serves to agents when the governed path is used. One
+> pack per run, shared by all subagents on that path — "many controlled specialists sharing one
+> governed Context Broker," not many agents with unrestricted KB access.
 
 Code authority: `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`.
 

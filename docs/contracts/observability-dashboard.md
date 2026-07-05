@@ -10,6 +10,10 @@ raw evidence content. The dashboard never resolves an id to content and never se
 Views are pure projections over `retrieval_event` and `kb_build_run` — dropping them loses nothing
 (invariant 1). Renaming a view or a column below is a breaking change to this contract.
 
+Per-step traces (ADR-0032) are a separate, complementary observability surface — the `trace_span`
+table, its `TraceSink` port, and how to query it are documented in `tracing.md`; this contract's
+views do not read `trace_span`.
+
 ## Pinned metric names
 
 Columns that share a name with `evals/harness/metrics.py` / `golden.py` share the **definition**

@@ -2,9 +2,11 @@
 
 ## Status
 
-Proposed (2026-06-22). Builds on the Postgres knowledge graph (ADR-0002, `knowledge_edge`) and the
-existing broker ranker (`context_broker/retrieval.py`, PR-33 temporal weighting). First increment
-implemented by PR-36; query-time personalized PageRank is a follow-up.
+Accepted and Implemented (2026-06-22). Builds on the Postgres knowledge graph (ADR-0002,
+`knowledge_edge`) and the existing broker ranker (`context_broker/retrieval.py`, PR-33 temporal
+weighting). First increment shipped by PR-36: migration `0019` (`knowledge_artifact.centrality_score`)
+and the deterministic build-time PageRank step folded into the broker's `_rank_key`. Query-time
+personalized PageRank (Increment 2) remains a follow-up.
 
 ## Context
 

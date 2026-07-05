@@ -1,5 +1,11 @@
 # Proposal — Tool-Design-First KB Architecture
 
+> **Status: superseded by ADR-0030 and the contracts that shipped from it.** Historical design
+> record — do not use for onboarding. The alias design here diverged from what shipped: there is no
+> dedicated alias table, no `alias_text_embedding`, no `confirm_alias` tool. Current references for
+> the alias index and tool surface: `docs/contracts/alias-reference.md` and
+> `docs/contracts/mcp-tools-contract.md`.
+
 ## Status
 
 Proposal, not an ADR. Requires an ADR before any part of this is adopted for real (per

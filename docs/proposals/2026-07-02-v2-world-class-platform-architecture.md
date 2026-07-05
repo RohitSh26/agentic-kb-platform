@@ -1,5 +1,16 @@
 # Proposal v2 — World-Class Multi-Agent Developer Platform
 
+> **Status: partially superseded by ADR-0031 (2026-07-03) and ADR-0032 (2026-07-05), on top of the
+> ADR-0030 acceptance already recorded below.** Historical design record — do not use for
+> onboarding. The review-panel posting model this document assumes (see the inline notes at the
+> review-panel paragraph and the LangGraph §2 bullet below) is superseded by ADR-0031: the panel
+> drafts and never auto-posts, and there is no GitHub Actions review workflow. The LangSmith
+> commitment this document assumes (see the inline notes at the comparison table and the
+> LangGraph/LangSmith section below) is superseded by ADR-0032: tracing is Postgres-first behind a
+> `TraceSink` port; LangSmith was never activated. The "What's still open" section at the bottom is
+> now fully closed — PR-38/39/40 all shipped. Current references: ADR-0030, ADR-0031, ADR-0032,
+> `docs/contracts/`.
+
 ## Status
 
 **Architecture companion to ADR-0030** (accepted 2026-07-02), no longer a freestanding proposal
@@ -53,7 +64,7 @@ is layering on top of it (PR-38/39), not reconsidering it.
 |---|---|---|
 | Two narrow owned processes (build pipeline, one review agent) | Full-SDLC scope via a twelve-role roster — but only **one** owned interactive-adjacent process (the review panel); everything else runs on host surfaces we don't control | The owner's scope (hundreds of developers, full SDLC) collided with a verified fact: we do not own any host's agent loop (ADR-0030 Context) |
 | LangGraph: partial-adopt, hedged, one HITL gate only | **Committed** (ADR-0030 §2–3): LangGraph orchestrates the backend graph behind `get_task_context`/`kb_search` and the review panel — self-hosted OSS, no Platform subscription | Both owned workflows are bounded jobs with genuine fan-out/join structure. The bare-OSS distributed-coordination gap the research flagged applies to a long-lived concurrent substrate — a thing ADR-0030 explicitly declines to build |
-| LangSmith: don't adopt (data-egress, cost) | **Committed from day one** on both owned graphs, env-gated; cost budget-gated against measured trace volume, not assumed | Uniform visibility into the slow or low-confidence step across all three developer surfaces; suites must pass with no `LANGSMITH_*` env set |
+| LangSmith: don't adopt (data-egress, cost) | **Committed from day one** on both owned graphs, env-gated; cost budget-gated against measured trace volume, not assumed *(superseded by ADR-0032: withdrawn before activation — Postgres-first tracing behind a `TraceSink` port instead)* | Uniform visibility into the slow or low-confidence step across all three developer surfaces; suites must pass with no `LANGSMITH_*` env set |
 | Retrieval: alias index + blast radius, unranked against alternatives | Same core design, validated against Cursor's production pattern: fast structural graph primary, semantic search fallback only | Cursor's dual-layer search cuts large-monorepo query latency from 20–30s to under 1s using exactly this shape |
 | No explicit security requirement for agent boundaries | **Explicit, load-bearing requirement** with a concrete test gate (PR-40 fixtures) | ChatDev/MetaGPT/AgentVerse all showed framework-specific prompt-injection vulnerabilities at 45–93% attack success (2026 IMBIA evaluation); this platform ingests PRs, tickets, and issue text |
 | No execution/isolation model specified | v2's first draft recommended Anthropic Managed Agents; **rejected in ADR-0030**. Interactive experience is delivered exclusively through each host's native mechanism, fed by our MCP tools | Building on a hosted Anthropic runtime would have produced a parallel experience disconnected from the tools developers actually use daily |
@@ -91,6 +102,11 @@ Actions job on PR open with LangGraph fan-out/join, for a structural reason, not
 parallel panel cannot fit the cloud coding agent's one-bounded-task session shape. The
 panel-over-generalist design is measured, not aesthetic — Qodo Merge's parallel specialist ensemble
 posted the best F1 (60.1%) in an independent benchmark against single-reviewer tools.
+
+*(Superseded by ADR-0031: there is no GitHub Actions review workflow. The panel runs on-demand from
+a developer's own session — `scripts/run_review_panel_local.sh` / `uv run review-panel draft` —
+fans out and reconciles exactly as described, but stores a draft for the developer to read/revise
+and publish themselves; it never posts to GitHub on its own.)*
 
 **What this does NOT change**: the nightly build pipeline (kb-builder) stays a plain, owned,
 scheduled process, and the governance layer (Postgres truth, ACL, retrieval ledger) stays entirely
@@ -150,6 +166,8 @@ before the resolver ever ran on it).
    synthesizer, one posted review — on GitHub Actions, with a Postgres checkpointer in a dedicated
    `review_panel` schema (`thread_id = <repo>#<pr>@<head_sha>`). Checkpointing is the point: a
    killed CI runner resumes without re-running all four reviews, and a same-sha re-run is a no-op.
+   *(Superseded by ADR-0031: no GitHub Actions trigger — the graph runs on-demand from the
+   developer's session and the join step stores a draft, never posts.)*
 
 Both are bounded jobs, not a long-lived concurrent service, so **self-hosted OSS LangGraph is the
 right shape — no LangGraph Platform subscription**. The distributed-coordination gap in bare OSS
@@ -160,6 +178,10 @@ ADR-0030 explicitly decided not to build.
 insufficient. Env-gated: every suite passes with no `LANGSMITH_*` env set. Cost is budget-gated
 against real trace counts once both graphs are running (the scale research put overages at
 $1.2K–5K/month at 500K–2M traces — measure, don't assume the free tier holds).
+
+*(Superseded by ADR-0032: this commitment is withdrawn before ever activating. LangSmith's tracing
+service is a paid hosted SaaS the owner explicitly ruled out ("I do not want a system where I have
+to pay just for traces"); traces live in Postgres behind a `TraceSink` port instead.)*
 
 **The deliberate exception (ADR-0030 §5): the nightly build pipeline keeps its own cache, not
 LangGraph's checkpointer.** kb-builder already has a working, crash-durable,

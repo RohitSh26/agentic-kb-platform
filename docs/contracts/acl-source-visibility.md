@@ -27,9 +27,11 @@ see (`L0_acl_visible`).
 
 ## Enforcement points
 
-1. **Retrieval** (`create_pack`/`read_pack`/`open_evidence`): filter candidates by the requester's
-   team set before ranking and before returning. Already enforced; this contract makes the
-   propagation rules explicit.
+1. **Retrieval** (`kb_search`, `get_task_context`, and the demoted-but-registered
+   `create_pack`/`read_pack`/`open_evidence` path): filter candidates by the requester's team set
+   before ranking and before returning. All retrieval tools share one query layer, so this
+   enforcement holds uniformly across the primary (`kb_search`/`get_task_context`) and governed
+   (pack) paths alike. Already enforced; this contract makes the propagation rules explicit.
 2. **Traversal** (`graph.get_neighbors`): a neighbour is returned only if its artifact is visible to
    the requester AND the edge's intersection ACL admits the requester. Trust filtering and ACL
    filtering compose (both must pass).

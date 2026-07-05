@@ -13,8 +13,12 @@ it, (b) its trust class, and (c) whether it may support a final cited claim. The
 
 ## Allowed edge types
 
-`edge_type` is a closed vocabulary. Producers MUST reject any value not in this table; the broker
-MUST treat an unknown `edge_type` as `AMBIGUOUS` (excluded from default traversal).
+`edge_type` is a closed vocabulary. Producers MUST reject any value not in this table **or** in the
+"producer aliases" list immediately below it; the broker MUST treat an unknown `edge_type` as
+`AMBIGUOUS` (excluded from default traversal). The enforcement-side copy of this vocabulary is
+`ALLOWED_EDGE_TYPES` in `publish_gates.py` (the edge-evidence-integrity gate) — a kb-builder
+contract test (`test_every_contract_relation_is_accepted_by_the_edge_type_gate`) parses this table
+and asserts every value here is in that set, so the two can never silently drift apart.
 
 | edge_type     | direction (from → to)        | required evidence                                                              | default trust class | can support a claim? |
 |---------------|------------------------------|--------------------------------------------------------------------------------|---------------------|----------------------|
@@ -28,6 +32,16 @@ MUST treat an unknown `edge_type` as `AMBIGUOUS` (excluded from default traversa
 | `implements`  | code/PR → work-item          | deterministic work-item-ID / PR / commit / branch reference                    | `EXTRACTED`         | yes                  |
 | `mentions`    | artifact → artifact          | verbatim identifier match (name/path/work-item-ID) found in source text        | `EXTRACTED`         | yes                  |
 | `aliases`     | alias_reference → artifact   | the normalized alias phrase + the deterministic mining source(s) (commit SHA / doc path) recorded in `evidence` (see PR-38 / `alias-reference.md`) | `EXTRACTED`         | **no — routing hint only** |
+
+**Producer aliases in use today** — the deterministic producers write these literal `edge_type`
+values, each a synonym for one row above; the gate's `ALLOWED_EDGE_TYPES` accepts both spellings
+and the broker treats them identically to the row they alias:
+
+| literal value | aliases | emitted by |
+|---|---|---|
+| `exposed_as` | `exposes` | Graphify (`graphify/write.py`) — a symbol's route/endpoint binding |
+| `requests` | `documents` | the deterministic linker (`linker/deterministic.py`), when the documenting artifact's source is a work-item card (`CARD_SOURCE_TYPES`) rather than prose — "this card requests/relates-to this concept" |
+| `uses`, `references` | (no single-row equivalent — Graphify's richer cross-file symbol relations: a symbol uses/type-references another) | Graphify whole-tree extraction, alongside `inherits` |
 
 **Banned:** `related_to` and any other generic catch-all. If a relationship cannot be expressed as
 one of the above with its required evidence, it is **not created** — it becomes a candidate
@@ -63,10 +77,10 @@ mining rules: `docs/contracts/alias-reference.md`.
 ## Required edge fields (maps to `knowledge_edge`)
 
 Every edge row MUST carry: `edge_type` (from this table), `from_artifact_id`, `to_artifact_id`,
-`trust_class`, `source` (mechanism: `ast` | `linker_deterministic` | `llm_judge` |
-`alias_miner`), `relation_schema_version`, `kb_version`, and an evidence pointer (artifact id +
-source span, or the deterministic match key). Edges without a valid evidence pointer MUST NOT be
-written.
+`trust_class`, `source` (mechanism: `graphify` | `linker` | `llm_judge` |
+`alias_miner` — the literal producer names the code writes today), `relation_schema_version`,
+`kb_version`, and an evidence pointer (artifact id + source span, or the deterministic match key).
+Edges without a valid evidence pointer MUST NOT be written.
 
 ## Consumption (broker)
 

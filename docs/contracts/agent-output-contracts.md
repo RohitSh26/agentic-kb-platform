@@ -36,10 +36,11 @@ Python authority: `services/mcp-server/src/agentic_mcp_server/agent_output_schem
 | `phased_pr_plan_v1` | `agents/orchestrator.md` | `goal`, `phases[]` (name, goal, `changes[]` of evidenced claims, depends_on), `open_questions[]` |
 | `implementation_plan_v1` | `agents/implementation.md` | `task`, `steps[]` (description, target_artifacts, `evidence_ids`), `risks[]`, `open_questions[]` |
 | `test_plan_v1` | `agents/test_layer.md` | `scope`, `test_cases[]` (name, expectation, `evidence_ids`), `regression_risks[]`, `open_questions[]` |
-| `review_findings_v1` | `agents/code_reviewer.md` | `verdict` ∈ approve\|request_changes, `findings[]` (severity ∈ blocker\|major\|minor\|note, finding, `evidence_ids`), `open_questions[]` |
+| `review_findings_v1` | `agents/code_reviewer.md` + the four ADR-0030 review-panel lenses (`agents/bug_reviewer.md`, `agents/security_reviewer.md`, `agents/quality_reviewer.md`, `agents/test_coverage_reviewer.md`) | `verdict` ∈ approve\|request_changes, `findings[]` (severity ∈ blocker\|major\|minor\|note, finding, `evidence_ids`), `open_questions[]` |
 | `delivery_plan_v1` | `agents/delivery_planner.md` | `rollout_steps[]` (description, `evidence_ids`), `monitoring[]`, `risks[]`, `open_questions[]` |
 | `pr_plan_v1` | `agents/pr_planner.md` | `prs[]` (title, scope, depends_on, `evidence_ids`), `open_questions[]` |
 | `adr_draft_v1` | `agents/adr_writer.md` | `title`, `status` (always `proposed` — accepting an ADR is a human act), `context[]` (evidenced claims), `decision`, `consequences[]` (evidenced claims), `alternatives_rejected[]` (alternative, why_rejected, `evidence_ids`), `follow_ups[]`, `open_questions[]` |
+| `implementation_plan_v1` (also produced by) | `agents/infra_code.md` | same shape as the `implementation.md` row above — Bicep/Terraform infra changes plan the same way code changes do |
 
 Plans and step lists require at least one entry; finding/risk/monitoring
 lists may be empty. `open_questions` is free text by design — it is the only
@@ -47,8 +48,12 @@ place an agent may state something without evidence.
 
 ## Manifest linkage
 
-Each manifest in `agents/` declares `allowed_tools` (context.\*/ledger.\* only —
-no unrestricted KB search), `max_context_calls`, `max_context_tokens`,
+Each manifest in `agents/` declares `allowed_tools`. Per ADR-0025 (KB-first,
+file-fallback), every one of the twelve manifests grants the budgeted `kb_search`
+tool plus native tools (`read_file`, `read_full`, `list_files`, `grep`, `edit_file`
+as applicable) — none declares `context.*` or `ledger.*`; those broker tools are
+demoted-but-registered (`evidence-pack-contract.md`), not what agent manifests use.
+Each manifest also declares `max_context_calls`, `max_context_tokens`,
 `requires_evidence_ids: true`, and an `output_schema` key that must exist in
 `AGENT_OUTPUT_SCHEMAS`. Manifest budgets must match
 `.claude/rules/token-budgets.md`; the broker enforces them server-side

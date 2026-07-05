@@ -2,9 +2,16 @@
 
 ## Status
 
-Proposed (2026-06-22). Strengthens architecture invariant 4 (every model call is cache-gated) by
-making the gate **crash-durable**. Implemented by PR-35. Does **not** change the atomic-activation
-model (ADR-0013): a `kb_version` still goes active all-or-nothing.
+**Superseded in part by ADR-0029 (2026-06-23)** for the atomic-write stance this ADR assumed (a
+single end-of-build transaction holding all artifact writes) — ADR-0029 replaces that with
+incremental per-source commits. This ADR's core contribution, the durable content-hash-keyed
+model-output cache, is unaffected and remains exactly as designed; atomic *activation* (ADR-0013)
+is unchanged by either ADR.
+
+Accepted and Implemented (2026-06-22). Strengthens architecture invariant 4 (every model call is
+cache-gated) by making the gate **crash-durable**. Shipped by PR-35: migration `0018` (the
+`doc_extraction_output` and `embedding_output` tables) and the side-commit cache writer wired to
+docify + embeddings.
 
 ## Context
 

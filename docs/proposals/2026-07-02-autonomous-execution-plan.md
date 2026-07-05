@@ -1,5 +1,12 @@
 # Autonomous Execution Plan — steering doc for the 2026-07-02 rebuild
 
+> **Status: completed 2026-07-03.** Historical execution record — every acceptance criterion
+> (A1–A13) closed out, per the "Post-completion notes" below. Not a living plan; do not use for
+> onboarding. LangSmith mentions (A9, and the workstream/eval-system references to it) are mooted
+> by ADR-0032 (2026-07-05): the LangSmith commitment was withdrawn before ever activating, in favor
+> of Postgres-first tracing behind a `TraceSink` port. Current references: ADR-0030, ADR-0031,
+> ADR-0032, `docs/contracts/`.
+
 ## The goal (owner's words, distilled)
 
 A developer opens VS Code, Copilot CLI, or OpenCode CLI, types a question or a task, and gets a
