@@ -268,14 +268,33 @@ explicitly rather than reading as an apology.
   `run.py` (T1's own runner) is intentionally **left untouched** — it is still the tool
   `docs/contracts/evals-report.md` and the `eval-runner` subagent read directly; `run_all.py`
   is a layer above it, not a replacement.
-- **Every I/O seam is injectable, for testability.** Every `run_tN` function accepts an explicit
-  `database_url`/`env`/`runner` override (defaulting to reading `os.environ` / `subprocess.run`).
-  This is what makes skip-with-reason behavior and output-parsing logic testable without a real
-  database, subprocess, or LLM call (`evals/tests/test_tiers.py`).
-- **Environment detection, not configuration.** There is no `--database-url` flag: the runner reads
-  `TEST_DATABASE_URL` (T1), `DATABASE_URL` (T2/T3), and `LLM_API_KEY`/`GROQ_API_KEY` (T3) from the
-  environment, exactly as `run.py`, `eval_alias_resolution.py`, and `eval_task_context.py` already
-  do — one fewer thing to keep in sync.
+- **Every I/O seam is injectable, for testability.** Every `run_tN` function takes explicit
+  `database_url`/`env`/`runner` parameters (`runner` defaults to `subprocess.run`; the others have
+  no environment fallback at all — next bullet). This is what makes skip-with-reason behavior and
+  output-parsing logic testable without a real database, subprocess, or LLM call
+  (`evals/tests/test_tiers.py`).
+- **Environment detection happens exactly once, in `run_all.run()`; tier functions never read
+  `os.environ`.** There is no `--database-url` flag: the runner reads `TEST_DATABASE_URL` (T1),
+  `DATABASE_URL` (T2/T3), and `LLM_API_KEY`/`GROQ_API_KEY` (T3) at the top and passes explicit
+  values down. This split is load-bearing, learned from a real incident: the first version let a
+  tier function fall back to `os.environ` when its parameter was `None`, so "None = absent" (what
+  the skip tests meant) and "None = read the env" (what the code did) diverged — and since T1
+  spawns evals' own pytest suite with `TEST_DATABASE_URL` injected, a skip-behavior test inside
+  that child executed T1 for real and spawned pytest again: a fork bomb (observed 2026-07-05
+  during this feature's own verification, one new pytest generation every ~6 s until killed).
+  Two guarantees now pin the fix (`test_tiers.py`, "ambient environment" section): tier functions
+  are pure with respect to the environment, and T1's pytest child carries
+  `EVAL_RUN_ALL_INNER=1` (`harness.tiers.INNER_PYTEST_GUARD`), under which
+  `tests/test_run_all.py` skips itself — the outer `run_all` execution is the coverage for what
+  those tests pin, so even a future regression cannot recurse.
+- **T1 wants an exclusive registry.** `run.py` and the DB-backed evals tests seed and DELETE the
+  registry they point at; the shared local `agentic_kb_test` is also used by the services' own
+  test suites (`run.py`'s comment: "the registry is shared with the services' test suites").
+  Running T1 while a sibling suite writes the same registry can fail cleanup with an FK violation
+  (observed once during verification: a concurrent commit landing between cleanup's
+  `DELETE FROM knowledge_artifact` and `DELETE FROM source_item`). When sibling workstreams are
+  active, point `TEST_DATABASE_URL` at a dedicated migrated database (`createdb` + kb-builder's
+  `alembic upgrade head`) instead of the shared one.
 - **Parsing is separate from execution.** `harness/tier_parsers.py` holds the pure
   stdout/JSON-parsing functions (`parse_alias_output`, `parse_task_context_ab_output`,
   `parse_run_py_report`); `harness/tiers.py` holds the subprocess/DB glue. The parsing logic is the

@@ -5,8 +5,15 @@ forces every credential/DB env var OFF (monkeypatch) so T1/T2/T3 deterministical
 real subprocess, database, or LLM call ever happens here — T0 is off by default (--with-gates not
 passed), and T4 is pure. This keeps the test hermetic regardless of the ambient environment (e.g.
 TEST_DATABASE_URL exported by `make test-evals`).
+
+This MODULE skips itself under the T1 inner-pytest guard (harness.tiers.INNER_PYTEST_GUARD):
+when run_all.py's T1 spawns evals' pytest suite, re-running the runner's own tests inside that
+child could recurse into another T1 pytest spawn (the 2026-07-05 fork bomb — see the
+harness.tiers module docstring). The outer run_all execution is itself the coverage for what
+these tests pin, so nothing is lost by the skip.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -14,6 +21,13 @@ import pytest
 import run_all
 from harness.consolidated_report import render_markdown
 from harness.tier_result import CheckResult, TierResult
+from harness.tiers import INNER_PYTEST_GUARD
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get(INNER_PYTEST_GUARD) == "1",
+    reason="running inside run_all.py's own T1 pytest spawn — the outer run covers these; "
+    "re-running them here could recurse (see harness.tiers docstring)",
+)
 
 
 def test_default_tiers_is_all_five() -> None:
@@ -47,7 +61,7 @@ def test_with_gates_and_out_and_t3_full_flags() -> None:
     assert args.out == Path("/tmp/x.md")
 
 
-def test_run_only_executes_the_requested_tiers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_only_executes_the_requested_tiers() -> None:
     # t4 is pure and always available; restricting --tiers to it alone must produce exactly
     # one TierResult, proving the flag actually filters (not just decoration).
     args = run_all.build_parser().parse_args(["--tiers", "t4"])

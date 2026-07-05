@@ -1,6 +1,10 @@
 """Tier-execution glue (harness.tiers): skip-with-reason when a precondition is missing, and
 correct CheckResult translation when a (faked) subprocess/probe actually runs. No real subprocess,
 database, or LLM call happens in this file — every I/O seam is injected.
+
+The "ambient environment" regression tests at the bottom pin the 2026-07-05 fork-bomb fix: a tier
+function given database_url=None must SKIP — never fall back to os.environ — even when the
+matching variable IS set in the ambient environment (harness.tiers module docstring, rule 1).
 """
 
 import json
@@ -8,8 +12,10 @@ import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+import pytest
+
 from harness.task_context_latency import LatencyResult
-from harness.tiers import run_t0, run_t1, run_t2, run_t3, run_t4
+from harness.tiers import INNER_PYTEST_GUARD, run_t0, run_t1, run_t2, run_t3, run_t4
 
 EVALS_DIR = Path(__file__).resolve().parent.parent
 
@@ -223,3 +229,53 @@ def test_t4_is_a_documented_skip_never_a_failure() -> None:
     (check,) = tier.checks
     assert "ADR-0008" in (check.reason or "")
     assert check.metrics  # the file inventory is surfaced, not just a bare reason
+
+
+# ------------------------------------------------- ambient environment (fork-bomb regression)
+def _exploding_runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+    raise AssertionError(
+        "a tier with database_url=None must never spawn a subprocess "
+        "(2026-07-05 fork bomb: None once meant 'read os.environ')"
+    )
+
+
+def test_t1_with_no_database_url_never_reads_the_ambient_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_DATABASE_URL", "postgresql+asyncpg://ambient/must-be-ignored")
+    tier = run_t1(EVALS_DIR, database_url=None, runner=_exploding_runner)
+    assert tier.status == "skip"
+
+
+def test_t2_with_no_database_url_never_reads_the_ambient_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://ambient/must-be-ignored")
+    tier = run_t2(EVALS_DIR, EVALS_DIR, database_url=None, runner=_exploding_runner)
+    assert tier.status == "skip"
+
+
+def test_t3_with_no_database_url_never_reads_the_ambient_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://ambient/must-be-ignored")
+    monkeypatch.setenv("GROQ_API_KEY", "ambient-key-must-be-ignored")
+    tier = run_t3(EVALS_DIR, database_url=None, env={}, runner=_exploding_runner)
+    assert tier.status == "skip"
+
+
+def test_t1_pytest_spawn_carries_the_inner_guard() -> None:
+    """The pytest child T1 spawns must carry INNER_PYTEST_GUARD=1 so the runner's own tests
+    skip inside it — the second half of the fork-bomb fix (tiers docstring, rule 2)."""
+    captured_envs: list[dict[str, str]] = []
+
+    def capturing_runner(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        if "pytest" in " ".join(cmd):
+            captured_envs.append(dict(env))
+        return _proc(0)
+
+    run_t1(EVALS_DIR, database_url="postgresql+asyncpg://x/y", runner=capturing_runner)
+    assert len(captured_envs) == 1
+    assert captured_envs[0].get(INNER_PYTEST_GUARD) == "1"

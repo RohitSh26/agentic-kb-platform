@@ -5,10 +5,20 @@ shells out to (or, for the T2 latency probe, calls in-process) the runner/suite 
 that tier's logic, and translates the result into a `TierResult`. See
 docs/architecture/evaluation-system.md for what each tier is and why it lives where it does.
 
+Two hard rules, both learned from a real incident (see `INNER_PYTEST_GUARD` below):
+
+1. **Tier functions never read the ambient environment.** `database_url` / `env` are explicit,
+   required parameters; `None`/missing means ABSENT — the function skips. Environment detection
+   happens exactly once, in `run_all.run()`. A `None`-means-read-os.environ fallback here once
+   turned a skip-behavior test into a live run whenever the ambient env had the variable set.
+2. **The T1 pytest child carries `INNER_PYTEST_GUARD=1`.** run_t1 spawns evals' own pytest suite,
+   which contains tests for this very runner; without a guard, a test that (through any future
+   regression) executes a tier for real spawns pytest again — a fork bomb, observed 2026-07-05,
+   one new generation every ~6s until killed. tests/test_run_all.py skips itself under this flag;
+   the outer run_all execution is itself the coverage for what those tests pin.
+
 Every subprocess call takes an injectable `runner` (defaults to `subprocess.run`) so tests can
-supply a canned `CompletedProcess` without actually shelling out to `uv`/`pytest`/an LLM — the
-same "port" the tier functions accept for `database_url`/`env` so skip-with-reason paths are
-testable without touching the environment.
+supply a canned `CompletedProcess` without actually shelling out to `uv`/`pytest`/an LLM.
 """
 
 import asyncio
@@ -30,6 +40,10 @@ from harness.tier_result import CheckResult, TierResult
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 LatencyProbe = Callable[[str, Sequence[str]], Coroutine[Any, Any, list[LatencyResult]]]
+
+# set in the environment of the pytest suite T1 spawns; tests that execute the runner
+# itself (tests/test_run_all.py) skip under it so a run can never recurse into itself
+INNER_PYTEST_GUARD = "EVAL_RUN_ALL_INNER"
 
 _DETAIL_TAIL_LINES = 40
 _DETAIL_MAX_CHARS = 4000
@@ -66,7 +80,7 @@ def _fmt(value: float | None) -> str:
 
 # --------------------------------------------------------------------------------------- T0
 def run_t0(repo_root: Path, *, enabled: bool, runner: Runner = subprocess.run) -> TierResult:
-    title = "T0 — hermetic per-project gates (make verify: ruff + pyright + pytest, no creds)"
+    title = "hermetic per-project gates (make verify: ruff + pyright + pytest, no creds)"
     if not enabled:
         return TierResult(
             "T0",
@@ -101,14 +115,13 @@ def run_t0(repo_root: Path, *, enabled: bool, runner: Runner = subprocess.run) -
 
 # --------------------------------------------------------------------------------------- T1
 def run_t1(
-    evals_dir: Path, *, database_url: str | None = None, runner: Runner = subprocess.run
+    evals_dir: Path, *, database_url: str | None, runner: Runner = subprocess.run
 ) -> TierResult:
     title = (
-        "T1 — deterministic golden sets (run.py + hermetic pytest; migrated-but-fixture-seeded "
+        "deterministic golden sets (run.py + hermetic pytest; migrated-but-fixture-seeded "
         "registry, zero LLM)"
     )
-    resolved_url = database_url if database_url is not None else os.environ.get("TEST_DATABASE_URL")
-    if not resolved_url:
+    if not database_url:
         reason = "TEST_DATABASE_URL not set (needs a migrated registry: make migrate-test-db)"
         return TierResult(
             "T1",
@@ -130,7 +143,7 @@ def run_t1(
         runner,
         ["uv", "run", "python", "run.py"],
         cwd=evals_dir,
-        env={"TEST_DATABASE_URL": resolved_url},
+        env={"TEST_DATABASE_URL": database_url},
         timeout=300,
     )
     duration = time.monotonic() - start
@@ -153,7 +166,9 @@ def run_t1(
         runner,
         ["uv", "run", "pytest", "-q"],
         cwd=evals_dir,
-        env={"TEST_DATABASE_URL": resolved_url},
+        # INNER_PYTEST_GUARD: this suite includes tests for run_all itself — they skip under
+        # the guard so this spawn can never recurse (module docstring, rule 2)
+        env={"TEST_DATABASE_URL": database_url, INNER_PYTEST_GUARD: "1"},
         timeout=300,
     )
     duration2 = time.monotonic() - start
@@ -181,13 +196,12 @@ def run_t2(
     evals_dir: Path,
     repo_root: Path,
     *,
-    database_url: str | None = None,
+    database_url: str | None,
     runner: Runner = subprocess.run,
     latency_probe: LatencyProbe | None = None,
 ) -> TierResult:
-    title = "T2 — live-KB deterministic (alias full run + get_task_context latency; zero LLM)"
-    resolved_url = database_url if database_url is not None else os.environ.get("DATABASE_URL")
-    if not resolved_url:
+    title = "live-KB deterministic (alias full run + get_task_context latency; zero LLM)"
+    if not database_url:
         reason = (
             "DATABASE_URL not set (needs a locally built KB — "
             "docs/dev-guide/03-local-testing.md 'Running an end-to-end build locally')"
@@ -210,7 +224,7 @@ def run_t2(
         runner,
         ["uv", "run", "python", str(repo_root / "scripts" / "eval_alias_resolution.py")],
         cwd=repo_root / "services" / "kb-builder",
-        env={"DATABASE_URL": resolved_url},
+        env={"DATABASE_URL": database_url},
         timeout=180,
     )
     duration = time.monotonic() - start
@@ -233,7 +247,7 @@ def run_t2(
             for case in load_ab_cases(evals_dir / "agent_task_cases" / "task_context_ab_v1.yaml")
         ]
         probe_fn = latency_probe or probe
-        results = asyncio.run(probe_fn(resolved_url, tasks))
+        results = asyncio.run(probe_fn(database_url, tasks))
         report = summarize(results)
         duration2 = time.monotonic() - start
         status2 = "pass" if report.p50_seconds is not None else "fail"
@@ -279,22 +293,19 @@ def _llm_creds_present(env: dict[str, str]) -> bool:
 def run_t3(
     repo_root: Path,
     *,
-    database_url: str | None = None,
+    database_url: str | None,
+    env: dict[str, str],
     limit: int | None = 3,
-    env: dict[str, str] | None = None,
     runner: Runner = subprocess.run,
 ) -> TierResult:
     title = (
-        "T3 — LLM-armed two-arm A/B (get_task_context tooled vs raw; "
+        "LLM-armed two-arm A/B (get_task_context tooled vs raw; "
         "provider-agnostic via kb_agent's shim)"
     )
-    resolved_env = env if env is not None else dict(os.environ)
-    resolved_url = database_url if database_url is not None else resolved_env.get("DATABASE_URL")
-
     reasons: list[str] = []
-    if not resolved_url:
+    if not database_url:
         reasons.append("DATABASE_URL not set (needs a locally built KB)")
-    if not _llm_creds_present(resolved_env):
+    if not _llm_creds_present(env):
         reasons.append("no LLM creds (LLM_API_KEY/GROQ_API_KEY unset)")
     if reasons:
         return TierResult(
@@ -306,7 +317,7 @@ def run_t3(
                 ),
             ),
         )
-    assert resolved_url is not None  # narrowed by the reasons check above
+    assert database_url is not None  # narrowed by the reasons check above
 
     cmd = ["uv", "run", "python", str(repo_root / "scripts" / "eval_task_context.py")]
     if limit is not None:
@@ -316,7 +327,7 @@ def run_t3(
         runner,
         cmd,
         cwd=repo_root / "services" / "mcp-server",
-        env={"DATABASE_URL": resolved_url},
+        env={"DATABASE_URL": database_url},
         timeout=1200,
     )
     duration = time.monotonic() - start
@@ -340,7 +351,7 @@ def run_t3(
 # --------------------------------------------------------------------------------------- T4
 def run_t4() -> TierResult:
     title = (
-        "T4 — adversarial fixtures (injection, budget-cap, ACL, dev-gate); live in service test "
+        "adversarial fixtures (injection, budget-cap, ACL, dev-gate); live in service test "
         "suites by design"
     )
     reason = (

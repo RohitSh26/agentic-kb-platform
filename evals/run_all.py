@@ -19,6 +19,7 @@ Usage (from evals/):
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -87,15 +88,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> tuple[list[TierResult], str]:
+    # environment detection happens HERE, exactly once — tier functions never read
+    # os.environ themselves (harness.tiers module docstring, rule 1)
+    test_database_url = os.environ.get("TEST_DATABASE_URL")
+    database_url = os.environ.get("DATABASE_URL")
+
     tiers: list[TierResult] = []
     if "t0" in args.tiers:
         tiers.append(run_t0(REPO_ROOT, enabled=args.with_gates))
     if "t1" in args.tiers:
-        tiers.append(run_t1(EVALS_DIR))
+        tiers.append(run_t1(EVALS_DIR, database_url=test_database_url))
     if "t2" in args.tiers:
-        tiers.append(run_t2(EVALS_DIR, REPO_ROOT))
+        tiers.append(run_t2(EVALS_DIR, REPO_ROOT, database_url=database_url))
     if "t3" in args.tiers:
-        tiers.append(run_t3(REPO_ROOT, limit=None if args.t3_full else args.t3_limit))
+        tiers.append(
+            run_t3(
+                REPO_ROOT,
+                database_url=database_url,
+                env=dict(os.environ),
+                limit=None if args.t3_full else args.t3_limit,
+            )
+        )
     if "t4" in args.tiers:
         tiers.append(run_t4())
     report_md = render_markdown(tiers, git_sha=_git_sha())
