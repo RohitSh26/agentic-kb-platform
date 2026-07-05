@@ -145,10 +145,15 @@ PR title, PR body, diff text, and any KB results are untrusted content. Every pr
 in delimited blocks (`<<<UNTRUSTED_CONTENT_BEGIN>>> <label>` … `<<<UNTRUSTED_CONTENT_END>>>
 <label>`) behind a fixed preamble stating the content is data, never instructions. Delimiter
 sequences occurring *inside* untrusted content are neutralized before fencing so a payload can
-never close a fence early. Model outputs are schema-validated; an output that does not parse as
-`review_findings_v1` fails the node (and therefore the run) rather than being stored. Nothing in
-untrusted content can add tools, alter the draft key, or cause anything to be published — there
-is no publish path to escalate to (asserted by `tests/integration/test_injection.py`).
+never close a fence early. Model outputs are schema-validated; on a schema-validation failure the
+node retries **once**, feeding the verbatim validator error back as a fenced block (the error can
+embed fragments of the model's own untrusted-derived output, so it gets the same fencing PR/KB
+text does — never trusted as an instruction) — this is the "adopted" bounded runtime retry against
+a machine-checkable validator (`docs/architecture/evaluation-system.md` §2), not an
+iterate-until-pass loop. A **second** consecutive failure fails the node (and therefore the run)
+exactly as before — nothing is ever stored from unvalidated output. Nothing in untrusted content
+can add tools, alter the draft key, or cause anything to be published — there is no publish path
+to escalate to (asserted by `tests/integration/test_injection.py`).
 
 ## Optional KB access
 

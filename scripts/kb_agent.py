@@ -19,6 +19,10 @@ Measure the KB's benefit (same model + task, KB on vs off):
     uv run python ../../scripts/kb_agent.py --no-kb "how is build_seq resolved?"    # baseline
 Each run prints a report (tokens in/out/total, steps, kb_search calls, file reads).
 
+A hallucinated tool name the provider rejects outright (HTTP 400) gets ONE bounded retry
+with the verbatim error fed back before the run gives up (evaluation-system.md §2,
+"adopted" runtime retry against a machine-checkable validator) — see `_model_step`.
+
 Env:
     DATABASE_URL      postgresql+asyncpg://user:pass@host:port/agentic_kb  (the active KB)
     LLM_PROVIDER      groq | openai | anthropic_foundry | anthropic   (default groq)
@@ -426,11 +430,12 @@ def _openai_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _model_step(
+def _raw_model_step(
     client: Any, provider: str, model: str, system: str, tools: list[dict[str, Any]],
     messages: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], str, list[dict[str, Any]], int, int]:
-    """One model call. Returns (assistant_message_native, text, tool_uses, in_tokens, out_tokens).
+    """One provider call, no retry. Returns (assistant_message_native, text, tool_uses,
+    in_tokens, out_tokens).
 
     tool_uses are provider-agnostic dicts: {"id", "name", "args"}. The caller appends the returned
     assistant_message_native to its provider-native message list, runs the tools, then appends the
@@ -459,6 +464,51 @@ def _model_step(
     ]
     native = {"role": "assistant", "content": [b.model_dump() for b in resp.content]}
     return native, text, tool_uses, resp.usage.input_tokens, resp.usage.output_tokens
+
+
+def _is_provider_400(exc: Exception) -> bool:
+    """True for a request the PROVIDER rejected outright (HTTP 400) — typically a small
+    model hallucinating a tool name that isn't in the offered schema, caught before any
+    tool result exists. This is the one failure shape the bounded retry below targets
+    (evaluation-system.md §2, "adopted"): a deterministic, machine-checkable rejection
+    with an exact error to feed back — not a blanket retry-on-any-exception. Network
+    errors, 5xx, and auth failures still propagate immediately, exactly as before."""
+    return getattr(exc, "status_code", None) == 400
+
+
+def _retry_nudge(tools: list[dict[str, Any]], error: Exception) -> str:
+    tool_names = ", ".join(t["name"] for t in tools) or "(none offered)"
+    return (
+        f"your last tool call failed validation: {error}; the available tools are: "
+        f"{tool_names}; retry with a valid call"
+    )
+
+
+def _model_step(
+    client: Any, provider: str, model: str, system: str, tools: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str, list[dict[str, Any]], int, int, bool]:
+    """One model call. Returns (assistant_message_native, text, tool_uses, in_tokens,
+    out_tokens, retried).
+
+    Bounded provider-400 retry (evaluation-system.md §2, "adopted" runtime retry against
+    a machine-checkable validator): if the provider rejects the request with HTTP 400 —
+    the shape a hallucinated tool name produces, before any tool result exists — the
+    verbatim error is fed back as one user-turn message naming the valid tools, and the
+    call is retried ONCE. A second consecutive failure (of any kind, on the retry)
+    propagates exactly as before; callers' existing `except Exception` handling (ending
+    the run/arm) is unchanged — this only turns SOME of those failures into successes.
+    `retried=True` means the first attempt 400'd and the retry recovered — callers count
+    this as a recovery, never as a flake."""
+    try:
+        result = _raw_model_step(client, provider, model, system, tools, messages)
+    except Exception as exc:
+        if not _is_provider_400(exc):
+            raise
+        messages.append({"role": "user", "content": _retry_nudge(tools, exc)})
+        result = _raw_model_step(client, provider, model, system, tools, messages)
+        return (*result, True)
+    return (*result, False)
 
 
 def _tool_result_messages(
@@ -513,11 +563,13 @@ async def run_task(task: str, *, use_kb: bool = True) -> int:
         kb_open = _kb_budget_open(searches_left, kb_tokens_left)
         tools = list(_FILE_TOOLS) + ([_KB_TOOL] if kb_open else [])
         try:
-            native, answer, tool_uses, di, do = _model_step(
+            native, answer, tool_uses, di, do, retried = _model_step(
                 client, provider, model, system, tools, messages)
-        except Exception as exc:  # small models sometimes emit invalid tool calls (provider 400)
+        except Exception as exc:  # the retry itself also failed — exhausted, not a recovery
             print(f"\n[model error: {type(exc).__name__}: {exc}]")
             break
+        if retried:
+            print("  · [recovered from a provider 400 after one bounded retry]")
         steps += 1
         in_tok += di
         out_tok += do

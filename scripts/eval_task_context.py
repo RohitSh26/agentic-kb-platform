@@ -190,22 +190,28 @@ async def _run_arm(case: TaskContextAbCase, arm: str) -> dict[str, Any]:
     seen_paths: set[str] = set()  # files read + tool-surfaced (tooled)
     tool_surfaced: set[str] = set()
     answer_text = ""
-    in_tok = out_tok = steps = tool_calls = file_reads = 0
+    in_tok = out_tok = steps = tool_calls = file_reads = retries_recovered = 0
     model_error = ""
 
     for _step in range(MAX_STEPS):
         # Same guard as kb_agent's own loop: small models sometimes hallucinate a tool
-        # name and the provider 400s. One flaky generation must cost ONE arm-run its
-        # remaining steps, never the whole eval; the arm is scored on what it did reach
-        # and flagged so the report can call it out.
+        # name and the provider 400s. kb_agent._model_step already retries that ONCE,
+        # feeding the verbatim provider error back before giving up (evaluation-system.md
+        # §2). A recovered retry costs this arm nothing but the extra call (counted
+        # below); only an EXHAUSTED retry (both attempts failed) still ends the arm
+        # early and is flagged so the report can call it out — one flaky generation
+        # must cost ONE arm-run its remaining steps, never the whole eval.
         try:
-            native, answer, tool_uses, di, do = kb_agent._model_step(
+            native, answer, tool_uses, di, do, retried = kb_agent._model_step(
                 client, provider, model, system, tools, messages
             )
         except Exception as exc:
             model_error = f"{type(exc).__name__}: {exc}"
             print(f"  · [model error, arm ends early: {model_error[:120]}]")
             break
+        if retried:
+            retries_recovered += 1
+            print("  · [recovered from a provider 400 after one bounded retry]")
         steps += 1
         in_tok += di
         out_tok += do
@@ -247,6 +253,7 @@ async def _run_arm(case: TaskContextAbCase, arm: str) -> dict[str, Any]:
     return {
         "arm": arm,
         "model_error": model_error,
+        "retries_recovered": retries_recovered,
         "coverage": len(covered) / len(case.expected_files),
         "tool_cover": (
             len([f for f in case.expected_files if f in tool_surfaced])
@@ -290,7 +297,8 @@ async def main() -> int:
             rows.append(result)
             print(
                 f"   coverage={result['coverage']:.2f} tool_cover={result['tool_cover']:.2f} "
-                f"steps={result['steps']} reads={result['file_reads']} tokens={result['tokens']}"
+                f"steps={result['steps']} reads={result['file_reads']} tokens={result['tokens']} "
+                f"retries_recovered={result['retries_recovered']}"
             )
 
     print("\n=== AGGREGATE (mean over cases) ===")
@@ -301,9 +309,14 @@ async def main() -> int:
         def mean(key: str, rows_for_arm: list[dict[str, Any]] = arm_rows) -> float:
             return sum(row[key] for row in rows_for_arm) / len(rows_for_arm)
 
+        def total(key: str, rows_for_arm: list[dict[str, Any]] = arm_rows) -> int:
+            return sum(row[key] for row in rows_for_arm)
+
+        flakes = sum(1 for row in arm_rows if row["model_error"])
         print(
             f"   {arm:7s} coverage={mean('coverage'):.3f} tool_cover={mean('tool_cover'):.3f} "
-            f"steps={mean('steps'):.1f} reads={mean('file_reads'):.1f} tokens={mean('tokens'):.0f}"
+            f"steps={mean('steps'):.1f} reads={mean('file_reads'):.1f} tokens={mean('tokens'):.0f} "
+            f"retries_recovered={total('retries_recovered')} flakes={flakes}/{len(arm_rows)}"
         )
     return 0
 

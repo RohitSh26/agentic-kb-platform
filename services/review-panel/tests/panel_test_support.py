@@ -15,6 +15,7 @@ import json
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import overload
 
 from langchain_core.runnables import RunnableConfig
 
@@ -24,6 +25,7 @@ from review_panel.graph.nodes import PanelDependencies
 from review_panel.graph.prompts import PanelPrompts, load_panel_prompts
 from review_panel.graph.state import PanelState
 from review_panel.infrastructure.draft_store import InMemoryDraftStore
+from review_panel.infrastructure.model_client import ModelClient
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
@@ -161,6 +163,33 @@ class FakeModelClient:
         return [(s, u) for s, u in self.calls if lens_of(s) != "synthesizer"]
 
 
+class ScriptedModelClient:
+    """Per-lens scripted responses, for proving the schema-repair retry
+    (review_panel.graph.nodes._complete_with_schema_repair) end-to-end through the
+    real graph: `scripts["bug"] = [bad_json, good_json]` fails once then recovers on
+    lens "bug"; `[bad_json, bad_json]` proves the bound. A lens with no script (or
+    one shorter than the calls it receives, past the last scripted entry) falls back
+    to DEFAULT_RESPONSES so the rest of the panel completes normally."""
+
+    def __init__(self, scripts: dict[str, list[str]] | None = None) -> None:
+        self._scripts = scripts or {}
+        self._counts: dict[str, int] = {}
+        self.calls: list[tuple[str, str]] = []
+
+    async def complete(self, *, system: str, user: str) -> str:
+        self.calls.append((system, user))
+        lens = lens_of(system)
+        script = self._scripts.get(lens)
+        if not script:
+            return DEFAULT_RESPONSES[lens]
+        count = self._counts.get(lens, 0)
+        self._counts[lens] = count + 1
+        return script[min(count, len(script) - 1)]
+
+    def calls_for(self, lens: str) -> int:
+        return sum(1 for system, _user in self.calls if lens_of(system) == lens)
+
+
 class FakeGitHubClient:
     """In-memory READ-ONLY PR source. It deliberately has no write method at
     all — any escalation attempt would be an AttributeError, and `calls`
@@ -204,14 +233,51 @@ def make_pr(
     )
 
 
+@overload
 def make_deps(
     *,
-    model: FakeModelClient | None = None,
+    model: None = None,
     github: FakeGitHubClient | None = None,
     kb: FakeKBSearch | None = None,
     store: InMemoryDraftStore | None = None,
     pr: PRContext | None = None,
-) -> tuple[PanelDependencies, FakeModelClient, FakeGitHubClient, InMemoryDraftStore]:
+) -> tuple[PanelDependencies, FakeModelClient, FakeGitHubClient, InMemoryDraftStore]: ...
+
+
+@overload
+def make_deps(
+    *,
+    model: FakeModelClient,
+    github: FakeGitHubClient | None = None,
+    kb: FakeKBSearch | None = None,
+    store: InMemoryDraftStore | None = None,
+    pr: PRContext | None = None,
+) -> tuple[PanelDependencies, FakeModelClient, FakeGitHubClient, InMemoryDraftStore]: ...
+
+
+@overload
+def make_deps(
+    *,
+    model: ModelClient,
+    github: FakeGitHubClient | None = None,
+    kb: FakeKBSearch | None = None,
+    store: InMemoryDraftStore | None = None,
+    pr: PRContext | None = None,
+) -> tuple[PanelDependencies, ModelClient, FakeGitHubClient, InMemoryDraftStore]: ...
+
+
+def make_deps(
+    *,
+    model: ModelClient | None = None,
+    github: FakeGitHubClient | None = None,
+    kb: FakeKBSearch | None = None,
+    store: InMemoryDraftStore | None = None,
+    pr: PRContext | None = None,
+) -> tuple[PanelDependencies, ModelClient, FakeGitHubClient, InMemoryDraftStore]:
+    """Build a full fake dependency set. `model` defaults to `FakeModelClient` (and the
+    return type reflects that — see the overloads); passing any other `ModelClient`
+    (e.g. `ScriptedModelClient`) is returned as-is, correctly typed, for tests that
+    need a script the default fake can't express."""
     the_pr = pr or make_pr()
     the_model = model or FakeModelClient()
     the_github = github or FakeGitHubClient(the_pr)

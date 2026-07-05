@@ -65,10 +65,17 @@ a human — produces an exact, objective error that can be mechanically fed back
 
 These are runtime robustness mechanisms. They belong in the product's own agent/review loops
 (review-panel's lens execution, the `kb_agent.py`/`eval_task_context.py` model-step guard), **not**
-in the evaluation system itself. Today, only the model-step guard in
-`scripts/eval_task_context.py` / `scripts/kb_agent.py` exists as built code. A symmetric bounded
-retry for review-panel's schema-invalid lens outputs is named here as the applicable principle and
-tracked as separate implementation work — it is **not** claimed to exist yet.
+in the evaluation system itself. Both are now built: `kb_agent._model_step` (shared by
+`scripts/kb_agent.py` and `scripts/eval_task_context.py`) retries a provider-400 once, feeding the
+verbatim error back before giving up — `scripts/eval_task_context.py`'s A/B output carries a
+`retries_recovered` counter so a recovered retry is never folded into the `flakes` metric baselined
+at 3–6/20 in `docs/reports/evaluation-2026-07-05.md`. `review_panel.graph.nodes._complete_with_schema_repair`
+applies the symmetric retry to a schema-invalid lens output, fencing the verbatim validator error
+(it can carry fragments of the model's own untrusted-derived prior output) before the one bounded
+retry. Tests for both live beside the code they retry (`scripts/test_kb_agent_model_step_retry.py`,
+`scripts/test_eval_task_context_retry.py`, `services/review-panel/tests/unit/test_schema_repair.py`,
+`services/review-panel/tests/integration/test_schema_repair_retry.py`) — not under `evals/`, per
+this section's own boundary.
 
 ### Forbidden: iterate-until-pass against a measurement eval
 
