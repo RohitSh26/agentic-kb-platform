@@ -58,6 +58,19 @@ eval-first sequencing argument settled empirically.
 - One command (`make eval-all`) now produces this entire picture; skips carry reasons; failures
   carry verbatim output.
 
+## Addendum (same day, post-run): KB noise discovered by the bootstrap work
+
+The full-docs KB this evaluation ran against (`local.20260705T063732Z`) contains **~566 spurious
+"card" artifacts from 627 fake `ado_card` sources**: under `--backend local`,
+`sources.example.yaml`'s ado_card source is *warned about* as "will be skipped" but is not actually
+filtered at runtime, and (having no path selection) it matched every workspace file — Groq then
+"extracted" cards from arbitrary files. This also retroactively explains part of the 2026-07-03
+75.8% extractor-error gate trip (same spurious inputs, against a 404ing model). Impact on this
+report's numbers: the eval ran with ~8% noise artifacts polluting the search space, so T2/T3
+results stand as **lower bounds** — a clean rebuild may improve them, and will be used for the next
+run. Fix tracked: make the local backend actually skip non-fetchable sources (validator warning →
+runtime behavior), then rebuild.
+
 ## Standing follow-ups fed by this run
 
 1. Task #29 (provider-400 bounded retry) — measured baseline: 3–6 flakes/20 arms.
