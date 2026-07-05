@@ -27,14 +27,19 @@ $(SERVICES:%=types-%): types-%:
 	cd services/$* && uv run pyright
 
 # kb-builder owns the schema: mcp-server integration tests require a database
-# migrated here first (mcp-server never runs alembic).
+# migrated here first (mcp-server never runs alembic). test-mcp-server and
+# test-evals depend on migrate-test-db because kb-builder's own suite
+# DOWNGRADES the shared test DB to base on teardown — without the dependency,
+# `make verify` (kb-builder first, mcp-server after) fails with hundreds of
+# missing-table errors. Found live by the consolidated eval runner's T0
+# (2026-07-05); dev-guide documents the same interaction for manual runs.
 migrate-test-db:
 	cd services/kb-builder && DATABASE_URL=$(TEST_DATABASE_URL) uv run alembic upgrade head
 
 test-kb-builder:
 	cd services/kb-builder && TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run pytest
 
-test-mcp-server:
+test-mcp-server: migrate-test-db
 	cd services/mcp-server && TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run pytest
 
 # review-panel needs no registry migration: its checkpointer + draft store
@@ -57,7 +62,7 @@ lint-evals:
 types-evals:
 	cd evals && uv run pyright
 
-test-evals:
+test-evals: migrate-test-db
 	cd evals && TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run pytest
 
 verify-evals: lint-evals types-evals test-evals
