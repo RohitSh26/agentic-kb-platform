@@ -2,7 +2,10 @@
 
 Onboarding documentation for engineers joining the Agentic KB Platform.
 
-- **[00 — Getting Started](00-getting-started.md): START HERE.** The single end-to-end guide from
+- **[00 — Quickstart](00-quickstart.md): in a hurry? Run `scripts/bootstrap.sh`.** The scripted
+  10-minute path — one command from a fresh clone to an active, queryable knowledge base, plus a
+  real zero-LLM retrieval check proving it works. No tokens, no cloud accounts.
+- **[00 — Getting Started](00-getting-started.md): START HERE for the narrated version.** The single end-to-end guide from
   `git clone` to asking GitHub Copilot questions in VS Code — install, build a KB (no tokens/LLM),
   serve it, connect VS Code, ask, and audit. Beginner-friendly, with troubleshooting throughout.
   *(Merges the former guides 06, 08, and 10.)*
