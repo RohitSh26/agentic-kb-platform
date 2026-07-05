@@ -2,9 +2,15 @@
 
 ## Status
 
-**Proposed** (2026-06-14) — a known backlog initiative. This ADR proposes the architecture; it is
-**not yet ratified**. No build starts until the platform owner accepts it. Mark Phase 1 the moment
-it is accepted; Phases 2+ stay deferred pending demand.
+**Accepted** (2026-07-05). Ratified by the owner's explicit directive to make observability ready
+("I want to make sure observability is ready", 2026-07-05), following the owner's earlier
+observability decision (ledger complete by construction, error rows + budget refunds — commit
+346c2d2). Open question answered per that context: **operator-only, Phase 1** — aggregate views,
+no per-team drill-down by default; per-team self-service remains a Phase 2 decision. One metric
+added to the catalog at ratification: **zero/thin-result `kb_search` rate** from the ledger, as the
+honest server-side proxy for the ADR-0025 "KB gap" signal (true host-side file-fallback events are
+invisible to the server by architecture — hosts fall back natively; this proxy is what the ledger
+can actually prove). Phases 2+ stay deferred pending demand.
 
 ## Context
 
