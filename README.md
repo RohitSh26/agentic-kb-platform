@@ -1,87 +1,118 @@
 # Agentic KB Platform
 
-A cost-conscious, Postgres-first, nightly-built knowledge platform served through a remote **MCP
-Context Broker** to human-approved orchestrator and subagent agents. This repository is set up to be
-**built with Claude Code** — it ships a complete agentic harness (project memory, build subagents,
-skills, slash commands, rules, and hooks) plus the full spec set (architecture, ADRs, and a
-PR-by-PR build queue).
+A Postgres-first knowledge platform that gives coding agents one great, budgeted MCP tool surface
+over a codebase and its history. An incremental, cache-gated build — nightly by design (ADR-0004) —
+ingests code, docs, wiki pages, tickets, and commits into a Postgres **Knowledge Registry**
+(artifacts + graph edges), and a remote **MCP Context Broker** serves it to agents in OpenCode,
+VS Code (Copilot agent mode), and the GitHub Copilot CLI: `kb_search` for budgeted retrieval,
+`get_task_context` for one-call task context, and a governed `context.*` path when an answer must
+be citation-grade. Around that core sit a dev-gated **review draft engine** (four reviewer lenses
+draft; only a developer publishes) and self-hosted observability (retrieval ledger, trace spans,
+and dashboard views — all Postgres, no SaaS).
 
-> Design source: `Agentic Knowledge-Based AI System — Architecture and Implementation Blueprint v0.1`.
-> Distilled canonical reference: `docs/architecture/00-overview.md`.
+## Quickstart
 
-## The harness at a glance
+Prerequisites: `git`, `uv`, and a local Postgres 16 — that is the whole list (`uv` fetches
+Python 3.12 itself).
 
-```
-CLAUDE.md                  Always-loaded project memory: invariants + how we work
-.claude/
-  settings.json            Model = claude-fable-5, scoped permissions, hooks
-  agents/                  Claude Code BUILD subagents (help write the platform)
-  skills/                  Reusable workflows (implement-pr, write-migration, define-mcp-tool, ...)
-  commands/                Slash commands (/next-pr, /pr-brief, /adr, /verify)
-  rules/                   Path-scoped rules (postgres, mcp-tools, token-budgets, connectors, python)
-  hooks/                   PreToolUse bash guard + PostToolUse formatter
-.mcp.json                  Optional MCP servers for the build (templates, no secrets)
-docs/
-  architecture/            Canonical distilled spec
-  adr/                     Accepted decisions (+ template via /adr)
-  contracts/               Cross-service contracts (markdown — the ONLY thing services share)
-  pr-briefs/               PR-01..PR-13 — the build queue, one reviewable PR each
-agents/                    The PRODUCT's runtime agent manifests (served by the finished MCP server)
-services/ evals/ infra/    Source layout the PRs fill in
+```sh
+git clone https://github.com/RohitSh26/agentic-kb-platform.git
+cd agentic-kb-platform
+./scripts/bootstrap.sh
 ```
 
-## Two self-contained services
+About 2–3 minutes: synced dependencies → a migrated Postgres database → an **active, queryable
+knowledge base** built from this repo's own source (zero LLM calls, no API keys, no cloud
+accounts) → a real retrieval check proving it works → printed next steps to serve it and connect
+a host. The narrated walkthrough, troubleshooting table, and what to do next:
+[`docs/dev-guide/00-quickstart.md`](docs/dev-guide/00-quickstart.md).
 
-```
-services/kb-builder        Nightly incremental build plane. OWNS the Postgres schema +
-                           Alembic migrations. Connectors, docify, graphify, linker, indexing.
-services/mcp-server        Remote MCP Context Broker runtime plane. Auth, telemetry, tool
-                           contracts, health. NEVER runs migrations or build-plane code.
-```
+## What's in the repo
 
-Each service is an independent `uv` project (own `pyproject.toml`, `uv.lock`, `Dockerfile`,
-tests). They never import each other or any shared Python package — cross-service agreements
-live as markdown in `docs/contracts/` and are pinned by contract tests on both sides
-(`tests/contract/` in each service, including import-boundary tests that fail on any
-cross-service import).
+| Project | One line |
+|---|---|
+| `services/kb-builder` | Build plane: connectors → incremental build engine → docify/graphify → linker → alias miner → indexing. Owns the Knowledge Registry schema and its Alembic migrations. |
+| `services/mcp-server` | Runtime plane: the MCP Context Broker — auth, ACL filtering, server-enforced budgets, the 12-tool surface, retrieval ledger, tracing. Never builds, never migrates. |
+| `services/review-panel` | Dev-gated review draft engine (ADR-0031): LangGraph fan-out of four reviewer lenses → reconcile → one stored draft. Never posts to GitHub; owns only the `review_panel` schema. |
+| `evals` | The evaluation system (T0–T4): golden-query retrieval cases, agent task cases, the consolidated `run_all.py` report, and the operator dashboard renderer. |
 
-- **Run tests**: `make verify` (both services) or `make verify-kb-builder` /
-  `make verify-mcp-server`. Integration tests need Postgres via `TEST_DATABASE_URL`;
-  mcp-server's health tests additionally need `make migrate-test-db` first, because only
-  kb-builder may run migrations.
-- **Nightly build**: kb-builder applies migrations, ingests changed sources (cache-gated —
-  unchanged content hash means no LLM call, no re-embed), validates, then flips the new
-  `kb_version` to active.
-- **Active-KB consumption**: mcp-server reads the single `status='active'` row in
-  `kb_build_run` and serves only that version; `/health` is 503 until one exists.
+Each service is a self-contained `uv` project (ADR-0008): services never import each other or any
+shared Python package. The markdown contracts in `docs/contracts/` are the only cross-service
+interface, pinned by contract tests on both sides (including import-boundary tests).
+
+## Where everything lives
+
+Read in this order:
+
+1. **[`docs/dev-guide/`](docs/dev-guide/README.md)** — the reading path for a new developer:
+   quickstart → getting started → design deep dive → implementation tour, plus per-topic guides
+   (local testing, running the broker, the review panel, observability).
+2. **[`docs/contracts/`](docs/contracts/)** — living truth: the versioned cross-service
+   agreements (the MCP tool surface, the registry schema, tracing, the review panel, agent output
+   schemas). If prose and a contract disagree, the contract wins.
+3. **[`docs/architecture/00-overview.md`](docs/architecture/00-overview.md)** — the distilled
+   architecture reference, with the diagrams beside it (`e2e-flow-detailed.mmd`,
+   `seq-task-flow.mmd`, `seq-review-flow.mmd`) and the eval design
+   (`docs/architecture/evaluation-system.md`).
+4. **History**: [`docs/adr/`](docs/adr/README.md) — 32 decision records (0001–0032) with a
+   one-line index; [`docs/pr-briefs/`](docs/pr-briefs/README.md) — the 40 build units, all
+   implemented (a historical record, not a queue); `docs/reports/` and `docs/reviews/` — measured
+   results and audits.
+5. **`docs/proposals/`** — exploration documents, each bannered with what superseded it. Never a
+   current reference.
 
 Two agent layers, kept separate on purpose:
-- **`.claude/agents/`** — build subagents (pr-implementer, migration-writer, mcp-contract-reviewer,
-  test-author, security-auditor, eval-runner, architecture-guardian).
-- **`agents/`** — the product's runtime agents (orchestrator + implementation, test, review,
-  delivery) that the MCP runtime serves to developers.
 
-## Getting started
+- **`agents/`** — the *product's* 12 runtime agent manifests (canonical), rendered host-natively
+  into `.copilot/` and `.opencode/` and parity-pinned — `python3 agents/check_parity.py` must
+  exit 0. Host MCP configs ship at `.vscode/mcp.json` and `.copilot/mcp/repository-settings.json`.
+- **`.claude/`** — the harness for *building this repo* with Claude Code (build subagents in
+  `.claude/agents/`, skills, rules, hooks). See `CLAUDE.md`.
 
-1. Install Claude Code and open this folder. The selected model is **Claude Fable 5**
-   (`claude-fable-5`) via `.claude/settings.json` — confirm with `/model`.
-2. (Optional) Fill `.mcp.json` env for a read-only dev Postgres and GitHub, or delete servers you
-   won't use. Never commit secrets.
-3. Read `CLAUDE.md` and `docs/architecture/00-overview.md` once.
-4. Run `/next-pr`. Claude Code picks PR-01, follows the `implement-pr` skill, and stops at a single
-   reviewable PR. Review, merge, repeat.
+## Non-negotiable invariants
 
-See `docs/runbooks/getting-started.md` for the longer walkthrough.
+1. **Postgres is the source of truth.** Azure AI Search is a derived, rebuildable projection —
+   never truth.
+2. **The graph is V1; a graph database is not.** Edges live in Postgres tables; graph behavior is
+   exposed only through MCP tools.
+3. **Token saving is enforced in code, not prompts** (ADR-0025/0026): `kb_search` carries a
+   per-task call + token cap enforced in the tool, and code reads arrive skeleton-first with the
+   exact body one `read_full` away. The KB is a preferred-first, budgeted helper — never a gate.
+4. **The build is incremental.** Unchanged content hash + generation inputs ⇒ no LLM call, no
+   re-embed. Caches gate every model call.
+5. **A `kb_version` goes active only after validation passes**; the broker serves only the last
+   active version.
+6. **Agents never touch data stores or secrets directly.** Credentials stay server-side; retrieved
+   content is untrusted and cannot change tool policy, identity, or instructions.
+7. **Every claim cites evidence IDs.** Missing evidence becomes an open question, never an
+   invention.
 
-## Principles you'll see enforced everywhere
+The V1 exclusion list (Azure Functions, Event Grid/Service Bus/Event Hub, Redis, API Management,
+Blob Storage, a graph DB, SQLite-as-prod, streaming ingestion) is guarded by `CLAUDE.md`, a
+PreToolUse hook, and ADR-0007 — adding any of them requires an accepted ADR.
 
-Postgres is truth, Search is a rebuildable projection · the graph lives in Postgres, not a graph DB ·
-token saving is enforced in code, not prompts — the KB is a *preferred-first, budgeted* tool
-(KB-first/file-fallback, ADR-0025) and code reads are *skeleton-first* with `read_full` on demand
-(ADR-0026), not a mandatory broker gate · the build is incremental and cache-gated · a kb_version goes
-active only after validation · agents hold no data-store credentials and retrieved content is untrusted
-· every served claim cites evidence IDs.
+## Make targets
 
-The V1 exclusion list (Functions, Event Grid, Service Bus, Redis, API Management, Blob, graph DB,
-SQLite-as-prod, streaming) is guarded by `CLAUDE.md`, a PreToolUse hook, and ADR-0007 — adding any of
-them requires an accepted ADR.
+| Target | What it does |
+|---|---|
+| `make verify` | Lint (ruff) + types (pyright) + tests (pytest) for all three services and evals |
+| `make verify-kb-builder` / `verify-mcp-server` / `verify-review-panel` / `verify-evals` | The same gate for one project |
+| `make migrate-test-db` | Migrate the shared test database (kb-builder owns Alembic; `test-mcp-server` and `test-evals` depend on it) |
+| `make eval-all` | Consolidated T0–T4 evaluation report (`evals/run_all.py`; unavailable tiers SKIP with a stated reason) |
+| `make dashboard` | Render the read-only operator dashboard (HTML + Markdown) from the `v_*` views |
+| `make demo` | Hermetic end-to-end demo: build a tiny KB from this repo's git history, serve it on loopback, drive the broker tools, tear down (Postgres + uv only) |
+
+`sync` / `lint` / `types` / `test` and their per-project variants also exist — see the `Makefile`.
+Integration tests need Postgres via `TEST_DATABASE_URL`.
+
+## Status (2026-07-05)
+
+- All 40 build briefs implemented ([`docs/pr-briefs/README.md`](docs/pr-briefs/README.md));
+  decisions recorded through ADR-0032.
+- Knowledge Registry migration head: `0021_trace_span`.
+- MCP tool surface: 12 registered tools at `MCP_SCHEMA_VERSION = "1.10.0"`
+  ([`docs/contracts/mcp-tools-contract.md`](docs/contracts/mcp-tools-contract.md)).
+- 12 runtime agent roles, renderings parity-clean (`python3 agents/check_parity.py` → exit 0).
+- CI: `.github/workflows/ci.yml`. The nightly production schedule (ADR-0004) is a design
+  commitment not yet wired to a workflow; builds run on demand via the kb-builder `build` CLI and
+  `scripts/bootstrap.sh`.

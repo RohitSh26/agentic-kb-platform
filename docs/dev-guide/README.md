@@ -1,52 +1,64 @@
 # Developer Guide
 
-Onboarding documentation for engineers joining the Agentic KB Platform.
+Onboarding documentation for engineers joining the Agentic KB Platform. Read it as a path: the
+three tiers below go from "make it run" to "understand it" to "operate it".
 
-- **[00 — Quickstart](00-quickstart.md): in a hurry? Run `scripts/bootstrap.sh`.** The scripted
-  10-minute path — one command from a fresh clone to an active, queryable knowledge base, plus a
-  real zero-LLM retrieval check proving it works. No tokens, no cloud accounts.
-- **[00 — Getting Started](00-getting-started.md): START HERE for the narrated version.** The single end-to-end guide from
-  `git clone` to asking GitHub Copilot questions in VS Code — install, build a KB (no tokens/LLM),
-  serve it, connect VS Code, ask, and audit. Beginner-friendly, with troubleshooting throughout.
-  *(Merges the former guides 06, 08, and 10.)*
+## Start here
 
-- [01 — Platform design deep dive](01-design-deep-dive.md): what we are building, the two planes,
-  the Postgres Knowledge Registry, the trust contract (trust buckets, the layered verifier, signed
-  receipts), and the architecture invariants with pointers to where each is enforced in code.
-- [02 — Implementation tour](02-implementation-tour.md): a guided walk through both planes as
-  implemented (PR-01 → PR-33): contracts, schema, connectors (local-FS + the production GitHub/ADO
-  backends), incremental build engine, docify, graphify, the linker (deterministic, cross-domain,
-  candidate→judge), version-membership invalidation, indexing, the MCP server and Context Broker,
-  the verifier ladder + signed receipts, client identity + scopes, temporal ranking, security
-  hardening, source configuration, the portable agent framework, and the deployment follow-ons.
-- [03 — Local testing](03-local-testing.md): how to run everything on a laptop with a local
-  Postgres and in-memory fakes — no Azure resources required, including the end-to-end `build` CLI
-  and the Obsidian vault export.
-- [04 — KB-builder testing (from a bare machine)](04-kb-builder-testing.md): a complete copy-paste
-  runbook for a brand-new machine — install the toolchain, point at **any** LLM provider (Ollama /
-  Groq / OpenAI / Azure OpenAI / Azure Foundry / Claude / any OpenAI-compatible endpoint), run a
-  local and a production build, export to Obsidian, and a full **database query reference** for
-  checks/analysis (build health, the served set, ghost-edge + cache/cost checks).
-- [05 — Running the MCP server (fresh separate machine)](05-running-the-mcp-server.md): start the
-  **Context Broker** against an already-built KB — without Docker (`uv run python -m
-  agentic_mcp_server`) and with Docker/compose, the `DATABASE_URL` / `MCP_*` env reference, the
-  fail-closed Entra auth setup (and the proposed local-dev alternative, ADR-0016), the `/health`
-  probe (200 vs 503), and a worked `create_pack → open_evidence → graph.get_neighbors →
-  verify_answer` walk through the tools to **use** the KB.
-- [06 — End-to-end local walkthrough](06-end-to-end-walkthrough.md): **merged into [00](00-getting-started.md)**
-  (happy path = Parts 1–8; the architecture explanation = the Appendix).
-- [07 — What "MCP ready" means](07-what-mcp-ready-means.md): a plain-language explainer (with a worked
-  example prompt) of the agent's context toolkit — create_pack, context.expand, open_evidence,
-  verify_answer — and the **KB-first/file-fallback** model (ADR-0025): the KB is a fast, budgeted helper
-  the agent consults first, not a gate; it keeps its native `read`/`grep` tools, and code reads arrive
-  **skeleton-first** (ADR-0026) with the exact body one `read_full` away.
-- [08 — Run the whole system from scratch](08-run-everything-from-scratch.md): **merged into
-  [00](00-getting-started.md)** (real GitHub + ADO sources = Part 9; multi-agent runner = Part 10).
-- [09 — GitHub Copilot CLI against the broker](09-copilot-cli-end-to-end.md): wire the **real
-  GitHub Copilot CLI** to our MCP broker and run a non-interactive task — a third-party agent gets
-  context only through the governed broker; verified the per-agent budget + audit apply to it.
-- [10 — VS Code (Copilot agent mode) against the broker](10-vscode-against-the-broker.md): **merged
-  into [00](00-getting-started.md)** (Parts 6–8 — open VS Code, connect `.vscode/mcp.json`, ask, audit).
+1. **[00 — Quickstart](00-quickstart.md)** — in a hurry? The scripted 10-minute path: one command
+   (`scripts/bootstrap.sh`) from a fresh clone to an **active, queryable knowledge base**, plus a
+   real zero-LLM retrieval check proving it works. No tokens, no cloud accounts.
+2. **[00 — Getting Started](00-getting-started.md)** — the narrated version, and the one document
+   to follow on a brand-new machine: from `git clone` to GitHub Copilot in VS Code answering
+   questions about this codebase through the budgeted, audited KB — install, build (no
+   tokens/LLM), serve, connect, ask, audit, then real GitHub/ADO sources and the multi-agent
+   runner. Troubleshooting throughout.
+3. **[01 — Platform design deep dive](01-design-deep-dive.md)** — *what* we are building, *why* it
+   is shaped this way, and *where* each design rule is enforced in code: the planes, the Postgres
+   Knowledge Registry, the trust contract, and the architecture invariants.
 
-Deep specs live in `docs/architecture/`, decisions in `docs/adr/` (through ADR-0017), build units
-in `docs/pr-briefs/` (through PR-33), cross-service agreements in `docs/contracts/`.
+## When you need it
+
+- **[02 — Implementation tour](02-implementation-tour.md)** — a guided walk through the code as it
+  exists today, organized by subsystem: contracts, schema (migration head 0021), connectors, the
+  incremental build engine, docify/graphify/linker, alias mining, indexing, the 12-tool Context
+  Broker surface, the verifier ladder and receipts, identity and ACLs, and the agent framework.
+- **[03 — Local testing](03-local-testing.md)** — run everything on a laptop with **uv + a local
+  Postgres** and in-memory fakes; no Azure resources, including the end-to-end `build` CLI and the
+  Obsidian vault export.
+- **[04 — KB-builder testing (from a bare machine)](04-kb-builder-testing.md)** — a complete
+  copy-paste runbook: install the toolchain, point at any LLM provider (Groq / OpenAI / Azure /
+  Ollama / Claude / any OpenAI-compatible endpoint), run local and production builds, export to
+  Obsidian, and a full database query reference for build health and cost checks.
+- **[05 — Running the MCP server (fresh separate machine)](05-running-the-mcp-server.md)** — start
+  the **Context Broker** against an already-built KB, with and without Docker: the
+  `DATABASE_URL` / `MCP_*` env reference, fail-closed Entra auth (and the ADR-0016 local-dev
+  alternative), the `/health` probe, and a worked walk through the **governed path**
+  (`create_pack → open_evidence → graph.get_neighbors → verify_answer`) for citation-grade answers.
+- **[07 — What "MCP ready" means](07-what-mcp-ready-means.md)** — a plain-language explainer of
+  the agent's context toolkit and the **KB-first/file-fallback** model (ADR-0025): the KB as a
+  fast, budgeted librarian — not a gate — with code arriving skeleton-first (ADR-0026).
+- **[09 — GitHub Copilot CLI against the broker](09-copilot-cli-end-to-end.md)** — drive a real
+  external agent (the GitHub Copilot CLI, using its own model) against the broker through the
+  repo's committed, policy-carrying MCP config, which exposes exactly one tool: the budgeted
+  `kb_search`. Every call — including the ones the budget refused — lands in the ledger.
+- **[10 — VS Code (Copilot agent mode) against the broker](10-vscode-against-the-broker.md)** —
+  redirect stub: this flow is Parts 6–8 of [00 — Getting Started](00-getting-started.md); the
+  connection config ships at `.vscode/mcp.json`.
+
+## Operating
+
+- **[06 — Review panel](06-review-panel.md)** — run the **review draft engine**
+  (`services/review-panel`): a four-lens LangGraph review of a pull request that persists **one
+  draft** the developer pulls, edits, and publishes — the panel itself never posts to GitHub
+  (ADR-0031).
+- **[08 — Observability](08-observability.md)** — the dashboard, traces, and the retrieval ledger:
+  answer "what happened, and what did it cost?" read-only over Postgres — `make dashboard`, the
+  `v_*` views, `trace_span` / `TRACE_SINK` (ADR-0032), and ledger queries.
+
+---
+
+Deep specs live in `docs/architecture/` (start with
+[`00-overview.md`](../architecture/00-overview.md)), cross-service agreements in
+`docs/contracts/`. Decisions run through ADR-0032 and build units PR-01–40, **all implemented** —
+see [`docs/adr/README.md`](../adr/README.md) and [`docs/pr-briefs/README.md`](../pr-briefs/README.md).
