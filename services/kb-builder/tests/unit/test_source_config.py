@@ -130,6 +130,27 @@ class TestValidationMatrix:
         with pytest.raises(ValidationError):
             config.sources[0].repo = "x/y"  # type: ignore[misc]
 
+    def test_git_metadata_repo_defaults_to_none(self) -> None:
+        config = SourceConfig.model_validate(_config([_github()]))
+        assert config.git_metadata is None
+
+    def test_git_metadata_repo_parses(self) -> None:
+        config = SourceConfig.model_validate(
+            _config([_github()], git_metadata={"repo": "o/r"})
+        )
+        assert config.git_metadata is not None
+        assert config.git_metadata.repo == "o/r"
+
+    def test_git_metadata_bad_repo_format_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            SourceConfig.model_validate(
+                _config([_github()], git_metadata={"repo": "not-owner-slash-name"})
+            )
+
+    def test_git_metadata_unknown_field_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            SourceConfig.model_validate(_config([_github()], git_metadata={"branch": "main"}))
+
 
 GLOB_CASES = [
     # (include, exclude, path, expected)

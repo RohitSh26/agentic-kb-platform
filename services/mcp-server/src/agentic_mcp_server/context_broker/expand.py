@@ -15,8 +15,10 @@ turned into EvidenceCards via build_card(), and accumulated until budget_tokens
 is reached. If context_pack_id is given, the expansion is charged against the
 pack's run budget and new cards are registered into the pack.
 
-A retrieval_event row is written BEFORE the pack state is updated (store-after-
-ledger ordering: no orphan state without a ledger row).
+The pack is charged (and new cards registered) BEFORE the retrieval_event row
+is written; if that write raises, the charge and the new cards are refunded
+under the SAME pack.lock acquisition (kb_search's precedent, commit 346c2d2) —
+never an orphan charge for a ledger row that never landed.
 """
 
 import logging
@@ -263,32 +265,54 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
         "tokens": tokens_used,
     }
 
-    # Write ledger row BEFORE updating pack state (store-after-ledger ordering).
-    async with deps.session_factory() as session:
-        await insert_event(
-            session,
-            RetrievalEventInsert(
-                run_id=run_id,
-                agent_name=requester.subject,
-                tool_name=_TOOL_NAME,
-                status="approved",
-                kb_version=kb_version,
-                context_pack_id=pack_id_for_ledger,
-                query_text=",".join(str(s) for s in request.seed_artifact_ids),
-                returned_artifact_ids=all_artifact_ids,
-                new_evidence_ids=[uuid.UUID(c.evidence_id) for c in cards],
-                tokens_returned=tokens_used,
-                latency_ms=int((time.monotonic() - started) * 1000),
-                details=_expand_details,
-            ),
-        )
+    async def write_ledger() -> None:
+        async with deps.session_factory() as session:
+            await insert_event(
+                session,
+                RetrievalEventInsert(
+                    run_id=run_id,
+                    agent_name=requester.subject,
+                    tool_name=_TOOL_NAME,
+                    status="approved",
+                    kb_version=kb_version,
+                    context_pack_id=pack_id_for_ledger,
+                    query_text=",".join(str(s) for s in request.seed_artifact_ids),
+                    returned_artifact_ids=all_artifact_ids,
+                    new_evidence_ids=[uuid.UUID(c.evidence_id) for c in cards],
+                    tokens_returned=tokens_used,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    details=_expand_details,
+                ),
+            )
 
-    # Update pack state: charge budget and register new cards.
+    # Charge budget and register new cards BEFORE the ledger write (kb_search's
+    # precedent, commit 346c2d2): if the write below raises, the charge and the
+    # new cards are refunded under the SAME pack.lock acquisition — a crashed
+    # platform call must never eat the agent's pack budget or leave orphaned
+    # pack state for a ledger row that never landed.
     if pack is not None:
         async with pack.lock:
+            snapshot = pack.snapshot(requester.subject)
             pack.charge(requester.subject, tokens_used)
             for card in cards:
                 pack.cards[card.evidence_id] = card
+            try:
+                await write_ledger()
+            except Exception:
+                pack.restore(requester.subject, snapshot)
+                logger.warning(
+                    "broker.expand subject=%s status=refunded tokens_refunded=%d "
+                    "cards_refunded=%d",
+                    requester.subject,
+                    tokens_used,
+                    len(cards),
+                )
+                # Not ledgered here: the uniform tool wrapper
+                # (mcp/tool_handlers.py) writes the single error
+                # retrieval_event for this call.
+                raise
+    else:
+        await write_ledger()
 
     logger.info(
         "broker.expand seeds=%d subject=%s trust_floor=%s include_inferred=%s "

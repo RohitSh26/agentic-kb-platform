@@ -81,3 +81,20 @@ async def test_connector_lists_and_fetches_deterministically(repo: Path) -> None
     second = await connector.fetch(ref)
     assert first.content_hash == second.content_hash
     assert parse_changed_files(first.text) == ("README.md", "src/service.py")
+
+
+async def test_connector_leaves_repo_unstamped_by_default(repo: Path) -> None:
+    # Backward-compatible default: an unconfigured repo identity stays None (the
+    # exact pre-fix behaviour) — safe (deny-by-default), just under-resolving.
+    connector = GitMetadataConnector(repo, max_commits=10)
+    (ref,) = await connector.list_sources()
+    assert ref.repo is None
+
+
+async def test_connector_stamps_the_configured_repo_on_every_ref(repo: Path) -> None:
+    # Fix: git_metadata repo provenance — commit ACLs + commit-mined aliases
+    # resolve (repo, path)-scoped, so the connector must carry a real repo
+    # identity when one is configured (docs/contracts/source-config.md).
+    connector = GitMetadataConnector(repo, repo="o/r", max_commits=10)
+    (ref,) = await connector.list_sources()
+    assert ref.repo == "o/r"

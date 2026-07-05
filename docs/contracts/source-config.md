@@ -30,6 +30,9 @@ version: 1            # required; the schema version of this document
 defaults:             # optional; applied where a source omits the field
   acl_teams: []       # [] = org-public (any authenticated subject)
 
+git_metadata:          # optional; the LOCAL git workspace's own repo identity
+  repo: owner/name     # see "git_metadata repo identity" below
+
 sources: []           # required; one block per ingested source, see below
 ```
 
@@ -37,7 +40,30 @@ sources: []           # required; one block per ingested source, see below
 |---|---|---|
 | `version` | int | must be `1` |
 | `defaults.acl_teams` | list[str] | default `[]` |
+| `git_metadata.repo` | str \| null | optional; `owner/name` (same pattern as `github_code`/`github_doc`'s `repo`); see below |
 | `sources` | list | at least one; `name` must be unique across the file |
+
+## `git_metadata` repo identity
+
+`git_metadata` is not a `sources:` entry — the build always mines the ONE local git
+workspace at `--workspace` (regardless of `--backend`; PR-26), so it has no per-source
+`repo:` field of its own. Its commit `SourceRef`s still need a `repo` so commit ACLs
+(`write_commit_artifact`) and commit-mined aliases (`alias-reference.md`) resolve against
+the same `(repo, path)` scope the `github_code`/`github_doc` rows for that workspace use —
+an unstamped (`NULL`) `repo` matches only other repo-less rows, which is safe (never widens
+visibility) but silently fails to resolve against a real repo-stamped source.
+
+Resolution order (`connectors/config_loader.py::resolve_git_metadata_repo`):
+
+1. **Explicit `git_metadata.repo`** always wins — the only way to disambiguate a workspace
+   standing in for more than one logical repo (e.g. a local mixed-repo test fixture).
+2. Otherwise, when every **enabled** `github_code`/`github_doc` source names the **same**
+   `repo` — the common case, since the workspace normally *is* that repo's checkout — that
+   shared value is used automatically. No config change is needed for a typical single-repo
+   build.
+3. Zero or more than one distinct `repo` with no explicit override resolves to `None` (a
+   `WARNING` is logged for the ambiguous case): the connector leaves `repo` unstamped, exactly
+   as before — deny-by-default-safe, never a guessed misattribution.
 
 ## Common fields (every source block)
 
@@ -187,10 +213,13 @@ sources:
 
 - The build reads the config path from `SOURCE_CONFIG_PATH` (no default in production — explicit
   beats implicit; tests pass paths directly).
-- Load order: parse YAML (`yaml.safe_load`) → validate schema → resolve every **enabled** source's
-  configured `token_env` against the environment → construct connectors. Any failure aborts before
-  any fetch. (A disabled source's `token_env` is not resolved — disabling a source must not require
-  its credential.)
+- Load order: parse YAML (`yaml.safe_load`) → validate schema → construct connectors. For
+  **`--backend production`**, every **enabled** source's configured `token_env` is resolved against
+  the environment first, and any failure aborts before any fetch. **`--backend local`** never
+  authenticates (it reads workspace files only, including for source types it can't otherwise fetch
+  locally — `azure_wiki`/`ado_card`, which the pre-flight already warns and skips), so it never
+  resolves `token_env`, even an unset one, and never hard-fails on it. (A disabled source's
+  `token_env` is not resolved either way — disabling a source must not require its credential.)
 - `FilteredFetchBackend` applies `include`/`exclude` to `list_sources()` output — an excluded path
   is never fetched, hashed, or stored.
 - `acl_teams` flows `sources.yaml` → `SourceRef` → `source_item.acl_teams` on insert **and**
@@ -202,5 +231,5 @@ sources:
 ## What this contract does not cover
 
 The real GitHub/Azure DevOps API `FetchBackend` implementations (recorded follow-up). The factory
-seam `connectors_from_config(config, backend_factory)` is where they plug in; this schema is
-deliberately sufficient to drive them when they land.
+seam `connectors_from_config(config, backend_factory, *, authenticates=...)` is where they plug in;
+this schema is deliberately sufficient to drive them when they land.

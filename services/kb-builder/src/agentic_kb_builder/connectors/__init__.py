@@ -11,6 +11,7 @@ from agentic_kb_builder.connectors.config_loader import (
     SourceConfigError,
     connectors_from_config,
     load_source_config,
+    resolve_git_metadata_repo,
     resolve_token,
 )
 from agentic_kb_builder.connectors.git_metadata import GitMetadataConnector
@@ -42,5 +43,6 @@ __all__ = [
     "connectors_from_config",
     "load_source_config",
     "production_backend_factory",
+    "resolve_git_metadata_repo",
     "resolve_token",
 ]

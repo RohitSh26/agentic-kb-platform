@@ -9,6 +9,15 @@ version: 1
 defaults:
   acl_teams: []          # [] = org-public (any authenticated subject)
 
+# Optional. git_metadata mines the LOCAL --workspace's own git history (it has no
+# sources: entry of its own); repo names the SAME (repo, path) scope this workspace's
+# github_code/github_doc sources below populate, so commit ACLs + commit-mined
+# aliases resolve against them. Omit this block entirely when every enabled
+# github_code/github_doc source below shares one repo (as they do here) — that
+# shared value is derived automatically (docs/contracts/source-config.md).
+git_metadata:
+  repo: RohitSh26/agentic-kb-platform
+
 sources:
   # All four types fetch for real with --backend production (each pins to a
   # deterministic version). You set IDENTIFIERS, not URLs: github_* build from

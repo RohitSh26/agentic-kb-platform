@@ -27,6 +27,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_mcp_server.auth.rbac import Requester
+from agentic_mcp_server.context_broker import evidence as evidence_module
+from agentic_mcp_server.context_broker import request_more as request_more_module
 from agentic_mcp_server.context_broker.budgets import (
     AgentAllowance,
     BudgetPolicy,
@@ -303,6 +305,58 @@ async def test_request_more_charges_new_evidence_then_reuses_exact_repeat(
         ("context.request_more", "approved", False, False),
         ("context.request_more", "reused", True, False),
     ]
+
+
+async def test_request_more_ledger_crash_refunds_the_charge_and_writes_no_row(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same crash-refund guarantee as open_evidence/kb_search: an unexpected
+    mid-flight ledger failure must refund the pack's tokens/requests/new-cards/
+    dedupe-history charge in full, write no ledger row itself, and still
+    propagate (Fix: pack-scoped crash refunds, kb_search's precedent 346c2d2)."""
+    deps, pack_id, refund_id = await _pack_with_refund_follow_up(
+        factory, budget_policy=GENEROUS_POLICY
+    )
+    question = "how does refund processing work in checkout"
+    # create_pack already recorded its own history entry; the crashed call
+    # must leave history at exactly this pre-charge length, not zero.
+    history_len_before = len(deps.packs.get(pack_id).history.entries)
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("ledger db down")
+
+    monkeypatch.setattr(request_more_module, "insert_event", _boom)
+
+    with pytest.raises(RuntimeError, match="ledger db down"):
+        await request_more(
+            deps,
+            _request_more(question).model_copy(update={"context_pack_id": pack_id}),
+            REQUESTER,
+        )
+
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, RUN_ID)
+    assert [row.tool_name for row in rows] == ["context.create_pack"]
+
+    pack_state = deps.packs.get(pack_id)
+    assert pack_state.usage_for(SUBJECT).tokens == 0
+    assert pack_state.usage_for(SUBJECT).requests == 0
+    assert str(refund_id) not in pack_state.cards
+    assert len(pack_state.history.entries) == history_len_before
+
+    # the refund actually restores the budget: a working call afterwards still
+    # resolves and charges normally, not against already-inflated counters
+    monkeypatch.undo()
+    recovered = await request_more(
+        deps,
+        _request_more(question).model_copy(update={"context_pack_id": pack_id}),
+        REQUESTER,
+    )
+    assert recovered.status == "approved"
+    assert [c.evidence_id for c in recovered.new_evidence_cards] == [str(refund_id)]
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, RUN_ID)
+    assert [row.tool_name for row in rows] == ["context.create_pack", "context.request_more"]
 
 
 async def test_request_more_semantic_near_duplicate_is_reused(
@@ -763,6 +817,63 @@ async def test_open_evidence_returns_untrusted_content_and_charges_the_run(
         rows = await fetch_ledger_rows(session, RUN_ID)
     assert (rows[-1].tool_name, rows[-1].status) == ("context.open_evidence", "approved")
     assert rows[-1].tokens_returned == response.tokens_used
+
+
+async def test_open_evidence_ledger_crash_refunds_the_charge_and_writes_no_row(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unexpected mid-flight failure (the ledger DB down, not an anticipated
+    ToolError) must never eat the pack's run/agent budget. open_evidence itself
+    must NOT write a ledger row for its own crash either — that is the uniform
+    tool wrapper's job (mcp/tool_handlers.py); a row here too would double-ledger
+    the same failed call once the wrapper adds its own (Fix: pack-scoped crash
+    refunds, kb_search's precedent commit 346c2d2)."""
+    search = FakeSearchClient()
+    async with factory() as session:
+        artifact_id = await _seed_payment_artifact(session, search)
+    deps = make_broker_deps(factory, search)
+    created = await create_pack(deps, _create_pack_request(), REQUESTER)
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("ledger db down")
+
+    monkeypatch.setattr(evidence_module, "insert_event", _boom)
+
+    with pytest.raises(RuntimeError, match="ledger db down"):
+        await open_evidence(
+            deps,
+            OpenEvidenceRequest(
+                context_pack_id=created.context_pack_id,
+                evidence_id=str(artifact_id),
+                max_tokens=1000,
+            ),
+            REQUESTER,
+        )
+
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, RUN_ID)
+    assert [row.tool_name for row in rows] == ["context.create_pack"]
+
+    pack_state = deps.packs.get(created.context_pack_id)
+    assert pack_state.used_run_tokens == created.budget_used_tokens
+    assert pack_state.usage_for(SUBJECT).tokens == 0
+
+    # the refund actually restores the budget: a working call afterwards still
+    # charges normally, not against an already-inflated used_run_tokens
+    monkeypatch.undo()
+    recovered = await open_evidence(
+        deps,
+        OpenEvidenceRequest(
+            context_pack_id=created.context_pack_id,
+            evidence_id=str(artifact_id),
+            max_tokens=1000,
+        ),
+        REQUESTER,
+    )
+    assert pack_state.used_run_tokens == created.budget_used_tokens + recovered.tokens_used
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, RUN_ID)
+    assert [row.tool_name for row in rows] == ["context.create_pack", "context.open_evidence"]
 
 
 async def test_open_evidence_truncates_to_the_token_cap(

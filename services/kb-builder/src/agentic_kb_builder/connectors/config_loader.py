@@ -1,9 +1,11 @@
 """Load sources.yaml into typed specs and construct connectors.
 
 Fail-fast pipeline: parse YAML -> validate schema -> resolve every configured
-token_env against the environment -> construct connectors. Any failure aborts
-before a single fetch. Token values exist only as local variables handed to
-the backend factory — never on a model, never in a log.
+token_env against the environment (only when the selected backend actually
+authenticates; see `connectors_from_config`'s `authenticates` flag) -> construct
+connectors. Any failure aborts before a single fetch. Token values exist only
+as local variables handed to the backend factory — never on a model, never in
+a log.
 """
 
 import os
@@ -25,6 +27,8 @@ from agentic_kb_builder.connectors.source_connector import (
 )
 from agentic_kb_builder.domain import SourceRef, SourceType
 from agentic_kb_builder.domain.source_config import (
+    GithubCodeSourceSpec,
+    GithubDocSourceSpec,
     PathFilter,
     PathSelectSpec,
     SourceConfig,
@@ -154,22 +158,64 @@ class FilteredFetchBackend:
 
 
 def connectors_from_config(
-    config: SourceConfig, backend_factory: BackendFactory
+    config: SourceConfig, backend_factory: BackendFactory, *, authenticates: bool = True
 ) -> list[Connector]:
     """Construct one connector per enabled source. Tokens are resolved here —
     for every enabled source, before any connector runs — and handed to the
-    backend factory as a local value only."""
+    backend factory as a local value only.
+
+    `authenticates` (default True) tells this function whether the selected
+    backend can actually use a token. The local filesystem backend reads
+    workspace files only and never authenticates — including for source types
+    it can't otherwise fetch locally (azure_wiki/ado_card; config_validator
+    already warns and skips those). Passing `authenticates=False` there defers
+    every source to token=None instead of hard-failing pre-flight on a
+    token_env that a local build was never going to read. Production backends
+    must keep the default so a missing token_env still aborts before any
+    fetch — this flag never weakens that."""
     connectors: list[Connector] = []
     for spec in config.sources:
         if not spec.enabled:
             logger.info("event=source_skipped_disabled source=%s type=%s", spec.name, spec.type)
             continue
-        token = resolve_token(spec)
+        token = resolve_token(spec) if authenticates else None
         backend = backend_factory(spec, token)
         path_filter = spec.path_filter() if isinstance(spec, PathSelectSpec) else PathFilter()
         filtered = FilteredFetchBackend(backend, path_filter, spec.acl_teams, source_name=spec.name)
         connectors.append(_CONNECTOR_TYPES[spec.type](filtered))
     return connectors
+
+
+def resolve_git_metadata_repo(config: SourceConfig) -> str | None:
+    """The repo identity to stamp on git_metadata commit SourceRefs (Fix: PR
+    docs/contracts/source-config.md "git_metadata repo identity").
+
+    git_metadata has no `sources:` entry of its own — it always mines the ONE
+    local workspace at `--workspace` — so its repo can't come from a per-source
+    field. Resolution order: an explicit `git_metadata.repo` always wins (the
+    only way to disambiguate a workspace standing in for more than one logical
+    repo); otherwise, when every enabled github_code/github_doc source names
+    the SAME repo — the common case, since the workspace normally IS that
+    repo's checkout — that shared value is used. Zero or more than one distinct
+    repo with no explicit override resolves to None (logged): the connector
+    then leaves `repo` unstamped, exactly as before this fix — deny-by-default
+    -safe, never a guessed misattribution."""
+    if config.git_metadata is not None and config.git_metadata.repo is not None:
+        return config.git_metadata.repo
+    repos = {
+        spec.repo
+        for spec in config.sources
+        if spec.enabled and isinstance(spec, GithubCodeSourceSpec | GithubDocSourceSpec)
+    }
+    if len(repos) == 1:
+        return next(iter(repos))
+    if len(repos) > 1:
+        logger.warning(
+            "event=git_metadata_repo_ambiguous repos=%s "
+            "hint=set_git_metadata.repo_in_sources_yaml_to_disambiguate",
+            sorted(repos),
+        )
+    return None
 
 
 __all__ = [
@@ -179,5 +225,6 @@ __all__ = [
     "SourceConfigError",
     "connectors_from_config",
     "load_source_config",
+    "resolve_git_metadata_repo",
     "resolve_token",
 ]

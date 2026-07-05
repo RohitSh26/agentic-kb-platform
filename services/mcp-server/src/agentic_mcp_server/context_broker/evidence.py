@@ -144,8 +144,26 @@ async def open_evidence(
         content = body[: request.max_tokens * CHARS_PER_TOKEN]
         # Scan before ledger write so injection_flagged is in the details row.
         scan = scan_for_injection(content)
+        # Snapshot BEFORE charging: if the ledger write below raises, the whole
+        # charge for this call is refunded — a crashed platform call must never
+        # eat the agent's pack budget. The refund is inside this SAME lock
+        # acquisition as the charge (kb_search's precedent, commit 346c2d2).
+        snapshot = pack.snapshot(requester.subject)
         pack.charge(requester.subject, cost)
-        await write_ledger("approved", cost, injection_flagged=scan.flagged)
+        try:
+            await write_ledger("approved", cost, injection_flagged=scan.flagged)
+        except Exception:
+            pack.restore(requester.subject, snapshot)
+            logger.warning(
+                "broker.open_evidence subject=%s status=refunded evidence_id=%s "
+                "tokens_refunded=%d",
+                requester.subject,
+                request.evidence_id,
+                cost,
+            )
+            # Not ledgered here: the uniform tool wrapper (mcp/tool_handlers.py)
+            # writes the single error retrieval_event for this call.
+            raise
 
     audit_context_access(
         tool=_TOOL_NAME,

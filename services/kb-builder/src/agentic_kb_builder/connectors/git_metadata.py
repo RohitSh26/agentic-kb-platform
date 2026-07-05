@@ -5,9 +5,18 @@ production track) by shelling out to `git log` with a stable, machine-readable
 format and parsing stdout. For each commit it produces:
 
 - a SourceRef (source_type='git_metadata', source_uri=`git:<sha>`,
-  source_version=full SHA, branch=current branch) — deterministic identity, and
+  source_version=full SHA, repo=the connector's configured repo identity (see
+  `repo` below), branch=current branch) — deterministic identity, and
 - a normalized rendering = subject + body + a clearly delimited, sorted list of
   changed file paths.
+
+`repo` (optional; see `connectors/config_loader.py::resolve_git_metadata_repo` and
+docs/contracts/source-config.md "git_metadata repo identity") is stamped on every
+commit SourceRef so commit ACLs (`write_commit_artifact`) and commit-mined aliases
+(`alias-reference.md`) resolve against the SAME `(repo, path)` scope the workspace's
+`github_code`/`github_doc` sources populate. Left `None`, commits only match other
+repo-less source rows — safe (never widens visibility) but under-resolving whenever
+a real repo-stamped source shares a path with a commit's changed files.
 
 Same source state ⇒ same rendering ⇒ same content_hash (connectors rule), so an
 unchanged commit is skipped on the next build. History is bounded by
@@ -170,10 +179,16 @@ class GitMetadataConnector:
     source_type: ClassVar[SourceType] = "git_metadata"
 
     def __init__(
-        self, root: Path, *, branch: str | None = None, max_commits: int = DEFAULT_MAX_COMMITS
+        self,
+        root: Path,
+        *,
+        repo: str | None = None,
+        branch: str | None = None,
+        max_commits: int = DEFAULT_MAX_COMMITS,
     ) -> None:
         self._root = root.resolve()
         self._max_commits = max_commits
+        self._repo = repo
         self._branch = branch
         self._records: dict[str, CommitRecord] = {}
 
@@ -192,6 +207,7 @@ class GitMetadataConnector:
                 source_type="git_metadata",
                 source_uri=f"git:{commit.sha}",
                 source_version=commit.sha,
+                repo=self._repo,
                 branch=branch,
                 path=None,
                 external_id=commit.sha,
@@ -199,8 +215,9 @@ class GitMetadataConnector:
             for commit in commits
         ]
         logger.info(
-            "event=git_metadata_listed root=%s branch=%s commits=%d max_commits=%d",
+            "event=git_metadata_listed root=%s repo=%s branch=%s commits=%d max_commits=%d",
             self._root,
+            self._repo,
             branch,
             len(refs),
             self._max_commits,

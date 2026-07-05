@@ -33,6 +33,7 @@ from mcp_test_support import TEST_DATABASE_URL, make_session_factory
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_mcp_server.auth.rbac import Requester
+from agentic_mcp_server.context_broker import expand as expand_module
 from agentic_mcp_server.context_broker.expand import expand
 from agentic_mcp_server.context_broker.state import EvidencePackState, new_pack_id
 from agentic_mcp_server.infrastructure.search.search_client import FakeSearchClient
@@ -551,6 +552,75 @@ async def test_expand_with_pack_skips_seeds_already_in_pack(
     assert symbol_a not in returned_ids
     # But its neighbors (file_b) should still be reachable
     assert file_b in returned_ids
+
+
+async def test_expand_ledger_crash_refunds_the_pack_charge_and_writes_no_row(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same crash-refund guarantee as open_evidence/request_more/kb_search: an
+    unexpected mid-flight ledger failure must refund the pack's token charge
+    and the new cards this call would have registered, write no ledger row
+    itself, and still propagate (Fix: pack-scoped crash refunds, kb_search's
+    precedent commit 346c2d2)."""
+    async with factory() as session:
+        symbol_a, *_ = await _seed_code_graph(session)
+    deps = make_broker_deps(factory, FakeSearchClient())
+
+    run_id = "expand-crash-run"
+    pack = EvidencePackState(
+        context_pack_id=new_pack_id(),
+        run_id=run_id,
+        kb_version=KB_VERSION,
+        build_seq=1,
+        retrieval_profile="default",
+        summary="test pack",
+        budget_tokens=10_000,
+        used_run_tokens=0,
+        cards={},
+        open_questions=[],
+    )
+    deps.packs.create(pack)
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("ledger db down")
+
+    monkeypatch.setattr(expand_module, "insert_event", _boom)
+
+    with pytest.raises(RuntimeError, match="ledger db down"):
+        await expand(
+            deps,
+            ExpandRequest(
+                seed_artifact_ids=[symbol_a],
+                budget_tokens=10_000,
+                context_pack_id=pack.context_pack_id,
+            ),
+            REQUESTER,
+        )
+
+    assert pack.used_run_tokens == 0
+    assert pack.usage_for(SUBJECT).tokens == 0
+    assert pack.cards == {}
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, run_id)
+    assert rows == []
+
+    # the refund actually restores the budget: a working call afterwards still
+    # charges normally, not against an already-inflated used_run_tokens
+    monkeypatch.undo()
+    recovered = await expand(
+        deps,
+        ExpandRequest(
+            seed_artifact_ids=[symbol_a],
+            budget_tokens=10_000,
+            context_pack_id=pack.context_pack_id,
+        ),
+        REQUESTER,
+    )
+    assert recovered.tokens_used > 0
+    assert pack.used_run_tokens == recovered.tokens_used
+    async with factory() as session:
+        rows = await fetch_ledger_rows(session, run_id)
+    assert [row.tool_name for row in rows] == ["context.expand"]
 
 
 # ---------------------------------------------------------------------------

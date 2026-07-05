@@ -10,6 +10,7 @@ from agentic_kb_builder.connectors import (
     SourceConfigError,
     connectors_from_config,
     load_source_config,
+    resolve_git_metadata_repo,
     resolve_token,
 )
 from agentic_kb_builder.connectors.source_connector import FetchBackend
@@ -200,3 +201,160 @@ class TestConnectorsFromConfig:
         config = load_source_config(_write_yaml(tmp_path, VALID_YAML))
         with pytest.raises(SourceConfigError):
             connectors_from_config(config, lambda spec, token: FakeBackend([]))
+
+    def test_authenticates_true_is_the_default_and_still_hard_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Production must keep hard-failing fast on a missing token_env — this is the
+        # exact same case as above, asserted again with `authenticates=True` spelled
+        # out explicitly so a future default change cannot silently weaken it.
+        monkeypatch.delenv("TEST_GITHUB_TOKEN", raising=False)
+        config = load_source_config(_write_yaml(tmp_path, VALID_YAML))
+        with pytest.raises(SourceConfigError, match="TEST_GITHUB_TOKEN is not set"):
+            connectors_from_config(
+                config, lambda spec, token: FakeBackend([]), authenticates=True
+            )
+
+    def test_authenticates_false_never_resolves_tokens_and_never_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The local backend reads workspace files only and never authenticates, so an
+        # unset token_env (e.g. GITHUB_TOKEN/ADO_PAT never exported for a local build)
+        # must not abort connector construction.
+        monkeypatch.delenv("TEST_GITHUB_TOKEN", raising=False)
+        config = load_source_config(_write_yaml(tmp_path, VALID_YAML))
+        seen: list[tuple[str, str | None]] = []
+
+        def factory(spec: SourceSpec, token: str | None) -> FetchBackend:
+            seen.append((spec.name, token))
+            return FakeBackend([])
+
+        connectors = connectors_from_config(config, factory, authenticates=False)
+        assert seen == [("code", None), ("docs", None)]
+        assert [connector.source_type for connector in connectors] == [
+            "github_code",
+            "github_doc",
+        ]
+
+    def test_authenticates_false_also_skips_not_locally_fetchable_source_tokens(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # azure_wiki / ado_card are skipped by config_validator as not fetchable under
+        # --backend local (WARNING only), but connectors_from_config still constructs
+        # them (the same LocalFsBackend just lists nothing useful for them). Their
+        # auth.token_env must not be required either.
+        monkeypatch.delenv("TEST_ADO_PAT", raising=False)
+        yaml_body = """
+version: 1
+sources:
+  - name: wiki
+    type: azure_wiki
+    organization: org
+    project: proj
+    wiki: w
+    auth:
+      token_env: TEST_ADO_PAT
+  - name: cards
+    type: ado_card
+    organization: org
+    project: proj
+    auth:
+      token_env: TEST_ADO_PAT
+"""
+        config = load_source_config(_write_yaml(tmp_path, yaml_body))
+        connectors = connectors_from_config(
+            config, lambda spec, token: FakeBackend([]), authenticates=False
+        )
+        assert [connector.source_type for connector in connectors] == ["azure_wiki", "ado_card"]
+
+
+class TestResolveGitMetadataRepo:
+    def test_single_shared_repo_is_derived_automatically(self, tmp_path: Path) -> None:
+        # VALID_YAML's "code" and "docs" sources both name repo o/r.
+        config = load_source_config(_write_yaml(tmp_path, VALID_YAML))
+        assert resolve_git_metadata_repo(config) == "o/r"
+
+    def test_no_github_sources_resolves_to_none(self, tmp_path: Path) -> None:
+        yaml_body = """
+version: 1
+sources:
+  - name: wiki
+    type: azure_wiki
+    organization: org
+    project: proj
+    wiki: w
+"""
+        config = load_source_config(_write_yaml(tmp_path, yaml_body))
+        assert resolve_git_metadata_repo(config) is None
+
+    def test_mixed_repos_with_no_override_resolves_to_none_and_warns(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        yaml_body = """
+version: 1
+sources:
+  - name: code-a
+    type: github_code
+    repo: org/repo-a
+    include: ["a/**"]
+  - name: code-b
+    type: github_code
+    repo: org/repo-b
+    include: ["b/**"]
+"""
+        config = load_source_config(_write_yaml(tmp_path, yaml_body))
+        with caplog.at_level(logging.WARNING):
+            assert resolve_git_metadata_repo(config) is None
+        assert any(
+            "event=git_metadata_repo_ambiguous" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_explicit_override_wins_even_with_a_single_shared_repo(self, tmp_path: Path) -> None:
+        yaml_body = """
+version: 1
+git_metadata:
+  repo: org/override
+sources:
+  - name: code
+    type: github_code
+    repo: o/r
+    include: ["src/**"]
+"""
+        config = load_source_config(_write_yaml(tmp_path, yaml_body))
+        assert resolve_git_metadata_repo(config) == "org/override"
+
+    def test_explicit_override_disambiguates_mixed_repos(self, tmp_path: Path) -> None:
+        yaml_body = """
+version: 1
+git_metadata:
+  repo: org/repo-a
+sources:
+  - name: code-a
+    type: github_code
+    repo: org/repo-a
+    include: ["a/**"]
+  - name: code-b
+    type: github_code
+    repo: org/repo-b
+    include: ["b/**"]
+"""
+        config = load_source_config(_write_yaml(tmp_path, yaml_body))
+        assert resolve_git_metadata_repo(config) == "org/repo-a"
+
+    def test_disabled_sources_do_not_count_toward_derivation(self, tmp_path: Path) -> None:
+        yaml_body = """
+version: 1
+sources:
+  - name: code-a
+    type: github_code
+    repo: org/repo-a
+    include: ["a/**"]
+  - name: code-b
+    type: github_code
+    repo: org/repo-b
+    include: ["b/**"]
+    enabled: false
+"""
+        config = load_source_config(_write_yaml(tmp_path, yaml_body))
+        assert resolve_git_metadata_repo(config) == "org/repo-a"

@@ -36,6 +36,7 @@ from agentic_kb_builder.connectors import (
     GitMetadataConnector,
     connectors_from_config,
     load_source_config,
+    resolve_git_metadata_repo,
 )
 from agentic_kb_builder.connectors.config_loader import BackendFactory
 from agentic_kb_builder.connectors.config_validator import (
@@ -137,13 +138,22 @@ async def run_build(
         factory = production_backend_factory()
     else:
         factory = local_fs_backend_factory(Path(workspace), version=version)
-    connectors = connectors_from_config(config, factory)
+    # The local backend reads workspace files only and never authenticates (not even
+    # for azure_wiki/ado_card sources it can't fetch — config_validator already warns
+    # and skips those); resolving auth.token_env for it would hard-fail a local build
+    # on an unset var it was never going to read. Production must still fail fast.
+    connectors = connectors_from_config(config, factory, authenticates=backend == "production")
     if git_metadata:
         # Cross-domain phase 2 (PR-26): deterministic, zero-LLM commit artifacts
         # from the local workspace git history. Appended last so its commit
         # artifacts can resolve changed-file → code edges against code artifacts
-        # produced earlier in the same build.
-        connectors.append(GitMetadataConnector(Path(workspace)))
+        # produced earlier in the same build. `repo` is stamped so commit ACLs +
+        # commit-mined aliases resolve (repo, path)-scoped against the SAME repo
+        # the workspace's github_code/github_doc sources populate (docs/contracts/
+        # source-config.md "git_metadata repo identity").
+        connectors.append(
+            GitMetadataConnector(Path(workspace), repo=resolve_git_metadata_repo(config))
+        )
     runner = BuildRunner(
         session,
         kb_version=kb_version,

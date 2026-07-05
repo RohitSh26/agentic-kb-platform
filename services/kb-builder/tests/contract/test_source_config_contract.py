@@ -22,6 +22,8 @@ def test_example_yaml_validates_against_the_schema() -> None:
     config = load_source_config(EXAMPLE)
     assert config.version == 1
     assert config.defaults.acl_teams == []
+    assert config.git_metadata is not None
+    assert config.git_metadata.repo == "RohitSh26/agentic-kb-platform"
     assert [spec.name for spec in config.sources] == [
         "platform-code",
         "platform-docs",

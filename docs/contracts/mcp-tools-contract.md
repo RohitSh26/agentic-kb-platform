@@ -400,11 +400,16 @@ provenance is required; `kb_search` is the preferred first stop.
   `LedgeredToolError` marks the ones that have, so no call is ever double-
   ledgered), and refunds any budget charge made before the crash (e.g.
   `kb_search`'s call/token counters, restored under the same window lock the
-  charge used). A failing platform never silently vanishes from the ledger or
-  eats an agent's budget, and the exception always still reaches the caller.
-  If the error-ledger write itself fails (the database is fully down), the
-  original exception still surfaces — never masked by the ledger failure —
-  and the ledger-write failure is logged with structured fields.
+  charge used; the pack-scoped tools — `context.open_evidence`,
+  `context.expand`, `context.request_more` — refund the pack's run/agent
+  token counters, and `request_more` also its dedupe-history entry and new
+  cards, all restored under the same `EvidencePackState.lock` acquisition as
+  the charge via `EvidencePackState.snapshot`/`restore`). A failing platform
+  never silently vanishes from the ledger or eats an agent's budget, and the
+  exception always still reaches the caller. If the error-ledger write itself
+  fails (the database is fully down), the original exception still surfaces —
+  never masked by the ledger failure — and the ledger-write failure is logged
+  with structured fields.
 - Results are filtered by the requester's authorization before returning
   (PR-13: `team_acl_v1`). The requester is the authenticated session subject
   plus its team set, taken from the bearer token's `groups`/`roles` claims —

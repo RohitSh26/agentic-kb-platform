@@ -198,9 +198,21 @@ class SourceDefaults(ConfigModel):
     acl_teams: list[str] = []
 
 
+class GitMetadataConfig(ConfigModel):
+    """The LOCAL git workspace's own repo identity (docs/contracts/source-config.md
+    "git_metadata repo identity"). git_metadata has no `sources:` entry of its own —
+    it always mines the one workspace at `--workspace` — so this is the only place
+    its repo can be configured explicitly, overriding auto-derivation from the
+    github_code/github_doc sources."""
+
+    # pattern lives on the str member so None stays valid (see AdoCardSourceSpec.area_path).
+    repo: Annotated[str, StringConstraints(pattern=_REPO_PATTERN)] | None = None
+
+
 class SourceConfig(ConfigModel):
     version: Literal[1]
     defaults: SourceDefaults = SourceDefaults()
+    git_metadata: GitMetadataConfig | None = None
     sources: list[SourceSpec] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -232,6 +244,7 @@ __all__ = [
     "AzureWikiSourceSpec",
     "BaseSourceSpec",
     "ConfigModel",
+    "GitMetadataConfig",
     "GithubCodeSourceSpec",
     "GithubDocSourceSpec",
     "GlobError",

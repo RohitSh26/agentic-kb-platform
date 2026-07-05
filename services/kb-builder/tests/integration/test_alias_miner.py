@@ -14,6 +14,7 @@ import subprocess
 import uuid
 from collections.abc import AsyncIterator, Iterator, Sequence
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from alembic import command
@@ -34,7 +35,7 @@ from agentic_kb_builder.alias.run import (
 from agentic_kb_builder.application import EmbeddingResult
 from agentic_kb_builder.application.build_runner import BuildRunner
 from agentic_kb_builder.connectors.git_metadata import CHANGED_FILES_HEADER, GitMetadataConnector
-from agentic_kb_builder.domain import DocExtractionResult, NormalizedContent
+from agentic_kb_builder.domain import DocExtractionResult, NormalizedContent, SourceRef, SourceType
 from agentic_kb_builder.domain.acl_intersection import DENY_ALL_ACL
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.infrastructure.postgres.models import (
@@ -49,6 +50,7 @@ requires_db = pytest.mark.skipif(
 )
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 _TABLES = (
+    "relationship_candidate",
     "retrieval_event",
     "embedding_cache",
     "generation_cache_artifact",
@@ -555,3 +557,134 @@ async def test_build_runner_writes_alias_rows_via_the_real_finalize_graph_pass(
     rows = await _alias_rows(session)
     assert rows
     assert any(r.title == "resolve relative imports" for r in rows)
+
+
+class _FakeGithubCodeConnector:
+    """One github_code source, one file, fully in-memory (no LocalFsBackend — that
+    backend keys source_item identity on the file's `file://` URI alone, so it
+    cannot represent the SAME path existing in two DIFFERENT repos, exactly the
+    mixed-repo scenario this test needs)."""
+
+    source_type: ClassVar[SourceType] = "github_code"
+
+    def __init__(self, *, repo: str, path: str, text: str, acl_teams: tuple[str, ...]) -> None:
+        self._repo = repo
+        self._path = path
+        self._text = text
+        self._acl_teams = acl_teams
+
+    async def list_sources(self) -> list[SourceRef]:
+        return [
+            SourceRef(
+                source_type="github_code",
+                source_uri=f"repo://{self._repo}/{self._path}",
+                source_version="rev-1",
+                repo=self._repo,
+                path=self._path,
+                acl_teams=list(self._acl_teams),
+            )
+        ]
+
+    async def fetch(self, source: SourceRef) -> NormalizedContent:
+        return NormalizedContent(
+            source=source, text=self._text, content_hash=content_hash(self._text)
+        )
+
+
+@requires_db
+async def test_build_runner_binds_commit_mined_alias_to_the_correct_repo_in_a_mixed_workspace(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    """Fix: git_metadata repo provenance. In ONE build with TWO github_code repos that
+    both own a file at the SAME path, a real `GitMetadataConnector(repo="o/r")` commit
+    touching that path must bind its alias — and the commit artifact's own ACL — ONLY
+    to o/r's artifact/source, never other/r's (restricted) same-path one. Proves the
+    connector's stamped `repo` flows through `write_commit_artifact` and
+    `run_alias_miner`'s (repo, path) scoping end to end via the REAL build pipeline —
+    not just via directly-seeded rows (`test_alias_target_resolution_is_scoped_to_the_
+    contributing_repo`, which does not exercise `GitMetadataConnector` at all). Before
+    this fix (repo always None), this resolved NOTHING (safe, but under-resolving); an
+    unscoped fix would instead leak other/r's restricted team (the KB-F4 precedent)."""
+    path = "shared.py"
+    text = "def shared():\n    return 1\n"
+
+    root = tmp_path / "mixed-repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.test")
+    _git(root, "config", "user.name", "Tester")
+    (root / path).write_text(text, encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "fix(alias-repo): shared module cleanup")
+
+    runner = BuildRunner(
+        session,
+        kb_version="kb-mixed-repo",
+        doc_extractor=_UnusedDocExtractor(),
+        embedder=_FakeEmbedder(),
+        indexer=_FakeIndexer(),
+    )
+    run = await runner.run(
+        [
+            _FakeGithubCodeConnector(repo="o/r", path=path, text=text, acl_teams=()),
+            _FakeGithubCodeConnector(repo="other/r", path=path, text=text, acl_teams=("team-b",)),
+            GitMetadataConnector(root, repo="o/r"),
+        ]
+    )
+    await session.commit()
+    assert run.status == "completed"
+
+    own_source_id = (
+        await session.execute(
+            select(SourceItem.source_id).where(SourceItem.repo == "o/r", SourceItem.path == path)
+        )
+    ).scalar_one()
+    other_source_id = (
+        await session.execute(
+            select(SourceItem.source_id).where(
+                SourceItem.repo == "other/r", SourceItem.path == path
+            )
+        )
+    ).scalar_one()
+    own_artifact_ids = {
+        row
+        for row in (
+            await session.execute(
+                select(KnowledgeArtifact.artifact_id).where(
+                    KnowledgeArtifact.source_id == own_source_id
+                )
+            )
+        ).scalars()
+    }
+    other_artifact_ids = {
+        row
+        for row in (
+            await session.execute(
+                select(KnowledgeArtifact.artifact_id).where(
+                    KnowledgeArtifact.source_id == other_source_id
+                )
+            )
+        ).scalars()
+    }
+
+    edges = await _alias_edges(session)
+    assert edges
+    to_ids = {edge.to_artifact_id for edge in edges}
+    assert to_ids & own_artifact_ids
+    assert not (to_ids & other_artifact_ids)
+    rows = await _alias_rows(session)
+    assert rows
+    # o/r's file is org-public; other/r's ["team-b"] must never leak in.
+    assert all(row.acl_teams == [] for row in rows)
+
+    commit_rows = (
+        (
+            await session.execute(
+                select(KnowledgeArtifact).where(KnowledgeArtifact.artifact_type == "commit")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert commit_rows
+    assert all(row.acl_teams == [] for row in commit_rows)

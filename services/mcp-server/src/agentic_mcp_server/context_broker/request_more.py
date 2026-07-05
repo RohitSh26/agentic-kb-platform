@@ -164,6 +164,13 @@ async def request_more(
             new_cards.append(card)
             tokens += cost
 
+        # Snapshot BEFORE charging: if the ledger write below raises, the whole
+        # charge (tokens, request count, new cards, dedupe history) for this
+        # call is refunded — a crashed platform call must never eat the
+        # agent's pack budget or leave orphaned pack state for a ledger row
+        # that never landed. Refund is inside this SAME lock acquisition as
+        # the charge (kb_search's precedent, commit 346c2d2).
+        snapshot = pack.snapshot(requester.subject)
         pack.charge(requester.subject, tokens)
         usage.requests += 1
         for card in new_cards:
@@ -171,7 +178,20 @@ async def request_more(
         new_ids = [card.evidence_id for card in new_cards]
         pack.history.record(normalized, new_ids)
 
-        await write_ledger("approved", new=new_ids, tokens_returned=tokens)
+        try:
+            await write_ledger("approved", new=new_ids, tokens_returned=tokens)
+        except Exception:
+            pack.restore(requester.subject, snapshot)
+            logger.warning(
+                "broker.request_more subject=%s status=refunded tokens_refunded=%d "
+                "requests_refunded=1 cards_refunded=%d",
+                requester.subject,
+                tokens,
+                len(new_ids),
+            )
+            # Not ledgered here: the uniform tool wrapper (mcp/tool_handlers.py)
+            # writes the single error retrieval_event for this call.
+            raise
     return RequestMoreResponse(
         status="approved",
         reused_evidence_ids=[],

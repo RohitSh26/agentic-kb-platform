@@ -10,12 +10,30 @@ import uuid
 from dataclasses import dataclass, field
 
 from agentic_mcp_server.context_broker.budgets import AgentUsage
-from agentic_mcp_server.context_broker.dedupe import QueryHistory
+from agentic_mcp_server.context_broker.dedupe import PastRetrieval, QueryHistory
 from agentic_mcp_server.mcp.tool_schemas.evidence import EvidenceCard
 
 
 class UnknownPackError(KeyError):
     pass
+
+
+@dataclass(frozen=True)
+class _PackSnapshot:
+    """A point-in-time copy of every field a charged pack operation might touch.
+
+    Taken BEFORE the charge (`EvidencePackState.snapshot`) so a mid-flight crash
+    between the charge and its ledger write can be refunded to EXACTLY the
+    pre-charge state (`EvidencePackState.restore`) — never a partial refund,
+    whatever subset of run/agent tokens, requests, cards, or dedupe history the
+    calling tool happened to mutate first.
+    """
+
+    used_run_tokens: int
+    agent_requests: int
+    agent_tokens: int
+    cards: dict[str, EvidenceCard]
+    history_entries: list[PastRetrieval]
 
 
 @dataclass
@@ -49,6 +67,32 @@ class EvidencePackState:
     def charge(self, subject: str, tokens: int) -> None:
         self.used_run_tokens += tokens
         self.usage_for(subject).tokens += tokens
+
+    def snapshot(self, subject: str) -> _PackSnapshot:
+        """Capture pre-charge state for `restore` — call BEFORE `charge` (or any
+        other mutation a charged tool call makes), under the same `lock`
+        acquisition, so a crash before the call's ledger write can be refunded."""
+        usage = self.usage_for(subject)
+        return _PackSnapshot(
+            used_run_tokens=self.used_run_tokens,
+            agent_requests=usage.requests,
+            agent_tokens=usage.tokens,
+            cards=dict(self.cards),
+            history_entries=list(self.history.entries),
+        )
+
+    def restore(self, subject: str, snapshot: _PackSnapshot) -> None:
+        """Undo a charge (and any card/history mutation made alongside it) back
+        to exactly the state `snapshot` captured — the refund half of the
+        snapshot/restore pair a crashed tool call uses to never eat an agent's
+        budget or leave orphaned pack state for a ledger row that never landed."""
+        self.used_run_tokens = snapshot.used_run_tokens
+        usage = self.usage_for(subject)
+        usage.requests = snapshot.agent_requests
+        usage.tokens = snapshot.agent_tokens
+        self.cards.clear()
+        self.cards.update(snapshot.cards)
+        self.history.entries[:] = snapshot.history_entries
 
 
 @dataclass

@@ -14,6 +14,7 @@ not this file's concern.
 """
 
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from typing import cast
 
@@ -23,6 +24,7 @@ from broker_test_support import (
     RaisingSearchClient,
     clean_registry,
     fetch_ledger_rows,
+    insert_artifact,
     insert_build_run,
     make_broker_deps,
     require_registry_schema,
@@ -34,10 +36,27 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_mcp_server.auth.client_identity import ClientIdentity
 from agentic_mcp_server.auth.rbac import Requester
+from agentic_mcp_server.context_broker import evidence as evidence_module
+from agentic_mcp_server.context_broker import expand as expand_module
+from agentic_mcp_server.context_broker import request_more as request_more_module
 from agentic_mcp_server.context_broker.budgets import AgentAllowance, BudgetPolicy
 from agentic_mcp_server.context_broker.constants import NO_RUN_SENTINEL
+from agentic_mcp_server.infrastructure.postgres.retrieval_events import (
+    insert_event as real_insert_event,
+)
+from agentic_mcp_server.infrastructure.search.search_client import FakeSearchClient, SearchHit
 from agentic_mcp_server.mcp import tool_handlers
 from agentic_mcp_server.mcp.tool_handlers import make_handlers
+from agentic_mcp_server.mcp.tool_schemas.context import (
+    CreatePackRequest,
+    CreatePackResponse,
+    ExpandRequest,
+    ExpandResponse,
+    OpenEvidenceRequest,
+    OpenEvidenceResponse,
+    RequestMoreRequest,
+    RequestMoreResponse,
+)
 from agentic_mcp_server.mcp.tool_schemas.search import KbSearchRequest, KbSearchResponse
 
 pytestmark = pytest.mark.skipif(
@@ -96,6 +115,42 @@ async def _fetch_details(session: AsyncSession, tool_name: str) -> list[dict[str
     return [row.details for row in result]
 
 
+PACK_RUN_ID = "run-wrapper-pack"
+
+
+async def _make_pack(
+    factory: async_sessionmaker[AsyncSession],
+) -> tuple[dict[str, tool_handlers.HandlerFn], FakeSearchClient, uuid.UUID, str]:
+    """A wrapped-handler pipeline with one org-public artifact seeded and a pack
+    created for it through the wrapped context.create_pack handler — the
+    shared setup the three pack-tool crash tests below build on. Returns
+    (handlers, search, artifact_id, context_pack_id); the search client is
+    returned so a request_more crash test can seed a follow-up hit."""
+    search = FakeSearchClient()
+    async with factory() as session:
+        artifact_id = await insert_artifact(
+            session,
+            title="Payment validation rules",
+            body_text="Validation lives in checkout/validators.py and rejects negative amounts.",
+        )
+    search.seed("payment", [SearchHit(artifact_id=artifact_id, score=2.0)])
+    deps = make_broker_deps(factory, search, budget_policy=_policy(4, 100_000))
+    handlers = make_handlers(deps)
+    created = cast(
+        CreatePackResponse,
+        await handlers["context.create_pack"](
+            CreatePackRequest(
+                run_id=PACK_RUN_ID,
+                task="payment validation",
+                approved_context_plan="review the payment validation rules for checkout",
+                retrieval_profile="default",
+                budget_tokens=8000,
+            )
+        ),
+    )
+    return handlers, search, artifact_id, created.context_pack_id
+
+
 async def test_unexpected_exception_writes_one_error_row_refunds_and_propagates(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -126,6 +181,178 @@ async def test_unexpected_exception_writes_one_error_row_refunds_and_propagates(
     async with factory() as session:
         rows = await fetch_ledger_rows(session, NO_RUN_SENTINEL)
     assert [row.status for row in rows] == ["error", "approved"]
+
+
+async def test_open_evidence_crash_writes_one_error_row_refunds_and_propagates(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same crash-refund guarantee as kb_search, exercised through the wrapped
+    context.open_evidence handler (Fix: pack-scoped crash refunds, kb_search's
+    precedent commit 346c2d2): a platform crash mid-call is ledgered exactly
+    once (by the wrapper, not open_evidence itself), its pack budget charge is
+    refunded, and the exception still reaches the caller."""
+    handlers, _search, artifact_id, context_pack_id = await _make_pack(factory)
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("ledger db down")
+
+    monkeypatch.setattr(evidence_module, "insert_event", _boom)
+
+    with pytest.raises(RuntimeError, match="ledger db down"):
+        await handlers["context.open_evidence"](
+            OpenEvidenceRequest(
+                context_pack_id=context_pack_id, evidence_id=str(artifact_id), max_tokens=1000
+            )
+        )
+
+    # the pack's own run_id ledger is untouched by the crash — no orphan/half
+    # row lands there; the wrapper's generic error row carries no run handle
+    # (it has no pack/domain context, only the exception), so it lands under
+    # the sentinel, exactly like kb_search's own error rows.
+    async with factory() as session:
+        pack_run_rows = await fetch_ledger_rows(session, PACK_RUN_ID)
+    assert [(row.tool_name, row.status) for row in pack_run_rows] == [
+        ("context.create_pack", "approved")
+    ]
+    async with factory() as session:
+        error_rows = await fetch_ledger_rows(session, NO_RUN_SENTINEL)
+    assert [(row.tool_name, row.status) for row in error_rows] == [
+        ("context.open_evidence", "error")
+    ]
+    async with factory() as session:
+        details = await _fetch_details(session, "context.open_evidence")
+    assert details == [{"exception_type": "RuntimeError"}]
+
+    # budget refunded: a working call afterwards still charges normally. Restore
+    # just this one attribute (not monkeypatch.undo(), which is shared with the
+    # autouse _fixed_identity fixture and would strip the identity patches too).
+    monkeypatch.setattr(evidence_module, "insert_event", real_insert_event)
+    recovered = cast(
+        OpenEvidenceResponse,
+        await handlers["context.open_evidence"](
+            OpenEvidenceRequest(
+                context_pack_id=context_pack_id, evidence_id=str(artifact_id), max_tokens=1000
+            )
+        ),
+    )
+    assert recovered.tokens_used > 0
+    async with factory() as session:
+        pack_run_rows = await fetch_ledger_rows(session, PACK_RUN_ID)
+    assert [row.status for row in pack_run_rows] == ["approved", "approved"]
+
+
+async def test_request_more_crash_writes_one_error_row_refunds_and_propagates(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same crash-refund guarantee, exercised through the wrapped
+    context.request_more handler."""
+    handlers, search, _artifact_id, context_pack_id = await _make_pack(factory)
+    async with factory() as session:
+        refund_id = await insert_artifact(
+            session,
+            title="Refund processing",
+            body_text="Refunds are processed by checkout/refunds.py within 24 hours.",
+        )
+    search.seed("refund", [SearchHit(artifact_id=refund_id, score=2.0)])
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("ledger db down")
+
+    monkeypatch.setattr(request_more_module, "insert_event", _boom)
+
+    def _request(question: str) -> RequestMoreRequest:
+        return RequestMoreRequest(
+            context_pack_id=context_pack_id,
+            agent_name="impl-agent-manifest",
+            question=question,
+            why_needed="the pack does not cover it",
+            decision_needed="which module to extend",
+            already_checked_evidence_ids=[],
+            max_tokens=1500,
+        )
+
+    question = "how does refund processing work in checkout"
+    with pytest.raises(RuntimeError, match="ledger db down"):
+        await handlers["context.request_more"](_request(question))
+
+    async with factory() as session:
+        pack_run_rows = await fetch_ledger_rows(session, PACK_RUN_ID)
+    assert [(row.tool_name, row.status) for row in pack_run_rows] == [
+        ("context.create_pack", "approved")
+    ]
+    async with factory() as session:
+        error_rows = await fetch_ledger_rows(session, NO_RUN_SENTINEL)
+    assert [(row.tool_name, row.status) for row in error_rows] == [
+        ("context.request_more", "error")
+    ]
+    async with factory() as session:
+        details = await _fetch_details(session, "context.request_more")
+    assert details == [{"exception_type": "RuntimeError"}]
+
+    # budget refunded: a working call afterwards still resolves and charges.
+    # Restore just this one attribute (not monkeypatch.undo(), which is shared
+    # with the autouse _fixed_identity fixture and would strip the identity
+    # patches too).
+    monkeypatch.setattr(request_more_module, "insert_event", real_insert_event)
+    recovered = cast(
+        RequestMoreResponse,
+        await handlers["context.request_more"](_request(question)),
+    )
+    assert recovered.status == "approved"
+    assert [c.evidence_id for c in recovered.new_evidence_cards] == [str(refund_id)]
+    async with factory() as session:
+        pack_run_rows = await fetch_ledger_rows(session, PACK_RUN_ID)
+    assert [row.status for row in pack_run_rows] == ["approved", "approved"]
+
+
+async def test_expand_crash_writes_one_error_row_refunds_and_propagates(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same crash-refund guarantee, exercised through the wrapped
+    context.expand handler."""
+    handlers, _search, _artifact_id, context_pack_id = await _make_pack(factory)
+    async with factory() as session:
+        neighbor_id = await insert_artifact(
+            session, title="Refund processing", body_text="Refunds within 24 hours."
+        )
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("ledger db down")
+
+    monkeypatch.setattr(expand_module, "insert_event", _boom)
+
+    def _expand_request() -> ExpandRequest:
+        return ExpandRequest(
+            seed_artifact_ids=[neighbor_id],
+            budget_tokens=10_000,
+            context_pack_id=context_pack_id,
+        )
+
+    with pytest.raises(RuntimeError, match="ledger db down"):
+        await handlers["context.expand"](_expand_request())
+
+    async with factory() as session:
+        pack_run_rows = await fetch_ledger_rows(session, PACK_RUN_ID)
+    assert [(row.tool_name, row.status) for row in pack_run_rows] == [
+        ("context.create_pack", "approved")
+    ]
+    async with factory() as session:
+        error_rows = await fetch_ledger_rows(session, NO_RUN_SENTINEL)
+    assert [(row.tool_name, row.status) for row in error_rows] == [("context.expand", "error")]
+    async with factory() as session:
+        details = await _fetch_details(session, "context.expand")
+    assert details == [{"exception_type": "RuntimeError"}]
+
+    # budget refunded: a working call afterwards still charges normally.
+    # Restore just this one attribute (not monkeypatch.undo(), which is shared
+    # with the autouse _fixed_identity fixture and would strip the identity
+    # patches too).
+    monkeypatch.setattr(expand_module, "insert_event", real_insert_event)
+    recovered = cast(ExpandResponse, await handlers["context.expand"](_expand_request()))
+    assert recovered.tokens_used > 0
+    async with factory() as session:
+        pack_run_rows = await fetch_ledger_rows(session, PACK_RUN_ID)
+    assert [row.status for row in pack_run_rows] == ["approved", "approved"]
 
 
 async def test_anticipated_failure_is_not_double_ledgered(
