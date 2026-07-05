@@ -216,10 +216,18 @@ sources:
 - Load order: parse YAML (`yaml.safe_load`) → validate schema → construct connectors. For
   **`--backend production`**, every **enabled** source's configured `token_env` is resolved against
   the environment first, and any failure aborts before any fetch. **`--backend local`** never
-  authenticates (it reads workspace files only, including for source types it can't otherwise fetch
-  locally — `azure_wiki`/`ado_card`, which the pre-flight already warns and skips), so it never
-  resolves `token_env`, even an unset one, and never hard-fails on it. (A disabled source's
-  `token_env` is not resolved either way — disabling a source must not require its credential.)
+  authenticates (it reads workspace files only), so it never resolves `token_env`, even an unset
+  one, and never hard-fails on it. (A disabled source's `token_env` is not resolved either way —
+  disabling a source must not require its credential.)
+- **`--backend local`** can only genuinely serve `github_code`/`github_doc` sources (it reads the
+  `--workspace` checkout by path). `azure_wiki`/`ado_card` sources have no local representation, so
+  under `--backend local` they are filtered out at connector construction — zero sources, zero
+  docify calls, zero artifacts — rather than falling through to the local backend's default
+  include-everything `PathFilter`, which would otherwise misread arbitrary workspace files as fake
+  wiki pages or cards. The pre-flight (`config_validator`) warns per skipped source (`not fetchable
+  by --backend local ... will be skipped`); a second structured log line fires at connector
+  construction (`event=source_skipped_not_locally_fetchable`). **`--backend production`** serves all
+  four source types and is unaffected.
 - `FilteredFetchBackend` applies `include`/`exclude` to `list_sources()` output — an excluded path
   is never fetched, hashed, or stored.
 - `acl_teams` flows `sources.yaml` → `SourceRef` → `source_item.acl_teams` on insert **and**
@@ -231,5 +239,6 @@ sources:
 ## What this contract does not cover
 
 The real GitHub/Azure DevOps API `FetchBackend` implementations (recorded follow-up). The factory
-seam `connectors_from_config(config, backend_factory, *, authenticates=...)` is where they plug in;
+seam `connectors_from_config(config, backend_factory, *, authenticates=..., locally_fetchable_only=...)`
+is where they plug in;
 this schema is deliberately sufficient to drive them when they land.

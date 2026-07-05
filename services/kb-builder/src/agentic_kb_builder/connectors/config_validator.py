@@ -21,17 +21,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from agentic_kb_builder.connectors.config_loader import LOCALLY_FETCHABLE_SPEC_TYPES
 from agentic_kb_builder.domain.source_config import (
-    GithubCodeSourceSpec,
-    GithubDocSourceSpec,
     PathSelectSpec,
     SourceConfig,
     SourceSpec,
 )
-
-# The local backend reads files from the workspace, so only the path-based github
-# source types are fetchable locally; azure_wiki / ado_card are remote-only.
-_LOCAL_FETCHABLE = (GithubCodeSourceSpec, GithubDocSourceSpec)
 
 # Pruned from the local-match walk: never part of an ingested source, and walking
 # them (especially .git / .venv / node_modules) is slow and noisy.
@@ -131,7 +126,7 @@ def _validate_production_source(
 
 
 def _validate_local_source(spec: SourceSpec, workspace: Path | None) -> list[ValidationIssue]:
-    if not isinstance(spec, _LOCAL_FETCHABLE):
+    if not isinstance(spec, LOCALLY_FETCHABLE_SPEC_TYPES):
         return [
             ValidationIssue(
                 Severity.WARNING,

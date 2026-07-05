@@ -5,6 +5,7 @@ from agentic_kb_builder.connectors.ado_wiki_backend import AdoWikiBackend
 from agentic_kb_builder.connectors.ado_work_item_backend import AdoWorkItemBackend
 from agentic_kb_builder.connectors.azure_wiki import AzureWikiConnector
 from agentic_kb_builder.connectors.config_loader import (
+    LOCALLY_FETCHABLE_SPEC_TYPES,
     SOURCE_CONFIG_PATH_ENV,
     BackendFactory,
     FilteredFetchBackend,
@@ -23,6 +24,7 @@ from agentic_kb_builder.connectors.production_factory import production_backend_
 from agentic_kb_builder.connectors.source_connector import BaseConnector, Connector, FetchBackend
 
 __all__ = [
+    "LOCALLY_FETCHABLE_SPEC_TYPES",
     "SOURCE_CONFIG_PATH_ENV",
     "AdoCardConnector",
     "AdoWikiBackend",

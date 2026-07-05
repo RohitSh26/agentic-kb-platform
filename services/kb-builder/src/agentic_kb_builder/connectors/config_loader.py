@@ -12,6 +12,7 @@ import os
 from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Final
 
 import yaml
 from pydantic import ValidationError
@@ -48,6 +49,15 @@ _CONNECTOR_TYPES: dict[SourceType, type[BaseConnector]] = {
     "azure_wiki": AzureWikiConnector,
     "ado_card": AdoCardConnector,
 }
+
+# Source spec types the local-filesystem backend can genuinely serve: it reads
+# workspace files by path, so only the path-selecting GitHub sources are fetchable.
+# azure_wiki/ado_card have no local representation at all — without this filter the
+# local backend's default PathFilter (matches "**") would treat every workspace file
+# as though it were a wiki page or card. This is the single source of truth for
+# local-fetchability; config_validator's pre-flight warning uses the same constant so
+# the two can never drift on a new source type.
+LOCALLY_FETCHABLE_SPEC_TYPES: Final = (GithubCodeSourceSpec, GithubDocSourceSpec)
 
 
 class SourceConfigError(Exception):
@@ -158,25 +168,51 @@ class FilteredFetchBackend:
 
 
 def connectors_from_config(
-    config: SourceConfig, backend_factory: BackendFactory, *, authenticates: bool = True
+    config: SourceConfig,
+    backend_factory: BackendFactory,
+    *,
+    authenticates: bool = True,
+    locally_fetchable_only: bool = False,
 ) -> list[Connector]:
-    """Construct one connector per enabled source. Tokens are resolved here —
-    for every enabled source, before any connector runs — and handed to the
-    backend factory as a local value only.
+    """Construct one connector per enabled, fetchable source. Tokens are resolved
+    here — for every enabled, fetchable source, before any connector runs — and
+    handed to the backend factory as a local value only.
+
+    Two flags, both driven purely by the selected backend (never by the source
+    config itself):
 
     `authenticates` (default True) tells this function whether the selected
     backend can actually use a token. The local filesystem backend reads
-    workspace files only and never authenticates — including for source types
-    it can't otherwise fetch locally (azure_wiki/ado_card; config_validator
-    already warns and skips those). Passing `authenticates=False` there defers
-    every source to token=None instead of hard-failing pre-flight on a
-    token_env that a local build was never going to read. Production backends
-    must keep the default so a missing token_env still aborts before any
-    fetch — this flag never weakens that."""
+    workspace files only and never authenticates, so passing
+    `authenticates=False` there defers every source to token=None instead of
+    hard-failing pre-flight on a token_env a local build was never going to
+    read. Production backends must keep the default so a missing token_env
+    still aborts before any fetch — this flag never weakens that.
+
+    `locally_fetchable_only` (default False) tells this function whether the
+    selected backend can only serve `LOCALLY_FETCHABLE_SPEC_TYPES`. The local
+    filesystem backend can genuinely read only path-selecting GitHub sources —
+    azure_wiki/ado_card have no local representation, so without this filter
+    the backend's default PathFilter would treat every workspace file as
+    though it were a wiki page or card (the exact bug this flag fixes).
+    Passing `locally_fetchable_only=True` filters those sources out before a
+    connector is even constructed — config_validator's pre-flight already
+    warns about them, and this makes that warning true: zero sources, zero
+    docify calls, zero artifacts. Production keeps the default False: every
+    configured, enabled source is genuinely fetchable there and must be
+    served."""
     connectors: list[Connector] = []
     for spec in config.sources:
         if not spec.enabled:
             logger.info("event=source_skipped_disabled source=%s type=%s", spec.name, spec.type)
+            continue
+        if locally_fetchable_only and not isinstance(spec, LOCALLY_FETCHABLE_SPEC_TYPES):
+            logger.warning(
+                "event=source_skipped_not_locally_fetchable source=%s type=%s "
+                "reason=backend_local_cannot_fetch_this_source_type",
+                spec.name,
+                spec.type,
+            )
             continue
         token = resolve_token(spec) if authenticates else None
         backend = backend_factory(spec, token)
@@ -219,6 +255,7 @@ def resolve_git_metadata_repo(config: SourceConfig) -> str | None:
 
 
 __all__ = [
+    "LOCALLY_FETCHABLE_SPEC_TYPES",
     "SOURCE_CONFIG_PATH_ENV",
     "BackendFactory",
     "FilteredFetchBackend",

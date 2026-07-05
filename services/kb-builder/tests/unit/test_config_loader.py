@@ -237,10 +237,13 @@ class TestConnectorsFromConfig:
     def test_authenticates_false_also_skips_not_locally_fetchable_source_tokens(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # azure_wiki / ado_card are skipped by config_validator as not fetchable under
-        # --backend local (WARNING only), but connectors_from_config still constructs
-        # them (the same LocalFsBackend just lists nothing useful for them). Their
-        # auth.token_env must not be required either.
+        # `authenticates` and `locally_fetchable_only` are independent flags. In
+        # isolation (no `locally_fetchable_only=True` requested), `authenticates=False`
+        # alone must still defer token resolution for every enabled source — including
+        # azure_wiki/ado_card — without requiring their auth.token_env. The real
+        # `--backend local` build path also passes `locally_fetchable_only=True` (see
+        # TestLocallyFetchableOnly below), so azure_wiki/ado_card never reach this
+        # point there.
         monkeypatch.delenv("TEST_ADO_PAT", raising=False)
         yaml_body = """
 version: 1
@@ -264,6 +267,139 @@ sources:
             config, lambda spec, token: FakeBackend([]), authenticates=False
         )
         assert [connector.source_type for connector in connectors] == ["azure_wiki", "ado_card"]
+
+
+MIXED_TYPES_YAML = """
+version: 1
+sources:
+  - name: code
+    type: github_code
+    repo: o/r
+    include: ["src/**"]
+  - name: docs
+    type: github_doc
+    repo: o/r
+  - name: wiki
+    type: azure_wiki
+    organization: org
+    project: proj
+    wiki: w
+  - name: cards
+    type: ado_card
+    organization: org
+    project: proj
+"""
+
+
+class TestLocallyFetchableOnly:
+    """`locally_fetchable_only` (default False): the local-filesystem backend can only
+    genuinely serve github_code/github_doc — azure_wiki/ado_card have no local
+    representation, so its default include-everything PathFilter would otherwise treat
+    every workspace file as though it were a wiki page or card (the bug this fixes)."""
+
+    def test_default_false_constructs_every_enabled_type(self, tmp_path: Path) -> None:
+        config = load_source_config(_write_yaml(tmp_path, MIXED_TYPES_YAML))
+        connectors = connectors_from_config(
+            config, lambda spec, token: FakeBackend([]), authenticates=False
+        )
+        assert [connector.source_type for connector in connectors] == [
+            "github_code",
+            "github_doc",
+            "azure_wiki",
+            "ado_card",
+        ]
+
+    def test_true_filters_out_non_locally_fetchable_types_and_logs_why(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        config = load_source_config(_write_yaml(tmp_path, MIXED_TYPES_YAML))
+        with caplog.at_level(logging.WARNING):
+            connectors = connectors_from_config(
+                config,
+                lambda spec, token: FakeBackend([]),
+                authenticates=False,
+                locally_fetchable_only=True,
+            )
+        assert [connector.source_type for connector in connectors] == [
+            "github_code",
+            "github_doc",
+        ]
+        joined = "\n".join(record.getMessage() for record in caplog.records)
+        assert "event=source_skipped_not_locally_fetchable" in joined
+        assert "source=wiki" in joined and "type=azure_wiki" in joined
+        assert "source=cards" in joined and "type=ado_card" in joined
+
+    def test_true_never_calls_the_backend_factory_for_a_filtered_source(
+        self, tmp_path: Path
+    ) -> None:
+        config = load_source_config(_write_yaml(tmp_path, MIXED_TYPES_YAML))
+        seen: list[str] = []
+
+        def factory(spec: SourceSpec, token: str | None) -> FetchBackend:
+            seen.append(spec.name)
+            return FakeBackend([])
+
+        connectors_from_config(config, factory, authenticates=False, locally_fetchable_only=True)
+        assert seen == ["code", "docs"]  # wiki/cards never reach the backend factory
+
+    def test_true_does_not_require_the_filtered_sources_token_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("TEST_ADO_PAT", raising=False)
+        yaml_body = """
+version: 1
+sources:
+  - name: code
+    type: github_code
+    repo: o/r
+    include: ["src/**"]
+  - name: docs
+    type: github_doc
+    repo: o/r
+  - name: wiki
+    type: azure_wiki
+    organization: org
+    project: proj
+    wiki: w
+    auth:
+      token_env: TEST_ADO_PAT
+  - name: cards
+    type: ado_card
+    organization: org
+    project: proj
+    auth:
+      token_env: TEST_ADO_PAT
+"""
+        config = load_source_config(_write_yaml(tmp_path, yaml_body))
+        connectors = connectors_from_config(
+            config,
+            lambda spec, token: FakeBackend([]),
+            authenticates=False,
+            locally_fetchable_only=True,
+        )
+        assert [connector.source_type for connector in connectors] == [
+            "github_code",
+            "github_doc",
+        ]
+
+    def test_disabled_source_is_skipped_before_the_fetchability_check(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        yaml_body = MIXED_TYPES_YAML.replace(
+            "  - name: wiki\n    type: azure_wiki\n",
+            "  - name: wiki\n    type: azure_wiki\n    enabled: false\n",
+        )
+        config = load_source_config(_write_yaml(tmp_path, yaml_body))
+        with caplog.at_level(logging.INFO):
+            connectors_from_config(
+                config,
+                lambda spec, token: FakeBackend([]),
+                authenticates=False,
+                locally_fetchable_only=True,
+            )
+        joined = "\n".join(record.getMessage() for record in caplog.records)
+        assert "event=source_skipped_disabled source=wiki" in joined
+        assert "event=source_skipped_not_locally_fetchable source=wiki" not in joined
 
 
 class TestResolveGitMetadataRepo:

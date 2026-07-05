@@ -130,19 +130,28 @@ async def run_build(
     """Run one build into Postgres; activate the new kb_version if every publish
     gate passes (docs/contracts/publish-gates.md). allow_large_delta overrides the
     symbol-count-delta gate only (recorded on kb_build_run, logged). `backend`
-    selects the fetch backend: `local` (workspace files) or `production` (real
-    GitHub/ADO sources via the production factory, ADR-0015)."""
+    selects the fetch backend: `local` (workspace files; azure_wiki/ado_card sources
+    are filtered out before construction — they have no local representation) or
+    `production` (real GitHub/ADO sources via the production factory, ADR-0015)."""
     config = load_source_config(sources_path)
     factory: BackendFactory
     if backend == "production":
         factory = production_backend_factory()
     else:
         factory = local_fs_backend_factory(Path(workspace), version=version)
-    # The local backend reads workspace files only and never authenticates (not even
-    # for azure_wiki/ado_card sources it can't fetch — config_validator already warns
-    # and skips those); resolving auth.token_env for it would hard-fail a local build
-    # on an unset var it was never going to read. Production must still fail fast.
-    connectors = connectors_from_config(config, factory, authenticates=backend == "production")
+    # The local backend reads workspace files only: it never authenticates (resolving
+    # auth.token_env would hard-fail a local build on an unset var it was never going
+    # to read — production must still fail fast), and it can only genuinely serve
+    # LOCALLY_FETCHABLE_SPEC_TYPES (azure_wiki/ado_card have no local representation;
+    # config_validator's pre-flight warns about them, and locally_fetchable_only=True
+    # makes that warning true by never constructing those connectors — zero sources,
+    # zero docify calls, zero artifacts).
+    connectors = connectors_from_config(
+        config,
+        factory,
+        authenticates=backend == "production",
+        locally_fetchable_only=backend == "local",
+    )
     if git_metadata:
         # Cross-domain phase 2 (PR-26): deterministic, zero-LLM commit artifacts
         # from the local workspace git history. Appended last so its commit
