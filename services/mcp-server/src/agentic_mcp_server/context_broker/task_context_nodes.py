@@ -418,6 +418,45 @@ def _resolve_from_search(rows: list[ArtifactRow], *, broadened: bool) -> ScopeRe
     return ScopeResolution(entities=entities)
 
 
+async def _resolve_entities_and_rows(
+    ctx: TaskContextCtx, *, broadened: bool, meter: _Meter
+) -> tuple[ScopeResolution, list[ArtifactRow] | None]:
+    """As ``resolve_entities``, but also returns the task_description search rows
+    when the chain actually issued that search (the hint-less, or hints-exhausted,
+    path) — `None` when resolution was satisfied by hints alone (no such search
+    ran). Lets a caller that ALSO wants a task_description search (conventions_node)
+    reuse this result instead of re-issuing an identical, redundant search+hydrate
+    round trip — the measured cause of conventions_node running ~2x its sibling
+    nodes (a duplicate `SearchClient.search` + Postgres hydration + ACL filter).
+    """
+    from_hints = await _resolve_from_hints(ctx, meter)
+    if from_hints.entities or from_hints.ambiguous:
+        return from_hints, None
+
+    top = _BROADENED_TOP if broadened else _SEARCH_TOP
+    rows, scores = await _search_rows(ctx, ctx.request.task_description, top, meter)
+    from_alias = await _resolve_from_alias(ctx, rows, scores, meter)
+    if from_alias.entities or from_alias.ambiguous:
+        return (
+            ScopeResolution(
+                entities=from_alias.entities,
+                ambiguous=from_alias.ambiguous,
+                open_questions=from_hints.open_questions + from_alias.open_questions,
+            ),
+            rows,
+        )
+
+    from_search = _resolve_from_search(rows, broadened=broadened)
+    return (
+        ScopeResolution(
+            entities=from_search.entities,
+            ambiguous=(),
+            open_questions=from_hints.open_questions,
+        ),
+        rows,
+    )
+
+
 async def resolve_entities(
     ctx: TaskContextCtx, *, broadened: bool, meter: _Meter
 ) -> ScopeResolution:
@@ -427,26 +466,8 @@ async def resolve_entities(
     §2 fan-out) and all nodes agree on the same scope for the same input.
     Ambiguity at any stage STOPS the chain — the candidates are the answer.
     """
-    from_hints = await _resolve_from_hints(ctx, meter)
-    if from_hints.entities or from_hints.ambiguous:
-        return from_hints
-
-    top = _BROADENED_TOP if broadened else _SEARCH_TOP
-    rows, scores = await _search_rows(ctx, ctx.request.task_description, top, meter)
-    from_alias = await _resolve_from_alias(ctx, rows, scores, meter)
-    if from_alias.entities or from_alias.ambiguous:
-        return ScopeResolution(
-            entities=from_alias.entities,
-            ambiguous=from_alias.ambiguous,
-            open_questions=from_hints.open_questions + from_alias.open_questions,
-        )
-
-    from_search = _resolve_from_search(rows, broadened=broadened)
-    return ScopeResolution(
-        entities=from_search.entities,
-        ambiguous=(),
-        open_questions=from_hints.open_questions,
-    )
+    scope, _rows = await _resolve_entities_and_rows(ctx, broadened=broadened, meter=meter)
+    return scope
 
 
 # ------------------------------------------------------------------------ graph nodes
@@ -677,8 +698,17 @@ async def conventions_node(state: TaskContextState) -> TaskContextUpdate:
     started = time.monotonic()
     ctx = state["ctx"]
     meter = _Meter()
-    scope = await resolve_entities(ctx, broadened=state.get("broadened", False), meter=meter)
-    rows, _ = await _search_rows(ctx, ctx.request.task_description, _SEARCH_TOP, meter)
+    broadened = state.get("broadened", False)
+    scope, task_rows = await _resolve_entities_and_rows(ctx, broadened=broadened, meter=meter)
+    # Reuse the task_description search resolve_entities already ran (same query,
+    # same _SEARCH_TOP) instead of re-issuing it — see _resolve_entities_and_rows.
+    # Only when broadened does resolve_entities' internal search use a different
+    # top (_BROADENED_TOP), so conventions' own _SEARCH_TOP-sized search stays a
+    # separate call in that (rare, retry-only) case.
+    if broadened or task_rows is None:
+        rows, _ = await _search_rows(ctx, ctx.request.task_description, _SEARCH_TOP, meter)
+    else:
+        rows = task_rows
     docs = [
         row
         for row in rows
