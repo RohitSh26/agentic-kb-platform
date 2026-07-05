@@ -4,6 +4,7 @@ from agentic_kb_builder.application.active_version import (
     get_active_kb_version,
 )
 from agentic_kb_builder.application.build_runner import (
+    BuildEnvironmentLostError,
     BuildRunner,
     DocExtractor,
     SearchIndexer,
@@ -24,6 +25,7 @@ from agentic_kb_builder.domain.embedding_port import Embedder, EmbeddingResult
 
 __all__ = [
     "ALLOWED_EDGE_TYPES",
+    "BuildEnvironmentLostError",
     "BuildRunner",
     "DocExtractor",
     "Embedder",

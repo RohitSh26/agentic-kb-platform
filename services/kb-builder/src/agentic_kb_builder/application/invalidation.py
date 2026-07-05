@@ -13,9 +13,12 @@ Four sub-passes, in order (docs/contracts/version-membership.md):
    path this build ⇒ link the new artifact to the old (prior_identity_id),
    reattach live edges from old -> new, and invalidate the old artifact. Run
    FIRST so a rename is not mistaken for a deletion.
-2. Deletion sweep — any source NOT seen in this build's connector listing ⇒ mark
-   is_deleted and invalidate its still-live artifacts + every still-live edge
-   touching them; retire their generation/embedding cache rows.
+2. Deletion sweep — any source NOT seen in this build's connector listing AND last
+   recorded strictly before this build started ⇒ mark is_deleted and invalidate its
+   still-live artifacts + every still-live edge touching them; retire their
+   generation/embedding cache rows. Unseen-but-recent rows belong to a concurrent
+   writer and are skipped + surfaced (the concurrent-writer guard; both this sweep
+   and rename detection draw candidates from the same guarded set).
 3. Supersession sweep — a source whose CONTENT changed this build (cache miss ⇒
    new artifacts written at this build_seq) ⇒ invalidate its PRIOR-generation live
    artifacts (valid_from_seq < build_seq) and the edges touching them, so the new
@@ -34,8 +37,9 @@ write is a no-op. No churn.
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentic_kb_builder.infrastructure.postgres.models import (
@@ -63,6 +67,10 @@ class InvalidationResult:
     superseded_artifacts_invalidated: int = 0
     acl_sources_propagated: int = 0
     acl_artifacts_updated: int = 0
+    # Unseen live sources written at-or-after this build started: another writer is
+    # interleaving with this build, so the sweep must not claim they vanished
+    # (docs/contracts/version-membership.md "concurrent-writer guard").
+    concurrent_sources_skipped: int = 0
 
 
 async def run_invalidation_pass(
@@ -71,12 +79,22 @@ async def run_invalidation_pass(
     build_seq: int,
     seen_source_ids: set[uuid.UUID],
     changed_source_ids: set[uuid.UUID] | None = None,
+    build_started_at: datetime,
 ) -> InvalidationResult:
     """Reconcile identity for this build; return counts. Flushes, never commits —
     the build runner owns the transaction (the whole pass lands atomically with
-    the build's writes, so a crash leaves no half-invalidated version)."""
+    the build's writes, so a crash leaves no half-invalidated version).
+
+    ``build_started_at`` (this run's ``kb_build_run.started_at``, database clock)
+    fences the deletion sweep and rename detection: only sources last recorded
+    STRICTLY BEFORE this build started can be treated as vanished. A live source
+    this build never saw but that was written at-or-after ``started_at`` belongs
+    to a concurrent writer and is skipped (docs/contracts/version-membership.md
+    "concurrent-writer guard")."""
     changed_source_ids = changed_source_ids or set()
-    vanished = await _vanished_live_sources(session, seen_source_ids)
+    vanished, concurrent_skipped = await _vanished_live_sources(
+        session, seen_source_ids=seen_source_ids, build_started_at=build_started_at
+    )
     renames, reattached, renamed_source_ids = await _detect_renames(
         session, build_seq=build_seq, vanished_source_ids=vanished
     )
@@ -101,11 +119,12 @@ async def run_invalidation_pass(
         superseded_artifacts_invalidated=superseded,
         acl_sources_propagated=acl[0],
         acl_artifacts_updated=acl[1],
+        concurrent_sources_skipped=concurrent_skipped,
     )
     logger.info(
         "event=invalidation_pass_completed build_seq=%d renames=%d edges_reattached=%d "
         "sources_deleted=%d artifacts_invalidated=%d edges_invalidated=%d cache_retired=%d "
-        "superseded_artifacts=%d acl_sources=%d acl_artifacts=%d",
+        "superseded_artifacts=%d acl_sources=%d acl_artifacts=%d concurrent_skipped=%d",
         build_seq,
         result.renames_detected,
         result.edges_reattached,
@@ -116,6 +135,7 @@ async def run_invalidation_pass(
         result.superseded_artifacts_invalidated,
         result.acl_sources_propagated,
         result.acl_artifacts_updated,
+        result.concurrent_sources_skipped,
     )
     return result
 
@@ -171,13 +191,46 @@ async def _supersession_sweep(
 
 
 async def _vanished_live_sources(
-    session: AsyncSession, seen_source_ids: set[uuid.UUID]
-) -> set[uuid.UUID]:
-    """Live (not-yet-deleted) source_items absent from this build's listing."""
+    session: AsyncSession, *, seen_source_ids: set[uuid.UUID], build_started_at: datetime
+) -> tuple[set[uuid.UUID], int]:
+    """Live source_items absent from this build's listing AND last recorded strictly
+    before this build started. Returns (vanished_ids, concurrent_skipped_count).
+
+    The time fence is the concurrent-writer guard: a live source this build never
+    saw but whose ``COALESCE(last_seen_at, created_at)`` is at-or-after this run's
+    ``started_at`` was written by some OTHER writer while this build ran (this
+    build's own writes are all in ``seen_source_ids``). This build's listing —
+    taken from a world that predates that row — cannot prove it vanished, so
+    sweeping it would tombstone another build's live knowledge. (Exactly the
+    2026-07-05 incident: a pre-drop zombie build, whose pool reconnected to the
+    recreated database, swept 46 doc sources a fresh build had just written.)
+    Skipped rows are surfaced loudly: two builds interleaving on one registry is
+    an operational fault worth a WARNING even though no damage is done."""
+    last_recorded = func.coalesce(SourceItem.last_seen_at, SourceItem.created_at)
     rows = await session.execute(
-        select(SourceItem.source_id).where(SourceItem.is_deleted.is_(False))
+        select(SourceItem.source_id, (last_recorded < build_started_at).label("sweepable")).where(
+            SourceItem.is_deleted.is_(False)
+        )
     )
-    return {row.source_id for row in rows} - seen_source_ids
+    vanished: set[uuid.UUID] = set()
+    concurrent: list[uuid.UUID] = []
+    for source_id, sweepable in rows.tuples():
+        if source_id in seen_source_ids:
+            continue
+        if sweepable:
+            vanished.add(source_id)
+        else:
+            concurrent.append(source_id)
+    if concurrent:
+        logger.warning(
+            "event=deletion_sweep_concurrent_skip count=%d build_started_at=%s "
+            "sample_source_ids=%s reason=unseen_live_sources_written_after_build_start "
+            "action=not_swept hint=another_writer_is_interleaving_with_this_build",
+            len(concurrent),
+            build_started_at.isoformat(),
+            [str(source_id) for source_id in concurrent[:5]],
+        )
+    return vanished, len(concurrent)
 
 
 @dataclass

@@ -9,9 +9,12 @@ Skips when TEST_DATABASE_URL is unset (shared-DB policy, same as the engine test
 """
 
 import os
+import subprocess
 import uuid
 from collections.abc import AsyncIterator, Iterator, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from alembic import command
@@ -19,14 +22,16 @@ from alembic.config import Config
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from agentic_kb_builder.application import BuildRunner, EmbeddingResult
+from agentic_kb_builder.application import BuildEnvironmentLostError, BuildRunner, EmbeddingResult
 from agentic_kb_builder.application.invalidation import run_invalidation_pass
 from agentic_kb_builder.connectors import GitHubDocConnector
+from agentic_kb_builder.connectors.git_metadata import GitMetadataConnector
 from agentic_kb_builder.domain import (
     DocArtifactDraft,
     DocExtractionResult,
     NormalizedContent,
     SourceRef,
+    SourceType,
 )
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.infrastructure.postgres.models import (
@@ -331,11 +336,14 @@ async def test_rename_links_identity_reattaches_edges_and_invalidates_old(
     await session.flush()
 
     # old_source vanished (only new_source seen this build), new_source is changed.
+    # build_started_at in the future: both rows predate the "build", so the
+    # concurrent-writer guard keeps them sweepable.
     result = await run_invalidation_pass(
         session,
         build_seq=2,
         seen_source_ids={new_source},
         changed_source_ids={new_source},
+        build_started_at=datetime.now(UTC) + timedelta(hours=1),
     )
 
     assert result.renames_detected == 1
@@ -381,6 +389,199 @@ async def test_idempotent_rebuild_causes_no_invalidation_churn(session: AsyncSes
         )
     ).scalar_one()
     assert deleted == 0
+
+
+async def _insert_source_with_artifact(
+    session: AsyncSession, *, uri: str, seq: int
+) -> tuple[uuid.UUID, uuid.UUID]:
+    source = SourceItem(
+        source_type="github_doc",
+        source_uri=uri,
+        source_version="rev-1",
+        content_hash=content_hash(uri),
+        is_deleted=False,
+    )
+    session.add(source)
+    await session.flush()
+    artifact = KnowledgeArtifact(
+        artifact_type="summary",
+        source_id=source.source_id,
+        title=uri,
+        body_text=f"body of {uri}",
+        content_hash=content_hash(f"body of {uri}"),
+        kb_version="kb-x",
+        valid_from_seq=seq,
+        knowledge_kind="interpreted",
+    )
+    session.add(artifact)
+    await session.flush()
+    return source.source_id, artifact.artifact_id
+
+
+@requires_db
+async def test_concurrent_writer_rows_are_not_swept(session: AsyncSession) -> None:
+    """The 2026-07-05 zombie-build regression, pinned: a live source this build
+    never saw but that was WRITTEN AFTER this build started belongs to a
+    concurrent writer — the deletion sweep must skip it (and say so), not
+    tombstone it. Fails on the unguarded sweep (it deleted every unseen live
+    source, dangling 140 artifacts and failing the no_dangling_citations gate)."""
+    source_id, artifact_id = await _insert_source_with_artifact(
+        session, uri="repo://doc/concurrent.md", seq=1
+    )
+    # This build "started" an hour ago; the row above was created NOW (i.e. after
+    # the build started — as if written by an interleaved second build).
+    result = await run_invalidation_pass(
+        session,
+        build_seq=2,
+        seen_source_ids=set(),
+        changed_source_ids=set(),
+        build_started_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+
+    assert result.sources_deleted == 0
+    assert result.renames_detected == 0
+    assert result.concurrent_sources_skipped == 1
+    stored = (
+        await session.execute(select(SourceItem).where(SourceItem.source_id == source_id))
+    ).scalar_one()
+    assert stored.is_deleted is False, "a concurrent writer's source must never be tombstoned"
+    # Its artifact stays a served member.
+    assert artifact_id in await _members(session, 2)
+
+
+@requires_db
+async def test_sources_last_recorded_before_build_start_are_still_swept(
+    session: AsyncSession,
+) -> None:
+    """The guard must not weaken real deletions: an unseen live source last
+    recorded BEFORE this build started genuinely vanished and is swept."""
+    source_id, artifact_id = await _insert_source_with_artifact(
+        session, uri="repo://doc/genuinely-gone.md", seq=1
+    )
+    result = await run_invalidation_pass(
+        session,
+        build_seq=2,
+        seen_source_ids=set(),
+        changed_source_ids=set(),
+        build_started_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    assert result.sources_deleted == 1
+    assert result.concurrent_sources_skipped == 0
+    stored = (
+        await session.execute(select(SourceItem).where(SourceItem.source_id == source_id))
+    ).scalar_one()
+    assert stored.is_deleted is True
+    assert artifact_id not in await _members(session, 2)
+
+
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True)
+
+
+def _make_git_repo(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@example.test")
+    _git(root, "config", "user.name", "Tester")
+    (root / "guide.md").write_text("# guide\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "docs(guide): initial")
+    return root
+
+
+@requires_db
+async def test_fresh_build_multiple_connectors_sharing_repo_has_zero_tombstones(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    """A single fresh build over sources from MULTIPLE connectors sharing one
+    repo ends with ZERO is_deleted sources when every file exists (the 2026-07-05
+    incident's observable). Every source is seen by exactly one connector, so
+    neither the deletion sweep nor rename detection may fire."""
+    workspace = _make_git_repo(tmp_path / "repo")
+    runner = _runner(session, "kb-mixed-v1")
+    run = await runner.run(
+        [
+            _connector({"docs/a.md": "alpha", "docs/b.md": "beta"}),
+            _connector({"guides/c.md": "gamma"}),
+            GitMetadataConnector(workspace, repo="o/r"),
+        ]
+    )
+    await session.commit()
+    assert run.status == "completed"
+    assert run.sources_seen == 4  # 3 docs + 1 commit
+
+    deleted = (
+        await session.execute(
+            select(func.count()).select_from(SourceItem).where(SourceItem.is_deleted.is_(True))
+        )
+    ).scalar_one()
+    assert deleted == 0, "a fresh single build over existing files must tombstone nothing"
+    invalidated = (
+        await session.execute(
+            select(func.count())
+            .select_from(KnowledgeArtifact)
+            .where(KnowledgeArtifact.invalidated_at_seq.is_not(None))
+        )
+    ).scalar_one()
+    assert invalidated == 0
+
+
+class _RegistrySwapConnector:
+    """Simulates the registry being wiped/swapped mid-build by a foreign process
+    (the dropdb/createdb underneath a zombie build): deletes this build's
+    kb_build_run row over its OWN connection, exactly as an external actor would."""
+
+    source_type: ClassVar[SourceType] = "github_doc"
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+
+    async def list_sources(self) -> list[SourceRef]:
+        engine = create_async_engine(self._url)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text("DELETE FROM kb_build_run"))
+        finally:
+            await engine.dispose()
+        return []
+
+    async def fetch(self, source: SourceRef) -> NormalizedContent:  # pragma: no cover
+        raise AssertionError("no sources listed, fetch must never be called")
+
+
+@requires_db
+async def test_build_aborts_before_invalidation_when_its_run_row_vanishes(
+    session: AsyncSession,
+) -> None:
+    """Zombie-build circuit breaker: if the build's own kb_build_run row is gone
+    by finalize time, the registry was reset/swapped mid-build — the build must
+    abort loudly BEFORE the deletion sweep, leaving zero tombstones behind."""
+    assert TEST_DATABASE_URL is not None
+    runner = _runner(session, "kb-zombie")
+    with pytest.raises(BuildEnvironmentLostError):
+        await runner.run(
+            [
+                _connector({"a.md": "alpha", "b.md": "beta"}),
+                _RegistrySwapConnector(TEST_DATABASE_URL),
+            ]
+        )
+
+    # The per-source commits before the swap persist, but nothing was swept.
+    deleted = (
+        await session.execute(
+            select(func.count()).select_from(SourceItem).where(SourceItem.is_deleted.is_(True))
+        )
+    ).scalar_one()
+    assert deleted == 0
+    invalidated = (
+        await session.execute(
+            select(func.count())
+            .select_from(KnowledgeArtifact)
+            .where(KnowledgeArtifact.invalidated_at_seq.is_not(None))
+        )
+    ).scalar_one()
+    assert invalidated == 0
 
 
 @requires_db

@@ -67,12 +67,24 @@ member of every prior version.
 
 ## Invalidation pass (end of build, BEFORE activation)
 
-Version-scoped — never a physical DELETE of live rows that prior versions serve:
+Version-scoped — never a physical DELETE of live rows that prior versions serve. The pass is
+**guarded**: it runs only after the build re-verifies its own `kb_build_run` row still exists. A
+missing row means the registry was reset or swapped underneath the running build (e.g. a
+drop/recreate of the database while an older build's connection pool silently reconnects to the
+recreated name — the 2026-07-05 zombie-build incident); the build must abort loudly
+(`build_run_row_missing`) instead of reconciling a world it never observed.
 
-1. **Deletion sweep** — any `source_item` not seen in this build's connector listing ⇒ mark
-   `is_deleted = true` AND set `invalidated_at_seq = this_build_seq` on its still-live artifacts and
-   on every still-live edge touching them; retire their generation/embedding cache rows.
-2. **Rename detection** — as above.
+1. **Deletion sweep** — any `source_item` not seen in this build's connector listing **and last
+   recorded strictly before this build started** (`COALESCE(last_seen_at, created_at) <
+   kb_build_run.started_at`) ⇒ mark `is_deleted = true` AND set `invalidated_at_seq =
+   this_build_seq` on its still-live artifacts and on every still-live edge touching them; retire
+   their generation/embedding cache rows. The time fence is the **concurrent-writer guard**: a live
+   source this build never saw but that was created/touched at-or-after `started_at` was observed
+   by some other writer, so this build's listing cannot prove it vanished — it is skipped, counted
+   as `concurrent_sources_skipped`, and logged as a WARNING (`deletion_sweep_concurrent_skip`),
+   because it is direct evidence that two builds are interleaving on one registry.
+2. **Rename detection** — as above; its "vanished" candidates come from the same guarded set, so a
+   concurrently-written source is never mistaken for a renamed-away one either.
 3. **ACL propagation** — when a source's `acl_teams` changed (even content-unchanged ⇒ cache hit),
    update its live artifacts' `acl_teams` this build. Edge ACL stays the read-time endpoint
    intersection (`acl-source-visibility.md`), so a now-restricted endpoint hides its edges

@@ -12,6 +12,7 @@ and cache can never strand a cache row without output.
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 
 from sqlalchemy import func, select, text, update
@@ -55,6 +56,18 @@ from agentic_kb_builder.linker.semantic import SimilarityProvider
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class BuildEnvironmentLostError(RuntimeError):
+    """The build's own kb_build_run row vanished mid-build.
+
+    That only happens when the registry was reset or swapped underneath a running
+    build — e.g. a drop/recreate of the database while an older build's connection
+    pool silently reconnects to the recreated name (the 2026-07-05 zombie-build
+    incident). Destructive finalize work (deletion sweep, linker reconcile,
+    activation) must not run against a world this build never observed, so the
+    build aborts loudly instead (docs/contracts/version-membership.md).
+    """
 
 
 class DocExtractor(Protocol):
@@ -135,6 +148,11 @@ class BuildRunner:
         self._kb_version = kb_version
         # Assigned once at run start from the kb_build_seq SEQUENCE (set in run()).
         self._build_seq: int = 0
+        # This run's kb_build_run.started_at (DATABASE clock), assigned once in
+        # _start_run. It fences the invalidation pass's deletion sweep: only sources
+        # last recorded strictly before this instant are sweepable (the
+        # concurrent-writer guard, docs/contracts/version-membership.md).
+        self._build_started_at: datetime = datetime.min.replace(tzinfo=UTC)
         self._doc_extractor = doc_extractor
         self._embedder = embedder
         self._indexer = indexer
@@ -173,6 +191,10 @@ class BuildRunner:
         counters = _Counters()
         try:
             seen_source_ids, changed_source_ids = await self._process_sources(connectors, counters)
+            # Zombie-build circuit breaker: sources were processed over minutes, so
+            # re-verify the world was not reset/swapped underneath us BEFORE running
+            # the destructive finalize (deletion sweep, linker reconcile).
+            await self._assert_run_row_alive(build_id)
             await self._finalize_graph(seen_source_ids, changed_source_ids)
             await self._reconcile_index(build_id, counters)
             await self._finish_run(build_id, counters, status="completed")
@@ -227,6 +249,11 @@ class BuildRunner:
         self._session.add(run)
         await self._session.flush()
         build_id = run.build_id
+        # started_at is a server default (DB clock); read it back so the invalidation
+        # pass's concurrent-writer fence compares against the SAME clock that stamps
+        # source_item.last_seen_at / created_at.
+        await self._session.refresh(run, ["started_at"])
+        self._build_started_at = run.started_at
         await self._session.commit()
         logger.info(
             "event=build_run_started build_id=%s kb_version=%s build_seq=%d",
@@ -235,6 +262,33 @@ class BuildRunner:
             self._build_seq,
         )
         return build_id
+
+    async def _assert_run_row_alive(self, build_id: uuid.UUID) -> None:
+        """Raise BuildEnvironmentLostError if this build's kb_build_run row is gone.
+
+        The row was committed at run start; it can only be missing if the registry
+        was wiped or the database dropped/recreated while this build ran (the pool
+        reconnects by DSN name, so per-source commits keep landing in the NEW
+        database with no error). Finalizing then would reconcile — and sweep —
+        a world this build never listed."""
+        alive = (
+            await self._session.execute(
+                select(KbBuildRun.build_id).where(KbBuildRun.build_id == build_id)
+            )
+        ).scalar_one_or_none()
+        if alive is None:
+            logger.error(
+                "event=build_run_row_missing build_id=%s kb_version=%s build_seq=%d "
+                "reason=registry_reset_or_swapped_mid_build action=abort_before_finalize",
+                build_id,
+                self._kb_version,
+                self._build_seq,
+            )
+            raise BuildEnvironmentLostError(
+                f"kb_build_run row {build_id} vanished mid-build; the registry was "
+                "reset or swapped underneath this build — aborting before the "
+                "invalidation pass"
+            )
 
     async def _process_sources(
         self, connectors: Sequence[Connector], counters: _Counters
@@ -372,6 +426,7 @@ class BuildRunner:
             build_seq=self._build_seq,
             seen_source_ids=seen_source_ids,
             changed_source_ids=changed_source_ids,
+            build_started_at=self._build_started_at,
         )
         # Alias/reference index (PR-38, ADR-0030) runs AFTER invalidation (so a
         # sweep-invalidated alias that is still confirmed is revived in the same

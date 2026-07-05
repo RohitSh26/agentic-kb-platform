@@ -13,6 +13,7 @@ Both are covered here. This replaces the earlier test that PINNED the gap
 
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -134,7 +135,10 @@ async def test_invalidation_propagates_acl_change_onto_live_artifacts(migrated_d
             await session.flush()
 
             result = await run_invalidation_pass(
-                session, build_seq=2, seen_source_ids={source.source_id}
+                session,
+                build_seq=2,
+                seen_source_ids={source.source_id},
+                build_started_at=datetime.now(UTC),
             )
 
             assert result.acl_sources_propagated == 1
@@ -188,7 +192,10 @@ async def test_idempotent_acl_propagation_does_not_churn(migrated_db: None) -> N
             await session.flush()
 
             result = await run_invalidation_pass(
-                session, build_seq=2, seen_source_ids={source.source_id}
+                session,
+                build_seq=2,
+                seen_source_ids={source.source_id},
+                build_started_at=datetime.now(UTC),
             )
 
             assert result.acl_sources_propagated == 0
