@@ -1,7 +1,7 @@
 SERVICES := kb-builder mcp-server review-panel
 TEST_DATABASE_URL ?= postgresql+asyncpg://postgres:postgres@localhost:5432/agentic_kb_test
 
-.PHONY: sync lint types test verify migrate-test-db eval-run demo \
+.PHONY: sync lint types test verify migrate-test-db eval-run eval-all demo \
 	sync-evals lint-evals types-evals test-evals verify-evals \
 	$(foreach s,$(SERVICES),sync-$(s) lint-$(s) types-$(s) test-$(s) verify-$(s))
 
@@ -65,3 +65,9 @@ verify-evals: lint-evals types-evals test-evals
 
 eval-run:
 	cd evals && TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run python run.py
+
+# Consolidated T0-T4 report (docs/architecture/evaluation-system.md). DATABASE_URL (T2/T3) and
+# LLM creds (T3) are read from the calling shell's environment if exported; unavailable tiers
+# SKIP with a stated reason rather than failing. Pass --with-gates for T0, --tiers to narrow.
+eval-all:
+	cd evals && TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run python run_all.py

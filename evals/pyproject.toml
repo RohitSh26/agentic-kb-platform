@@ -40,7 +40,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
-include = ["harness", "tests", "run.py"]
+include = ["harness", "tests", "run.py", "run_all.py"]
 strict = ["harness"]
 
 [tool.pytest.ini_options]
