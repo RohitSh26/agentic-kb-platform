@@ -235,9 +235,7 @@ async def test_change_pack_scopes_tests_and_deps_to_the_targets_repo(
     purely on lexical overlap. The resolver MUST scope test + dependency candidates to the
     target's own ``services/<name>`` boundary, so a kb-builder target only ever resolves
     kb-builder tests/deps — never a cross-service file that merely mentions the same symbols."""
-    target_uri = (
-        "file:///repo/services/kb-builder/src/agentic_kb_builder/connectors/github_rest.py"
-    )
+    target_uri = "file:///repo/services/kb-builder/src/agentic_kb_builder/connectors/github_rest.py"
     target_path = "/repo/services/kb-builder/src/agentic_kb_builder/connectors/github_rest.py"
     same_service_test_uri = (
         "file:///repo/services/kb-builder/tests/unit/test_github_rest_backend.py"
@@ -258,8 +256,7 @@ async def test_change_pack_scopes_tests_and_deps_to_the_targets_repo(
             source_uri=target_uri,
             symbols={
                 "AsyncHttpClient": (
-                    "class AsyncHttpClient:\n"
-                    "    def request(self): raise HttpFetchError('boom')"
+                    "class AsyncHttpClient:\n    def request(self): raise HttpFetchError('boom')"
                 )
             },
         )
@@ -273,9 +270,7 @@ async def test_change_pack_scopes_tests_and_deps_to_the_targets_repo(
         )
         # a cross-service NON-test dependency that defines a same-named contract symbol — the
         # tempting cross-service dep that the repo-scope guard must drop from stage 4.
-        cross_dep_uri = (
-            "file:///repo/services/mcp-server/src/agentic_mcp_server/http_client.py"
-        )
+        cross_dep_uri = "file:///repo/services/mcp-server/src/agentic_mcp_server/http_client.py"
         cross_dep_path = "/repo/services/mcp-server/src/agentic_mcp_server/http_client.py"
         cross_dep_file, _ = await insert_code_unit(
             session,
@@ -348,9 +343,7 @@ async def test_change_pack_scopes_tests_and_deps_to_the_targets_repo(
     )
     deps = make_broker_deps(factory, search)
 
-    request = ChangeContextRequest(
-        task="Add a retry path to AsyncHttpClient in github_rest.py"
-    )
+    request = ChangeContextRequest(task="Add a retry path to AsyncHttpClient in github_rest.py")
     resp = await change_context.create_change_pack(deps, request, _REQUESTER)
 
     assert [f.path for f in resp.target_files] == [target_path]
@@ -364,9 +357,7 @@ async def test_change_pack_scopes_tests_and_deps_to_the_targets_repo(
     assert cross_dep_path not in dep_paths
 
     # NO cross-service path appears ANYWHERE in the pack — not as a test and not as a dependency
-    all_paths = {
-        f.path for f in resp.target_files + resp.test_files + resp.dependency_files
-    }
+    all_paths = {f.path for f in resp.target_files + resp.test_files + resp.dependency_files}
     assert cross_service_path not in all_paths
     assert cross_dep_path not in all_paths
     assert all("services/kb-builder/" in p for p in all_paths), all_paths

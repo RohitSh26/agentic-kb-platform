@@ -301,8 +301,7 @@ async def expand(deps: BrokerDeps, request: ExpandRequest, requester: Requester)
             except Exception:
                 pack.restore(requester.subject, snapshot)
                 logger.warning(
-                    "broker.expand subject=%s status=refunded tokens_refunded=%d "
-                    "cards_refunded=%d",
+                    "broker.expand subject=%s status=refunded tokens_refunded=%d cards_refunded=%d",
                     requester.subject,
                     tokens_used,
                     len(cards),

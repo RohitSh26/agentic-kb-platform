@@ -48,8 +48,6 @@ _PRIORITY_FIELDS: tuple[str, ...] = (
 )
 
 
-
-
 def _chunked(ids: list[int], size: int) -> list[list[int]]:
     return [ids[i : i + size] for i in range(0, len(ids), size)]
 

@@ -165,7 +165,8 @@ def test_alias_targets_degrades_to_empty_on_garbage_never_raises() -> None:
 
 
 def test_alias_tier_honors_a_known_tier_and_defaults_to_interpreted() -> None:
-    assert _alias_tier(_alias_row(json.dumps({"confidence_tier": "deterministic"})))\
-        == "deterministic"
+    assert (
+        _alias_tier(_alias_row(json.dumps({"confidence_tier": "deterministic"}))) == "deterministic"
+    )
     assert _alias_tier(_alias_row(json.dumps({"confidence_tier": "certain"}))) == "interpreted"
     assert _alias_tier(_alias_row("not json")) == "interpreted"

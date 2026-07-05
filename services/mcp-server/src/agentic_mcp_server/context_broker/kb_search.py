@@ -167,8 +167,7 @@ async def kb_search(
             refunded_tokens = window.usage.tokens - tokens_before
             window.usage.requests, window.usage.tokens = requests_before, tokens_before
             logger.warning(
-                "broker.kb_search subject=%s status=refunded calls_refunded=1 "
-                "tokens_refunded=%d",
+                "broker.kb_search subject=%s status=refunded calls_refunded=1 tokens_refunded=%d",
                 requester.subject,
                 refunded_tokens,
             )

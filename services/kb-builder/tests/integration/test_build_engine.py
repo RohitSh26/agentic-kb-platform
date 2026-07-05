@@ -377,17 +377,23 @@ async def test_one_source_failure_is_skipped_not_fatal_and_others_persist(
     # brand-new source), so it is retried on the next build.
     assert await _count(session, GenerationCache) == 0
     doc_sources = (
-        await session.execute(select(SourceItem).where(SourceItem.source_type == "github_doc"))
-    ).scalars().all()
+        (await session.execute(select(SourceItem).where(SourceItem.source_type == "github_doc")))
+        .scalars()
+        .all()
+    )
     assert doc_sources == []
     # but the code source that SUCCEEDED is persisted.
     code = (
-        await session.execute(
-            select(KnowledgeArtifact).where(
-                KnowledgeArtifact.artifact_type.in_(("code_file", "code_symbol"))
+        (
+            await session.execute(
+                select(KnowledgeArtifact).where(
+                    KnowledgeArtifact.artifact_type.in_(("code_file", "code_symbol"))
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert code
 
 
@@ -420,10 +426,20 @@ async def test_earlier_source_is_persisted_when_a_later_one_fails(session: Async
     uri_a = "https://github.com/o/r/blob/sha1/docs/a.md"
     uri_b = "https://github.com/o/r/blob/sha1/docs/b.md"
     refs = [
-        SourceRef(source_type="github_doc", source_uri=uri_a, source_version="sha1",
-                  repo="o/r", path="docs/a.md"),
-        SourceRef(source_type="github_doc", source_uri=uri_b, source_version="sha1",
-                  repo="o/r", path="docs/b.md"),
+        SourceRef(
+            source_type="github_doc",
+            source_uri=uri_a,
+            source_version="sha1",
+            repo="o/r",
+            path="docs/a.md",
+        ),
+        SourceRef(
+            source_type="github_doc",
+            source_uri=uri_b,
+            source_version="sha1",
+            repo="o/r",
+            path="docs/b.md",
+        ),
     ]
     texts = {uri_a: "First doc.\n", uri_b: "Second doc.\n"}
     connector = GitHubDocConnector(FakeBackend(refs, texts))
@@ -441,8 +457,14 @@ async def test_earlier_source_is_persisted_when_a_later_one_fails(session: Async
     assert run.extractor_failures == 1
     # the FIRST doc is persisted (committed before the second was even attempted)...
     persisted = (
-        await session.execute(select(SourceItem.source_uri).where(SourceItem.is_deleted == False))  # noqa: E712
-    ).scalars().all()
+        (
+            await session.execute(
+                select(SourceItem.source_uri).where(SourceItem.is_deleted.is_(False))
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert uri_a in persisted
     # ...and the SECOND (failed) doc left nothing and is retried next build.
     assert uri_b not in persisted

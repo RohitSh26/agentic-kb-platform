@@ -1,10 +1,10 @@
 {
   "schema_version": "1.0.0",
-  "created_at": "2026-06-15T13:12:34.081963+00:00",
-  "git_sha": "a3fd690",
+  "created_at": "2026-07-05T07:35:39.269663+00:00",
+  "git_sha": "1987f2c",
   "metrics": {
     "context_tokens_per_successful_task": {
-      "value": 46.93333333333333,
+      "value": 238.0,
       "status": "measured"
     },
     "duplicate_context_tokens": {

@@ -38,6 +38,7 @@ def ado_basic_auth_header(token: str | None) -> str | None:
     encoded = base64.b64encode(f":{token}".encode()).decode("ascii")
     return f"Basic {encoded}"
 
+
 _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_MAX_RETRIES = 4
 _DEFAULT_BACKOFF_BASE = 0.5  # seconds; doubled each attempt, capped

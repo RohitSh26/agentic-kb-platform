@@ -170,8 +170,7 @@ def test_spans_attach_exact_body_text_to_matched_symbols() -> None:
         ]
     }
     by_key = {
-        a.key: a
-        for a in map_extraction(GRAPH, spans_by_file={"pkg/service.py": spans}).artifacts
+        a.key: a for a in map_extraction(GRAPH, spans_by_file={"pkg/service.py": spans}).artifacts
     }
     top = by_key["sym:pkg/service.py::top"]
     assert top.span_start == 7
@@ -192,8 +191,7 @@ def test_span_collision_disambiguated_by_name() -> None:
         ]
     }
     by_key = {
-        a.key: a
-        for a in map_extraction(GRAPH, spans_by_file={"pkg/service.py": spans}).artifacts
+        a.key: a for a in map_extraction(GRAPH, spans_by_file={"pkg/service.py": spans}).artifacts
     }
     # The fixture's L7 symbol carries label "top()" -> matches the "top" span.
     assert by_key["sym:pkg/service.py::top"].body_text == "RIGHT"

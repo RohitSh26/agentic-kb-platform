@@ -11,7 +11,9 @@ from agentic_mcp_server.infrastructure.postgres.artifacts import ArtifactRow
 
 
 def _row(
-    *, knowledge_kind: str = "interpreted", authority: float | None = 0.5,
+    *,
+    knowledge_kind: str = "interpreted",
+    authority: float | None = 0.5,
     centrality: float | None = None,
 ) -> ArtifactRow:
     return ArtifactRow(

@@ -221,10 +221,10 @@ async def test_crash_then_rerun_makes_zero_model_calls(session: AsyncSession) ->
         assert await _count(session, KnowledgeArtifact) == 1
         assert await _count(session, GenerationCache) == 1
         active = (
-            await session.execute(
-                select(KbBuildRun).where(KbBuildRun.status == "active")
-            )
-        ).scalars().all()
+            (await session.execute(select(KbBuildRun).where(KbBuildRun.status == "active")))
+            .scalars()
+            .all()
+        )
         assert active == []
 
         # but the model OUTPUTS survived (side-committed, independent of the rollback)

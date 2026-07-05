@@ -99,10 +99,7 @@ def test_grounded_concept_becomes_source_backed_with_the_verbatim_quote() -> Non
     assert fact.knowledge_kind == "source_backed"
     assert fact.title == "login flow"
     # the body IS the verbatim supporting sentence (what the L0 verifier confirms).
-    assert (
-        fact.body_text
-        == "The login flow validates a session token against the AuthMiddleware."
-    )
+    assert fact.body_text == "The login flow validates a session token against the AuthMiddleware."
     assert fact.body_text in SOURCE_TEXT
     assert fact.authority_score == FACT_AUTHORITY
 

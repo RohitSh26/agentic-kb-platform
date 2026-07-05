@@ -122,9 +122,7 @@ class PostgresDurableOutputCache:
         except SQLAlchemyError as exc:
             self._degrade("get_embedding", exc)
             return None
-        logger.info(
-            "event=durable_embedding_hit text_hash=%s model=%s", text_hash, embedding_model
-        )
+        logger.info("event=durable_embedding_hit text_hash=%s model=%s", text_hash, embedding_model)
         return result
 
     async def put_embedding(
@@ -147,9 +145,7 @@ class PostgresDurableOutputCache:
         except SQLAlchemyError as exc:
             self._degrade("put_embedding", exc)
             return
-        logger.info(
-            "event=durable_embedding_put text_hash=%s model=%s", text_hash, embedding_model
-        )
+        logger.info("event=durable_embedding_put text_hash=%s model=%s", text_hash, embedding_model)
 
 
 def make_durable_output_cache(url: str | None = None) -> PostgresDurableOutputCache:

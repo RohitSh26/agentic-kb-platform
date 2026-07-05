@@ -155,8 +155,7 @@ async def open_evidence(
         except Exception:
             pack.restore(requester.subject, snapshot)
             logger.warning(
-                "broker.open_evidence subject=%s status=refunded evidence_id=%s "
-                "tokens_refunded=%d",
+                "broker.open_evidence subject=%s status=refunded evidence_id=%s tokens_refunded=%d",
                 requester.subject,
                 request.evidence_id,
                 cost,

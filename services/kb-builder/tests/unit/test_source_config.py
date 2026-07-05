@@ -135,9 +135,7 @@ class TestValidationMatrix:
         assert config.git_metadata is None
 
     def test_git_metadata_repo_parses(self) -> None:
-        config = SourceConfig.model_validate(
-            _config([_github()], git_metadata={"repo": "o/r"})
-        )
+        config = SourceConfig.model_validate(_config([_github()], git_metadata={"repo": "o/r"}))
         assert config.git_metadata is not None
         assert config.git_metadata.repo == "o/r"
 

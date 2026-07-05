@@ -93,7 +93,10 @@ def test_make_doc_extract_routes_anthropic_vs_graphify(monkeypatch: pytest.Monke
     monkeypatch.setattr(anthropic, "AsyncAnthropicFoundry", _FakeFoundry)
     assert getattr(make_doc_extract(_ENDPOINT), "__name__", "") == "anthropic_doc_extract"
     openai_ep = ModelEndpoint(
-        provider="groq", base_url="https://api.groq.com/openai/v1", api_key="k", model="x",
+        provider="groq",
+        base_url="https://api.groq.com/openai/v1",
+        api_key="k",
+        model="x",
         max_tokens=8192,
     )
     assert getattr(make_doc_extract(openai_ep), "__name__", "") == "graphify_doc_extract"

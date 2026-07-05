@@ -571,9 +571,7 @@ async def test_response_budget_trims_the_tail_and_request_cap_is_clamped(
     tight_settings = BrokerSettings(task_context_max_tokens=230)
     tight = await get_task_context(
         make_broker_deps(factory, search, settings=tight_settings),
-        GetTaskContextRequest(
-            task_description="fix the payment validation", max_tokens=1_000_000
-        ),
+        GetTaskContextRequest(task_description="fix the payment validation", max_tokens=1_000_000),
         REQUESTER,
     )
 
@@ -596,9 +594,7 @@ async def test_no_active_kb_version_errors_and_writes_an_error_row(
     deps = make_broker_deps(factory, FakeSearchClient())
 
     with pytest.raises(ToolError, match="no active kb_version"):
-        await get_task_context(
-            deps, GetTaskContextRequest(task_description="anything"), REQUESTER
-        )
+        await get_task_context(deps, GetTaskContextRequest(task_description="anything"), REQUESTER)
 
     async with factory() as session:
         rows = await _ledger_rows(session)
@@ -627,9 +623,7 @@ async def test_acl_drops_a_restricted_blast_neighbor_before_it_reveals_connectiv
 ) -> None:
     search = FakeSearchClient()
     async with factory() as session:
-        await _seed_collision(
-            session, search, import_to="file_a", target_acl=["payments-team"]
-        )
+        await _seed_collision(session, search, import_to="file_a", target_acl=["payments-team"])
     deps = make_broker_deps(factory, search)
 
     outsider = await get_task_context(deps, HANDLE_HINT, REQUESTER)

@@ -75,7 +75,8 @@ async def test_warning_logged_once(caplog: pytest.LogCaptureFixture) -> None:
         await cache.get_doc_extraction("a")
         await cache.get_doc_extraction("b")
         await cache.put_embedding(
-            text_hash="t", embedding_model="e",
+            text_hash="t",
+            embedding_model="e",
             result=EmbeddingResult(embedding_hash="h", vector=[0.1]),
         )
     unavailable = [r for r in caplog.records if "durable_cache_unavailable" in r.getMessage()]

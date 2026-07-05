@@ -203,8 +203,7 @@ async def _hydrate_allowed(
     async with ctx.deps.session_factory() as session:
         rows = await fetch_artifacts(session, artifact_ids, ctx.build_seq)
     allowed = {
-        row.artifact_id: row
-        for row in ctx.deps.authorization.filter_artifacts(ctx.requester, rows)
+        row.artifact_id: row for row in ctx.deps.authorization.filter_artifacts(ctx.requester, rows)
     }
     meter.suppressed.extend(row.artifact_id for row in rows if row.artifact_id not in allowed)
     return allowed
@@ -410,9 +409,7 @@ async def _resolve_from_alias(
 
 def _resolve_from_search(rows: list[ArtifactRow], *, broadened: bool) -> ScopeResolution:
     if broadened:
-        candidates = [
-            row for row in rows if row.artifact_type not in (_ALIAS_TYPE, _COMMIT_TYPE)
-        ]
+        candidates = [row for row in rows if row.artifact_type not in (_ALIAS_TYPE, _COMMIT_TYPE)]
     else:
         candidates = [row for row in rows if row.artifact_type in _CODE_TYPES]
     entities = tuple(
@@ -546,9 +543,9 @@ async def blast_radius_node(state: TaskContextState) -> TaskContextUpdate:
         if edge.edge_type == "imports"
     }
 
-    neighbor_ids = {
-        edge.from_artifact_id for edge in caller_edges + test_edges
-    } | {edge.to_artifact_id for edge in callee_edges}
+    neighbor_ids = {edge.from_artifact_id for edge in caller_edges + test_edges} | {
+        edge.to_artifact_id for edge in callee_edges
+    }
 
     # Second hop for corroboration inputs only: the neighbors' defining files and
     # the import graph between the files involved (still the existing query layer).
@@ -571,9 +568,7 @@ async def blast_radius_node(state: TaskContextState) -> TaskContextUpdate:
     # Hydrate + ACL-filter every artifact we might surface. An unauthorized
     # neighbor is dropped here, BEFORE it can reveal its connectivity (the same
     # rule as graph.get_neighbors' per-hop filter).
-    allowed = await _hydrate_allowed(
-        ctx, list(neighbor_ids | set(defined_in.values())), meter
-    )
+    allowed = await _hydrate_allowed(ctx, list(neighbor_ids | set(defined_in.values())), meter)
 
     def _file_path(file_id: uuid.UUID | None) -> str | None:
         if file_id is None:
@@ -731,9 +726,7 @@ async def similar_prior_changes_node(state: TaskContextState) -> TaskContextUpda
     prior = tuple(
         PriorChange(
             commit_or_pr_id=readable_path(row.source_uri) or str(row.artifact_id),
-            summary=(row.title or next(iter((row.body_text or "").strip().splitlines()), ""))[
-                :200
-            ],
+            summary=(row.title or next(iter((row.body_text or "").strip().splitlines()), ""))[:200],
             evidence_ids=[row.artifact_id],
         )
         for row in commits

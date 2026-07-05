@@ -211,9 +211,7 @@ class TestConnectorsFromConfig:
         monkeypatch.delenv("TEST_GITHUB_TOKEN", raising=False)
         config = load_source_config(_write_yaml(tmp_path, VALID_YAML))
         with pytest.raises(SourceConfigError, match="TEST_GITHUB_TOKEN is not set"):
-            connectors_from_config(
-                config, lambda spec, token: FakeBackend([]), authenticates=True
-            )
+            connectors_from_config(config, lambda spec, token: FakeBackend([]), authenticates=True)
 
     def test_authenticates_false_never_resolves_tokens_and_never_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -306,8 +304,7 @@ sources:
         with caplog.at_level(logging.WARNING):
             assert resolve_git_metadata_repo(config) is None
         assert any(
-            "event=git_metadata_repo_ambiguous" in record.getMessage()
-            for record in caplog.records
+            "event=git_metadata_repo_ambiguous" in record.getMessage() for record in caplog.records
         )
 
     def test_explicit_override_wins_even_with_a_single_shared_repo(self, tmp_path: Path) -> None:
