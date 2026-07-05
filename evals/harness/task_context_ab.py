@@ -183,9 +183,7 @@ async def seed_ab_case(
         artifact_id = ids[artifact.key]
         source_id = uuid.uuid4()
         body_text = (
-            _alias_body(
-                artifact, [(by_key[k].path, ids[k]) for k in artifact.alias_targets]
-            )
+            _alias_body(artifact, [(by_key[k].path, ids[k]) for k in artifact.alias_targets])
             if artifact.alias_targets
             else artifact.body_text
         )
@@ -217,9 +215,7 @@ async def seed_ab_case(
                 "title": artifact.title,
                 "body_text": body_text,
                 "kb_version": KB_VERSION,
-                "knowledge_kind": (
-                    "interpreted" if artifact.alias_targets else "source_backed"
-                ),
+                "knowledge_kind": ("interpreted" if artifact.alias_targets else "source_backed"),
                 "acl_teams": [],
             },
         )

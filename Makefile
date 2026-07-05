@@ -1,7 +1,7 @@
 SERVICES := kb-builder mcp-server review-panel
 TEST_DATABASE_URL ?= postgresql+asyncpg://postgres:postgres@localhost:5432/agentic_kb_test
 
-.PHONY: sync lint types test verify migrate-test-db eval-run eval-all demo \
+.PHONY: sync lint types test verify migrate-test-db eval-run eval-all dashboard demo \
 	sync-evals lint-evals types-evals test-evals verify-evals \
 	$(foreach s,$(SERVICES),sync-$(s) lint-$(s) types-$(s) test-$(s) verify-$(s))
 
@@ -76,3 +76,9 @@ eval-run:
 # SKIP with a stated reason rather than failing. Pass --with-gates for T0, --tiers to narrow.
 eval-all:
 	cd evals && TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run python run_all.py
+
+# Read-only operator dashboard (ADR-0014 Phase 1, docs/contracts/observability-dashboard.md):
+# static HTML + Markdown from the v_* dashboard views. DATABASE_URL (a real registry; the
+# renderer only SELECTs) is read from the calling shell if exported, else TEST_DATABASE_URL.
+dashboard:
+	cd evals && TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run python run.py --dashboard

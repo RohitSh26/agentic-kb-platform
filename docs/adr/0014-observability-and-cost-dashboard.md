@@ -41,7 +41,7 @@ The constraint is CLAUDE.md's **V1 exclusion list**: no Azure Functions, Event G
 Redis, API Management, Blob Storage, dedicated graph DB, or new always-on service may be introduced
 without weighing it here. A dashboard must therefore be a *projection*, never a new store.
 
-## Decision (proposed)
+## Decision
 
 **Phase 1: a read-only metrics module in `evals/` that renders a static report from SQL over the
 existing ledger and `kb_build_run`, plus reusable SQL views.** No new service, no new infra, no

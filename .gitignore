@@ -28,6 +28,9 @@ dist/
 
 # Generated eval output (baseline.json IS committed)
 evals/report.json
+# Generated operator dashboard (ADR-0014) — regenerable from Postgres at any time
+evals/dashboard.html
+evals/dashboard.md
 
 # Local dev search index projection (ADR-0017) — rebuildable from Postgres, never truth
 .kb-local-search-index.json

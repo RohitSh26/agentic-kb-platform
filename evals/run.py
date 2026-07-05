@@ -21,6 +21,7 @@ from harness.baseline import compare, load_baseline, write_baseline
 from harness.candidate_fixture import EXPECTED_RELATIONS, GENERATED_CANDIDATES
 from harness.candidates import aggregate_candidates
 from harness.cases import BENCHMARK_TASK_TYPES, EvalCase, load_cases
+from harness.dashboard import generate_dashboard
 from harness.executor import execute_case
 from harness.fixtures import clean_registry, require_registry_schema
 from harness.golden import (
@@ -145,12 +146,41 @@ def main() -> int:
         help="exit nonzero (3) when the baseline verdict is 'regressed' "
         "(default: on; always skipped with --update-baseline)",
     )
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="render the read-only operator dashboard (ADR-0014 Phase 1) and exit; "
+        "reads DATABASE_URL (safe: SELECT-only) or TEST_DATABASE_URL",
+    )
+    parser.add_argument(
+        "--dashboard-out",
+        type=Path,
+        default=EVALS_DIR,
+        help="directory for dashboard.html + dashboard.md (default: evals/)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
         level=logging.INFO,
         format="ts=%(asctime)s level=%(levelname)s logger=%(name)s msg=%(message)s",
     )
+
+    if args.dashboard:
+        # Unlike the harness below, the dashboard is read-only (SELECTs over the
+        # ADR-0014 views), so a real registry via DATABASE_URL is allowed here.
+        dashboard_url = os.environ.get("DATABASE_URL") or os.environ.get("TEST_DATABASE_URL")
+        if not dashboard_url:
+            print(
+                "set DATABASE_URL (a registry with the dashboard views migrated) or "
+                "TEST_DATABASE_URL to render the dashboard",
+                file=sys.stderr,
+            )
+            return 2
+        html_path, md_path = asyncio.run(
+            generate_dashboard(dashboard_url, args.dashboard_out, report_path=REPORT_PATH)
+        )
+        print(f"dashboard written: {html_path} {md_path}")
+        return 0
 
     # TEST_DATABASE_URL only — no DATABASE_URL fallback: the harness seeds and
     # DELETEs registry tables, which must never point at a real registry

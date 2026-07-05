@@ -74,9 +74,7 @@ async def _run_case(case: TaskContextAbCase) -> GetTaskContextResponse:
             await clean_registry(session)
             await seed_ab_case(session, case, search)
         hints = (
-            TaskContextHints(
-                file_paths=case.hints.file_paths, symbols=case.hints.symbols
-            )
+            TaskContextHints(file_paths=case.hints.file_paths, symbols=case.hints.symbols)
             if case.hints is not None
             else None
         )
