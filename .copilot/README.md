@@ -15,7 +15,7 @@ stays parity-clean without this repo's test suite (stdlib-only, CI-friendly).
 
 | File here | Where Copilot looks for it |
 |---|---|
-| `agents/orchestrator.agent.md` and the eleven specialist `*.agent.md` files (five original plus six added by ADR-0030, not yet invoked by the orchestrator) | `.github/agents/` in your repository (used by VS Code and the cloud agent), or `~/.copilot/agents/` for a user-level Copilot CLI profile |
+| `agents/orchestrator.agent.md` and the eleven specialist `*.agent.md` files — five original plus `adr_writer_agent`/`infra_code_agent` (all seven on the orchestrator's `agents`/`handoffs` allowlist, the last two added by ADR-0030) plus the four ADR-0030 review-panel lenses (`bug_reviewer_agent`, `security_reviewer_agent`, `quality_reviewer_agent`, `test_coverage_reviewer_agent` — NOT on the orchestrator's allowlist; reachable only via the ADR-0031 dev-gated review-panel draft engine, never launched in-session) | `.github/agents/` in your repository (used by VS Code and the cloud agent), or `~/.copilot/agents/` for a user-level Copilot CLI profile |
 | `agents/_template.agent.md` | copy to `.github/agents/<your-agent>.agent.md`, fill in the `<!-- your agent description here -->` slots and the `name` |
 | `skills/evidence-pack-orchestration.md`, `skills/context-request-discipline.md`, `skills/evidence-citation.md` | host-neutral instruction modules — append the relevant one(s) to an agent body, or add them to your repository custom instructions (`.github/copilot-instructions.md`) |
 | `mcp/repository-settings.json` | repository settings → Copilot → MCP servers (the cloud agent / Copilot CLI configuration JSON) |
@@ -24,11 +24,18 @@ stays parity-clean without this repo's test suite (stdlib-only, CI-friendly).
 The agent frontmatter carries no `mcp-servers` block on purpose: VS Code ignores it, so the
 broker connection ships separately in `mcp/` for both deployment shapes.
 
+This repository does not keep a duplicate, pre-copied set of `*.agent.md` files at root
+`.github/agents/` — a stale snapshot there silently rots the moment the canon in `agents/`
+changes, since nothing rebuilds it automatically. Generate (or copy) your repository's
+`.github/agents/` directly from the current renderings in `.copilot/agents/*.agent.md` — the
+twelve files parity-pinned above — at deploy time, and re-copy whenever `agents/*.md` changes.
+
 ## The one credential to set
 
-Both configs connect to the Context Broker as an MCP server named `context-broker` (ADR-0025:
-the broker now serves exactly one tool, the budgeted `kb_search`). Replace
-`https://<your-broker-host>/mcp/` with your broker URL, then:
+Both configs connect to the Context Broker as an MCP server named `context-broker` (ADR-0025/
+ADR-0030: the broker now serves exactly the two MCP tools the twelve-role canon actually grants —
+the budgeted `kb_search` and the one-call `get_task_context` — never the full broker surface).
+Replace `https://<your-broker-host>/mcp/` with your broker URL, then:
 
 - **Repository settings (cloud agent / CLI)**: create the Copilot environment value
   `COPILOT_MCP_CONTEXT_BROKER_TOKEN` (Copilot only exposes values whose names start with
@@ -44,8 +51,12 @@ the broker now serves exactly one tool, the budgeted `kb_search`). Replace
 Each `*.agent.md` lists exactly its canonical `allowed_tools`, mapped through two different
 rules (`docs/contracts/portable-agent-framework.md` has the full table):
 
-- **`kb_search`** is the one MCP tool — budgeted and server-enforced — in Copilot's MCP syntax
-  `context-broker/kb_search`.
+- **`kb_search`** and **`get_task_context`** are the two MCP tools — both budgeted and
+  server-enforced, independently — in Copilot's MCP syntax `context-broker/kb_search` and
+  `context-broker/get_task_context`. `kb_search` is granted to every role; `get_task_context`
+  (ADR-0030's one-call task-context tool) is granted only to the task-scoped BUILD-lane roles —
+  `orchestrator`, `implementation_agent`, `infra_code_agent`, `test_layer_agent` — not to the
+  review/synthesis/planning-only roles.
 - **Native tools** (`read`, `edit`, `search` — Copilot's own built-in aliases, mapped from the
   canon's `read_file`/`read_full`/`edit_file`/`grep`/`list_files`; `search` covers both grep and
   glob) are restored directly to the agent (ADR-0025: "native tools are never removed") and
@@ -57,12 +68,16 @@ framework role needs them today.
 
 ## Composition
 
-The orchestrator declares its five invocable specialists natively — `agents: [...]` plus
-matching `handoffs:` (VS Code-only; the cloud agent ignores handoffs) — and therefore carries
-the `agent` tool alongside its mapped tools, the one pinned exception to the tool-parity rule.
-Every specialist and the template declare `agents: []`: specialists never launch subagents. Only
-the agent whose canon sets `requires_human_approval: true` (today, only the orchestrator) may
-declare subagents at all. Copilot has no native skills field, so the `skills/` modules stay wired
+The orchestrator declares its seven invocable build-lane specialists natively —
+`agents: [implementation_agent, test_layer_agent, code_reviewer_agent, delivery_planner_agent,
+pr_planner_agent, adr_writer_agent, infra_code_agent]` plus matching `handoffs:` (VS Code-only;
+the cloud agent ignores handoffs) — and therefore carries the `agent` tool alongside its mapped
+tools, the one pinned exception to the tool-parity rule. The four review-panel lenses are
+deliberately absent from this list: they run only through the separate ADR-0031 review-panel
+draft engine, never launched in-session by this orchestrator. Every specialist and the template
+declare `agents: []`: specialists never launch subagents. Only the agent whose canon sets
+`requires_human_approval: true` (today, only the orchestrator) may declare subagents at all.
+Copilot has no native skills field, so the `skills/` modules stay wired
 per the table above — every agent, orchestrator included, is meant to carry the same two:
 `kb-first-file-fallback` + `evidence-citation` (ADR-0025 dropped the old orchestrator-only
 `evidence-pack-orchestration` skill; its short procedure now lives directly in the orchestrator's

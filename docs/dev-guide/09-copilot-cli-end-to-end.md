@@ -3,13 +3,15 @@
 > Drive a **real external agent — the GitHub Copilot CLI, using its own model** — against the MCP
 > Context Broker, through the repo's **committed, policy-carrying MCP configuration**. This is the
 > non-IDE variant of the VS Code flow (dev-guide [00](00-getting-started.md) Parts 6–8): a
-> third-party agent asks your KB questions via the budgeted `kb_search` tool, and every call —
-> including the ones the budget refused — lands in the retrieval ledger.
+> third-party agent asks your KB questions via the budgeted `kb_search` tool (this guide's worked
+> example) or the one-call `get_task_context` tool, and every call — including the ones the budget
+> refused — lands in the retrieval ledger.
 
 ## The one design point to understand first
 
 The framework ships its Copilot MCP configuration at
-**`.copilot/mcp/repository-settings.json`**, and that file deliberately exposes **one tool**:
+**`.copilot/mcp/repository-settings.json`**, and that file deliberately exposes **exactly the
+tools the twelve-role canon grants** — today, two:
 
 ```json
 {
@@ -18,6 +20,7 @@ The framework ships its Copilot MCP configuration at
       "type": "http",
       "url": "https://<your-broker-host>/mcp/",
       "tools": [
+        "get_task_context",
         "kb_search"
       ],
       "headers": {
@@ -28,15 +31,17 @@ The framework ships its Copilot MCP configuration at
 }
 ```
 
-`"tools": ["kb_search"]` is the point (ADR-0025): a Copilot host gets the **budgeted, ACL-filtered
-`kb_search`** and keeps its own native file tools — it does not get the broker's other eleven
-tools. The budget and ACL are enforced **server-side per authenticated identity** either way
+That allowlist is the point (ADR-0025/ADR-0030): a Copilot host gets the **budgeted,
+ACL-filtered `kb_search`** and the **one-call, separately-budgeted `get_task_context`**
+(ADR-0030's task-scoped resolved-scope/blast-radius/conventions tool) and keeps its own native
+file tools — it does not get the broker's other ten tools (the governed `context.*` evidence-pack
+flow). The budget and ACL are enforced **server-side per authenticated identity** either way
 (deleting this file cannot widen anything), but the allowlist keeps the host's tool surface
 matching the framework's design.
 
 **Do not wire the broker with an ad-hoc `copilot mcp add` instead.** That creates a server entry
 *without* the `tools` allowlist, so the CLI would see and offer the broker's entire tool surface —
-bypassing the committed kb_search-only policy. Use the committed config, adapted only in URL and
+bypassing the committed allowlist policy. Use the committed config, adapted only in URL and
 token, for both deployment shapes:
 
 | Deployment | Where the config goes |
@@ -86,6 +91,7 @@ cat > ~/.copilot/mcp-config.json <<'EOF'
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp/",
       "tools": [
+        "get_task_context",
         "kb_search"
       ],
       "headers": {
@@ -117,7 +123,9 @@ reading any file, and cite the source_uri of what you used.' --allow-all-tools
 
 **What happens, step by step:**
 
-1. Copilot's model sees exactly one broker tool — `kb_search` — plus its own native tools.
+1. Copilot's model sees exactly two broker tools — `kb_search` and `get_task_context` — plus its
+   own native tools. This example drives `kb_search`; the callout below this walkthrough shows
+   `get_task_context` for a change-shaped task.
 2. It calls `kb_search` with `{"query": ...}` (that is the whole request; identity and budget bind
    to the authenticated session, not to anything the model sends).
 3. The broker runs the standard retrieval path — ACL filter, semantic dedupe, temporal +
@@ -131,6 +139,21 @@ session, enforced in the tool — not the prompt) eventually closes. The tool th
 results with the notice *"KB budget spent — work with what you have, or read the specific files
 you still need."* — a contractual outcome, never a crash, so the agent keeps working with its
 file tools.
+
+**For a change-shaped task, use `get_task_context` instead** — it is a separate, one-call tool
+with its own server-side budget (the Evidence-Pack band), so it never competes with the
+`kb_search` cap above:
+
+```sh
+copilot -p 'Using the context-broker get_task_context tool, answer: what is the resolved scope,
+blast radius, and applicable conventions for the task "add input validation to the GitHub
+connector"?' --allow-all-tools
+```
+
+One request (`{"task_description": "…", "hints": {...}}` — hints optional) returns the resolved
+scope, blast radius (callers/callees/tests), conventions, and similar prior changes in a single
+budgeted response, every item citing an evidence id — see
+[00 — Getting Started](00-getting-started.md) Part 7 for the full response shape.
 
 ## 5. What the ledger records
 
@@ -171,8 +194,9 @@ thesis demonstrated on an agent we don't control.
 
 ## Scope note
 
-The Copilot CLI here runs **one** agent (Copilot's model) with one governed retrieval tool. Two
-other runtimes exist for comparison: the VS Code + Copilot flow
+The Copilot CLI here runs **one** agent (Copilot's model) with the two governed retrieval tools
+(`kb_search`, `get_task_context`). Two other runtimes exist for comparison: the VS Code + Copilot
+flow
 ([00](00-getting-started.md) Parts 6–8, same broker, full tool surface) and the terminal
 multi-agent runner (`scripts/agent_runner.py`, [00](00-getting-started.md) Part 10), which drives
 the **governed `context.*` lanes** — evidence packs, human-approval gates, verification receipts —
@@ -185,6 +209,6 @@ for when citation-grade provenance is the goal.
 | `copilot` auth fails | Your `gh` account lacks a Copilot license, or use `copilot login` (device flow). Classic `ghp_` PATs aren't accepted for the CLI token env vars. |
 | Copilot can't reach `context-broker` | The broker isn't running — start it (quickstart "Connect a host", or dev-guide 00 Part 5); confirm `curl http://127.0.0.1:8765/health` → `ok`. |
 | Copilot answers without calling `kb_search` | Say so in the prompt ("search the KB before reading any file"), and confirm the server shows up in `copilot mcp list`. |
-| More tools than `kb_search` show up | The server entry is missing its `"tools": ["kb_search"]` allowlist — you added it ad-hoc. Replace it with the committed block (§3). |
+| More tools than `kb_search`/`get_task_context` show up | The server entry is missing its `tools` allowlist — you added it ad-hoc. Replace it with the committed block (§3). |
 | Every call comes back `denied` | The session budget is spent. New session, or raise `MCP_AGENT_ALLOWANCES` for your subject on the broker and restart it. |
 | `401` on tool calls | The broker isn't in local-dev mode (or isn't on loopback), so the placeholder bearer is rejected — restart it as in dev-guide 00 Part 5, or supply a real Entra token. |

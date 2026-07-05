@@ -16,8 +16,8 @@ whole tree stays parity-clean without this repo's test suite (stdlib-only, CI-fr
 | File here | Where OpenCode looks for it |
 |---|---|
 | `agents/orchestrator.md` (mode: primary) | `.opencode/agents/orchestrator.md` in your project (or `~/.config/opencode/agents/` globally) |
-| `agents/implementation.md`, `agents/test_layer.md`, `agents/code_reviewer.md`, `agents/delivery_planner.md`, `agents/pr_planner.md` (mode: subagent) | `.opencode/agents/<name>.md` in your project |
-| `agents/adr_writer.md`, `agents/infra_code.md`, `agents/bug_reviewer.md`, `agents/security_reviewer.md`, `agents/quality_reviewer.md`, `agents/test_coverage_reviewer.md` (mode: subagent, ADR-0030 — not yet invoked by the orchestrator) | `.opencode/agents/<name>.md` in your project |
+| `agents/implementation.md`, `agents/test_layer.md`, `agents/code_reviewer.md`, `agents/delivery_planner.md`, `agents/pr_planner.md`, `agents/adr_writer.md`, `agents/infra_code.md` (mode: subagent — all seven are on the orchestrator's `task` allowlist, the last two added by ADR-0030) | `.opencode/agents/<name>.md` in your project |
+| `agents/bug_reviewer.md`, `agents/security_reviewer.md`, `agents/quality_reviewer.md`, `agents/test_coverage_reviewer.md` (mode: subagent, ADR-0030 review-panel lenses — NOT on the orchestrator's allowlist; they run only via the ADR-0031 dev-gated review-panel draft engine, never launched in-session) | `.opencode/agents/<name>.md` in your project |
 | `agents/_template.md` | copy to `.opencode/agents/<your-agent>.md`, fill in the `<!-- your agent description here -->` slots |
 | `skills/evidence-pack-orchestration/SKILL.md`, `skills/context-request-discipline/SKILL.md`, `skills/evidence-citation/SKILL.md` | `.opencode/skills/<name>/SKILL.md` in your project |
 | `opencode.json` | merge into your project's `opencode.json` (or `~/.config/opencode/opencode.json`) |
@@ -28,8 +28,9 @@ in its discovery location — set the broker URL and the one token and you are d
 ## The one credential to set
 
 `opencode.json` connects to the Context Broker as a remote MCP server named `context-broker`
-(ADR-0025: the broker now serves exactly one tool, the budgeted `kb_search`). Replace
-`https://<your-broker-host>/mcp/` with your broker URL and export:
+(ADR-0025/ADR-0030: the broker now serves exactly the two MCP tools the twelve-role canon
+actually grants — the budgeted `kb_search` and the one-call `get_task_context` — never the full
+broker surface). Replace `https://<your-broker-host>/mcp/` with your broker URL and export:
 
 ```sh
 export CONTEXT_BROKER_TOKEN=<your bearer token>
@@ -43,8 +44,12 @@ The config references it as `{env:CONTEXT_BROKER_TOKEN}` (OpenCode's environment
 Each agent grants exactly its canonical `allowed_tools`, mapped through two different rules
 (`docs/contracts/portable-agent-framework.md` has the full table):
 
-- **`kb_search`** is the one MCP tool — budgeted and server-enforced. `opencode.json` disables
-  the whole broker namespace globally (`"context-broker_*": false`) and re-enables it per agent.
+- **`kb_search`** and **`get_task_context`** are the two MCP tools — both budgeted and
+  server-enforced, independently. `opencode.json` disables the whole broker namespace globally
+  (`"context-broker_*": false`) and re-enables exactly what each agent's canon grants. `kb_search`
+  is granted to every role; `get_task_context` (ADR-0030's one-call task-context tool) is granted
+  only to the task-scoped BUILD-lane roles — `orchestrator`, `implementation`, `infra_code`,
+  `test_layer` — not to the review/synthesis/planning-only roles.
 - **Native tools** (`read`, `edit`, `grep`, `list` — OpenCode's own built-ins, mapped from the
   canon's `read_file`/`read_full`/`edit_file`/`grep`/`list_files`) are restored directly to the
   agent (ADR-0025: "native tools are never removed") and carry **no broker budget**.
@@ -60,8 +65,11 @@ per agent; no framework role needs them today.
 Each agent's `permission` frontmatter declares composition natively, deny-by-default: `task`
 (launching subagents) and `skill` (loading skills) both deny `"*"`, then allow-list exactly what
 the role needs. Only the agent whose canon sets `requires_human_approval: true` (today, only the
-orchestrator) may launch subagents — it launches the five specialists (by filename). Every
-role, orchestrator included, loads the same two framework skills: `kb-first-file-fallback` +
+orchestrator) may launch subagents — it launches all seven build-lane specialists (by filename):
+`implementation`, `test_layer`, `code_reviewer`, `delivery_planner`, `pr_planner`, `adr_writer`,
+`infra_code`. The four review-panel lenses are deliberately absent from this list — they are
+reachable only through the separate ADR-0031 review-panel draft engine, not this orchestrator.
+Every role, orchestrator included, loads the same two framework skills: `kb-first-file-fallback` +
 `evidence-citation` (ADR-0025 dropped the old orchestrator-only `evidence-pack-orchestration`
 skill — its short procedure now lives directly in the orchestrator's own canonical body). The
 template ships the specialist-shaped block.

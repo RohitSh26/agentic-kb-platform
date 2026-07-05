@@ -1,8 +1,9 @@
 ---
 name: orchestrator
-version: 2.2
+version: 2.3
 allowed_tools:
   - kb_search
+  - get_task_context
   - read_file
   - read_full
   - list_files
@@ -50,10 +51,12 @@ the review-panel's draft engine (ADR-0031).
 
 ## Step 2b — BUILD lane (only for an actual change; approval required)
 1. Turn the request into a plan and WAIT for human approval before executing.
-2. After approval, gather shared context ONCE (`kb_search` + targeted reads) and hand off to
-   specialists via this host's native mechanism (OpenCode subagent invocation, Copilot `handoffs`),
-   passing your findings and citations directly in the handoff prompt — do not make each specialist
-   re-retrieve what you already found. Route by the kind of change: application code →
+2. After approval, gather shared context ONCE: start the BUILD task with ONE `get_task_context`
+   call (resolved scope, blast radius, conventions, similar prior changes for the task at hand),
+   then `kb_search`/targeted reads only for what it didn't cover — and hand off to specialists via
+   this host's native mechanism (OpenCode subagent invocation, Copilot `handoffs`), passing your
+   findings and citations directly in the handoff prompt — do not make each specialist re-retrieve
+   what you already found. Route by the kind of change: application code →
    implementation_agent (test_layer_agent plans its tests); an architecture decision that needs a
    decision record → adr_writer_agent; infrastructure/IaC changes → infra_code_agent; rollout and
    delivery → delivery_planner_agent; PR slicing → pr_planner_agent. On hosts without a handoff

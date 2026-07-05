@@ -40,8 +40,9 @@ three tiers below go from "make it run" to "understand it" to "operate it".
   fast, budgeted librarian — not a gate — with code arriving skeleton-first (ADR-0026).
 - **[09 — GitHub Copilot CLI against the broker](09-copilot-cli-end-to-end.md)** — drive a real
   external agent (the GitHub Copilot CLI, using its own model) against the broker through the
-  repo's committed, policy-carrying MCP config, which exposes exactly one tool: the budgeted
-  `kb_search`. Every call — including the ones the budget refused — lands in the ledger.
+  repo's committed, policy-carrying MCP config, which exposes exactly the tools the twelve-role
+  canon grants: the budgeted `kb_search` and the one-call `get_task_context`. Every call —
+  including the ones the budget refused — lands in the ledger.
 - **[10 — VS Code (Copilot agent mode) against the broker](10-vscode-against-the-broker.md)** —
   redirect stub: this flow is Parts 6–8 of [00 — Getting Started](00-getting-started.md); the
   connection config ships at `.vscode/mcp.json`.

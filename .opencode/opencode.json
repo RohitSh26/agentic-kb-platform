@@ -21,6 +21,7 @@
     "orchestrator": {
       "tools": {
         "context-broker_kb_search": true,
+        "context-broker_get_task_context": true,
         "read": true,
         "list": true,
         "grep": true
@@ -29,6 +30,7 @@
     "implementation": {
       "tools": {
         "context-broker_kb_search": true,
+        "context-broker_get_task_context": true,
         "read": true,
         "grep": true,
         "edit": true
@@ -37,6 +39,7 @@
     "test_layer": {
       "tools": {
         "context-broker_kb_search": true,
+        "context-broker_get_task_context": true,
         "read": true,
         "grep": true
       }
@@ -75,6 +78,7 @@
     "infra_code": {
       "tools": {
         "context-broker_kb_search": true,
+        "context-broker_get_task_context": true,
         "read": true,
         "grep": true,
         "edit": true
