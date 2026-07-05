@@ -1,0 +1,74 @@
+flowchart TD
+    classDef shipped fill:#eef1f8,stroke:#334c8c,stroke-width:1.5px,color:#1b1e24
+    classDef planned fill:#faf3e6,stroke:#b6791f,stroke-width:1.5px,stroke-dasharray:6 3,color:#6b5122
+    classDef external fill:#f2f3f5,stroke:#8a919c,stroke-width:1.2px,color:#3d434c
+    classDef store fill:#e8f2ec,stroke:#3f7a5c,stroke-width:1.5px,color:#1b1e24
+
+    subgraph SRCS["sources"]
+        CODE["code (github_code)"]:::shipped
+        DOCS["docs (github_doc)"]:::shipped
+        WIKI["wiki + tickets (ADO)"]:::shipped
+        GITM["git commits (git_metadata)"]:::shipped
+    end
+
+    subgraph BUILD["nightly build — kb-builder · SHIPPED, gates proven live twice"]
+        HASH{"content_hash changed?"}:::shipped
+        SKIP["skip — no LLM, no re-embed"]:::shipped
+        GRAPHIFY["graphify: AST symbols + call/import edges<br/>(deterministic, ADR-0012)"]:::shipped
+        DOCIFY["docify: LLM doc extraction<br/>durable side-committed cache (ADR-0027)"]:::shipped
+        ALIAS["alias mining: commit/brief/ADR phrases →<br/>target files (zero-LLM, PR-38)<br/>ACLs: (repo,path)-scoped, disjoint ⇒ deny-all"]:::shipped
+        REG[("Postgres Knowledge Registry<br/>artifacts · edges · ACL · kb_version")]:::store
+        EMB["embeddings + search projection<br/>(derived, rebuildable)"]:::shipped
+        GATES{"publish gates: extractor errors ·<br/>edge/ontology integrity · index consistency"}:::shipped
+        KEEP["never activates —<br/>previous version keeps serving"]:::shipped
+        ACT["version ACTIVE (invariant 5)"]:::shipped
+    end
+
+    SRCS --> HASH
+    HASH -- no --> SKIP
+    HASH -- yes --> GRAPHIFY & DOCIFY & ALIAS
+    GRAPHIFY --> REG
+    DOCIFY --> REG
+    ALIAS --> REG
+    REG --> EMB --> GATES
+    GATES -- any fail --> KEEP
+    GATES -- all pass --> ACT
+
+    subgraph MCP["mcp-server · SHIPPED, 527 tests"]
+        KBS["kb_search — dual-cap budget<br/>(calls AND tokens) · ACL-filtered"]:::shipped
+        GTC["get_task_context — LangGraph:<br/>resolve_scope ∥ blast_radius ∥ conventions ∥ similar_changes<br/>→ synthesize → 1 broadened retry<br/>zero LLM · p50 4.9ms"]:::shipped
+        WRAP["error wrapper — exactly ONE ledger row per call<br/>(approved/denied/error) · crash ⇒ budget refund"]:::shipped
+    end
+    ACT --> KBS & GTC
+    KBS --- WRAP
+    GTC --- WRAP
+
+    subgraph OBS["observability"]
+        LED[("retrieval ledger — every call:<br/>tokens · latency · denials · errors")]:::store
+        LOGS["structured logs (all paths)"]:::shipped
+        LSMITH["LangSmith tracing — wired, env-gated<br/>(activates with a deployment env)"]:::planned
+        DASH["cost/usage dashboard (ADR-0014)"]:::planned
+    end
+    WRAP --> LED
+    LED -.-> DASH
+    LSMITH -.-> DASH
+
+    subgraph HOSTS["host surfaces — external, fed via MCP; 12-role manifests rendered + parity-pinned"]
+        OC["OpenCode<br/>subagent delegation"]:::external
+        CP["VS Code Copilot<br/>handoffs chaining"]:::external
+        GH["GH Copilot cloud agent<br/>MCP tools only · 1 task/session"]:::external
+    end
+    KBS --> OC & CP & GH
+    GTC --> OC & CP & GH
+
+    subgraph REVIEW["review draft engine · SHIPPED — structurally cannot post (ADR-0031)"]
+        LENSES["bug ∥ security ∥ quality ∥ test-coverage<br/>4 LLM lenses, LangGraph, checkpointed<br/>(crash never re-pays completed lenses)"]:::shipped
+        RECON["reconcile — merge dupes ·<br/>keep disagreement · rank severity"]:::shipped
+        DSTORE[("review_panel schema —<br/>stored drafts, keyed repo#pr@sha")]:::store
+        FETCH["draft fetch via MCP (PR-41)<br/>CLI is the v1 path"]:::planned
+    end
+    LENSES --> RECON --> DSTORE
+    DSTORE --> FETCH -.-> CP
+
+    CP -- "dev reads · revises ·<br/>explicitly approves" --> PUB["dev publishes to GitHub<br/>under their OWN auth"]:::shipped
+    LED -. "file-fallbacks = KB-gap signals" .-> BUILD

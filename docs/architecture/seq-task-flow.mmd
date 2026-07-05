@@ -1,0 +1,39 @@
+sequenceDiagram
+    autonumber
+    actor Dev as Developer
+    participant Host as Host agent<br/>(OpenCode / Copilot)
+    participant MCP as mcp-server
+    participant LG as LangGraph<br/>(in-process)
+    participant PG as Postgres<br/>(registry + ledger)
+
+    Dev->>Host: "fix the durable model output cache"
+    Host->>MCP: get_task_context(task, hints)
+    MCP->>MCP: budget check (server-side cap)
+    MCP->>LG: invoke state graph
+    par four parallel pure-retrieval nodes
+        LG->>PG: resolve_scope — alias index, then search
+    and
+        LG->>PG: blast_radius — calls/imports/tests edges
+    and
+        LG->>PG: conventions — rules/ADRs near scope
+    and
+        LG->>PG: similar_prior_changes — commit search
+    end
+    LG->>LG: synthesize (tier confidence, trim to budget)
+    opt scope came back empty
+        LG->>PG: ONE broadened retry
+    end
+    MCP->>PG: retrieval_event (approved · tokens · latency)
+    MCP-->>Host: scope + blast radius + conventions,<br/>tiered, cited, budget_used
+    Host->>Host: read ONLY files the tool didn't cover
+    Host-->>Dev: plan / answer, with Sources
+
+    rect rgb(250, 243, 230)
+        Note over MCP,PG: crash path (guaranteed behavior)
+        Host->>MCP: get_task_context(...)
+        MCP--xMCP: unexpected mid-flight exception
+        MCP->>PG: retrieval_event (error) + budget REFUND
+        MCP-->>Host: tool error (never swallowed)
+        Host->>Host: treat as KB gap — fall back to native reads
+        Host-->>Dev: complete answer anyway
+    end

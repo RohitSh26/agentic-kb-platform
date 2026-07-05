@@ -1,0 +1,32 @@
+sequenceDiagram
+    autonumber
+    actor Dev as Developer
+    participant CR as code_reviewer agent<br/>(in Copilot chat)
+    participant Eng as draft engine<br/>(LangGraph, owned)
+    participant DB as review_panel schema<br/>(drafts + checkpoints)
+    participant GH as GitHub
+
+    Dev->>CR: "review PR #123"
+    CR->>Eng: draft repo#123 (CLI today, MCP tool = PR-41)
+    Eng->>GH: GET diff + metadata (read-only — no write credential exists)
+    par four specialist lenses (LLM, fenced untrusted content)
+        Eng->>Eng: bug_reviewer
+    and
+        Eng->>Eng: security_reviewer
+    and
+        Eng->>Eng: quality_reviewer
+    and
+        Eng->>Eng: test_coverage_reviewer
+    end
+    Note over Eng,DB: checkpointed — a killed run resumes,<br/>completed lenses are never re-paid
+    Eng->>Eng: reconcile — merge dupes, keep disagreement,<br/>rank by real severity
+    Eng->>DB: store draft, keyed repo#pr@head_sha<br/>(same sha re-run = stored draft, zero LLM calls)
+    Eng-->>CR: reconciled draft (JSON)
+    CR-->>Dev: presented IN CHAT, in the team's format
+    loop as many rounds as the developer wants
+        Dev->>CR: "drop finding 3, soften comment 2"
+        CR-->>Dev: revised draft
+    end
+    Dev->>CR: "publish"
+    CR->>GH: post ONE review — under the DEVELOPER'S auth (ADR-0031)
+    Note over Eng,GH: the engine itself has no publish path —<br/>asserted by tests, not just policy
