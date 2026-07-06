@@ -53,10 +53,14 @@ BROKER_TOOL_RE = re.compile(r"context[-_]broker[-_/](kb_search|get_task_context)
 NATIVE_TOOL_HINTS = ("read", "grep", "glob", "list", "view", "search", "bash", "edit")
 # Formats pinned from real probe transcripts (2026-07-06):
 # - opencode --format json: {"type":"tool_use",...,"part":{"tool":"context-broker_kb_search",...}}
-# - copilot --share session.md: tool calls are h3 headers like `### ✅ `context-broker-kb_search``
+# - copilot --share session.md: tool calls are h3 headers. 1.0.63 wrote
+#   `### ✅ `tool``; 1.0.68 dropped the status marker (`### `tool`` /
+#   `### `tool` — Failed`) — the marker group is optional to cover both
+#   (run-2 finding: the drifted format made native calls invisible to the
+#   ordering check, a false-confidence pass).
 GENERIC_TOOL_RE = re.compile(
     r'"tool"\s*:\s*"([^"]+)"'
-    r"|^###\s+\S+\s+`([^`\n]+)`",
+    r"|^###\s+(?:\S+\s+)?`([^`\n]+)`",
     re.MULTILINE,
 )
 

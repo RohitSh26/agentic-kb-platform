@@ -27,7 +27,12 @@ set -euo pipefail
 SUBJECT="copilot-cli"
 export SUBJECT
 GENEROUS='{"copilot-cli": {"max_requests": 50, "max_tokens": 50000}}'
-TINY='{"copilot-cli": {"max_requests": 1, "max_tokens": 50000}}'
+# max_requests 0: EVERY kb_search is denied with the budget notice — the
+# deterministic form of "tiny cap", same rationale as run_opencode.sh (a cap
+# of 1 only produces a denial if the model happens to call twice in one
+# session; run 2's copilot budget case proved Haiku often doesn't).
+# Approved-under-cap behavior is separately proven by every generous-cap case.
+TINY='{"copilot-cli": {"max_requests": 0, "max_tokens": 50000}}'
 
 COPILOT_USER_CONFIG="${HOME}/.copilot/mcp-config.json"
 COPILOT_USER_AGENTS="${HOME}/.copilot/agents"
