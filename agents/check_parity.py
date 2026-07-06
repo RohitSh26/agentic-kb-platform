@@ -136,6 +136,18 @@ def _parse_scalar(value: str) -> object:
     return value
 
 
+def _reject_yaml_ambiguous_scalar(key: str, value: str, path: Path) -> None:
+    """An UNQUOTED plain scalar containing ': ' is a YAML mapping ambiguity: this lenient
+    parser reads it as a string, but real hosts' strict YAML parsers reject the file —
+    Copilot CLI 1.0.63 silently DROPPED the orchestrator agent over exactly this
+    (host-integration run 1, 2026-07-06). Fail loudly here instead."""
+    if value and value[0] not in "'\"[{" and ": " in value:
+        raise ParseError(
+            f"{path}: frontmatter value for {key!r} contains an unquoted ': ' — strict YAML "
+            f"parsers (real hosts) will misparse or drop this file; quote the value"
+        )
+
+
 def _parse_map(lines: list[str], start: int, indent: int, path: Path) -> tuple[dict, int]:
     result: dict[str, object] = {}
     i = start
@@ -153,6 +165,7 @@ def _parse_map(lines: list[str], start: int, indent: int, path: Path) -> tuple[d
             raise ParseError(f"{path}: bad line {line!r}")
         value = raw.strip()
         if value:
+            _reject_yaml_ambiguous_scalar(key.strip(), value, path)
             result[key.strip().strip("'\"")] = _parse_scalar(value)
             i += 1
         else:

@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: The single entry point: triages each request and routes it — answers questions read-only and cited, or runs the gated build pipeline for code changes.
+description: "The single entry point: triages each request and routes it — answers questions read-only and cited, or runs the gated build pipeline for code changes."
 tools: ['context-broker/kb_search', 'context-broker/get_task_context', 'read', 'search', 'agent']
 agents: ['implementation_agent', 'test_layer_agent', 'code_reviewer_agent', 'delivery_planner_agent', 'pr_planner_agent', 'adr_writer_agent', 'infra_code_agent']
 handoffs:

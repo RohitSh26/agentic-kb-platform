@@ -1,5 +1,5 @@
 ---
-description: The single entry point: triages each request and routes it — answers questions read-only and cited, or runs the gated build pipeline for code changes.
+description: "The single entry point: triages each request and routes it — answers questions read-only and cited, or runs the gated build pipeline for code changes."
 mode: primary
 tools:
   context-broker_kb_search: true
