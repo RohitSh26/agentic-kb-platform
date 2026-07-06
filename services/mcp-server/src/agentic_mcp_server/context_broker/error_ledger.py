@@ -10,6 +10,10 @@ right after calling ``write_error_event`` here. The uniform tool wrapper in
 ``mcp/tool_handlers.py`` catches it and re-raises without writing a second
 row — the single idiom that keeps the ledger at exactly one row per call
 without every module needing to know about the wrapper.
+
+``write_error_event`` also backs ``mcp/schema_rejection_middleware.py``, which
+ledgers calls fastmcp itself rejects at the schema boundary — before any
+handler (and so before ``_ledgered``) ever runs.
 """
 
 import uuid

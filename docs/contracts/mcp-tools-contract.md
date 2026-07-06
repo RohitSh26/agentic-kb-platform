@@ -395,24 +395,38 @@ provenance is required; `kb_search` is the preferred first stop.
   token-similarity measure. Retrieval relevance goes through the `SearchClient`
   interface (Postgres keyword implementation locally; the Azure AI Search
   implementation stays behind the same interface).
-- **The ledger is complete by construction, including crashes.** Every call
-  writes exactly one `retrieval_event` row — `approved`, `denied`, or `error`
-  (see `postgres-knowledge-registry.md`) — even when the call fails
-  unexpectedly mid-flight. A uniform tool wrapper (`mcp/tool_handlers.py`)
-  ledgers any exception a handler has not already ledgered itself (a
-  `LedgeredToolError` marks the ones that have, so no call is ever double-
-  ledgered), and refunds any budget charge made before the crash (e.g.
-  `kb_search`'s call/token counters, restored under the same window lock the
-  charge used; the pack-scoped tools — `context.open_evidence`,
-  `context.expand`, `context.request_more` — refund the pack's run/agent
-  token counters, and `request_more` also its dedupe-history entry and new
-  cards, all restored under the same `EvidencePackState.lock` acquisition as
-  the charge via `EvidencePackState.snapshot`/`restore`). A failing platform
-  never silently vanishes from the ledger or eats an agent's budget, and the
-  exception always still reaches the caller. If the error-ledger write itself
-  fails (the database is fully down), the original exception still surfaces —
-  never masked by the ledger failure — and the ledger-write failure is logged
-  with structured fields.
+- **The ledger is complete by construction, including crashes and
+  schema-rejected calls.** Every call writes exactly one `retrieval_event` row
+  — `approved`, `denied`, or `error` (see `postgres-knowledge-registry.md`) —
+  even when the call fails unexpectedly mid-flight, or never reaches a handler
+  at all. A uniform tool wrapper (`mcp/tool_handlers.py`) ledgers any exception
+  a handler has not already ledgered itself (a `LedgeredToolError` marks the
+  ones that have, so no call is ever double-ledgered), and refunds any budget
+  charge made before the crash (e.g. `kb_search`'s call/token counters,
+  restored under the same window lock the charge used; the pack-scoped tools —
+  `context.open_evidence`, `context.expand`, `context.request_more` — refund
+  the pack's run/agent token counters, and `request_more` also its
+  dedupe-history entry and new cards, all restored under the same
+  `EvidencePackState.lock` acquisition as the charge via
+  `EvidencePackState.snapshot`/`restore`). A failing platform never silently
+  vanishes from the ledger or eats an agent's budget, and the exception always
+  still reaches the caller. If the error-ledger write itself fails (the
+  database is fully down), the original exception still surfaces — never
+  masked by the ledger failure — and the ledger-write failure is logged with
+  structured fields.
+  A call whose arguments fail the tool's request schema is a distinct case:
+  fastmcp validates arguments before invoking the registered callable, so the
+  rejection happens BEFORE `mcp/tool_handlers.py` ever runs and the uniform
+  wrapper above cannot see it. `SchemaRejectionLedgerMiddleware`
+  (`mcp/schema_rejection_middleware.py`) is the MCP-boundary counterpart: it
+  wraps the whole call (validation included), writes one `error` row on a
+  `pydantic.ValidationError` (`details` carries the exception type and a terse
+  field/type/message validation summary — NEVER the raw argument values a host
+  sent), and re-raises the same validation error unchanged so the host still
+  gets the schema feedback its retry loop depends on. No handler ever ran, so
+  no budget was ever charged — there is nothing to refund. Same fail-soft
+  discipline: a ledger-write failure here is logged and swallowed, never
+  masking the validation error.
 - Results are filtered by the requester's authorization before returning
   (PR-13: `team_acl_v1`). The requester is the authenticated session subject
   plus its team set, taken from the bearer token's `groups`/`roles` claims —

@@ -126,6 +126,7 @@ never blocks on observability. Shape is per `tool_name`:
 | `context.verify_answer` | `{answer_id, claims:[{claim_id, checks:{...}, ok}], overall}` |
 | `governance.checkpoint` | `{from_agent, to_agent, plan_summary, decision, edits}` |
 | any tool, on an unexpected `error` row written by the uniform tool wrapper | `{exception_type}` |
+| any tool, on a schema-rejected call (`SchemaRejectionLedgerMiddleware`) | `{exception_type, validation_errors:[{loc,type,msg},...]}` — `loc`/`type`/`msg` only, NEVER pydantic's own `input` (the raw argument value a host sent). `run_id` is the `NO_RUN_SENTINEL`; no budget window is charged (the call never reached a handler). |
 
 The `governance.checkpoint` event is written by `record_checkpoint()` in the
 mcp-server; `tool_name` is `"governance.checkpoint"` and `status` is the gate

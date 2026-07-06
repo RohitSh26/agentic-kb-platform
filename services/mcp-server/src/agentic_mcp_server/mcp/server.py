@@ -30,6 +30,7 @@ from agentic_mcp_server.infrastructure.postgres.session import (
 )
 from agentic_mcp_server.infrastructure.search.search_client import SearchClient
 from agentic_mcp_server.infrastructure.tracing.trace_sink import NullTraceSink, TraceSink
+from agentic_mcp_server.mcp.schema_rejection_middleware import SchemaRejectionLedgerMiddleware
 from agentic_mcp_server.mcp.tool_handlers import make_handlers
 from agentic_mcp_server.mcp.tool_registry import TOOL_SCHEMAS
 from agentic_mcp_server.structured_logging import configure_logging
@@ -58,7 +59,14 @@ def build_server(
         entailment_client=entailment_client,
         trace_sink=trace_sink or NullTraceSink(),
     )
-    server = FastMCP(name=SERVER_NAME, auth=auth, middleware=[TelemetryMiddleware()])
+    server = FastMCP(
+        name=SERVER_NAME,
+        auth=auth,
+        # SchemaRejectionLedgerMiddleware ledgers calls fastmcp itself rejects at
+        # the schema boundary (before any handler runs) — the one call class
+        # _ledgered (mcp/tool_handlers.py) structurally cannot see.
+        middleware=[TelemetryMiddleware(), SchemaRejectionLedgerMiddleware(deps)],
+    )
 
     handlers = make_handlers(deps)
     # Expose a WIRE name that satisfies every MCP client: OpenAI-function-calling clients

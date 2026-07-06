@@ -5,10 +5,15 @@ Identity is resolved per call from the authenticated session (never from
 request fields), and fastmcp validates I/O against the versioned schemas via
 the annotations set here.
 
-Every handler is also wrapped by ``_ledgered`` below: the one place in the
-broker responsible for the ledger's completeness guarantee (an unexpected
-exception must still produce exactly one ``retrieval_event`` row and must
-still reach the MCP client, never be swallowed here).
+Every handler is also wrapped by ``_ledgered`` below: the place responsible for
+the ledger's completeness guarantee for anything that reaches a handler (an
+unexpected exception must still produce exactly one ``retrieval_event`` row and
+must still reach the MCP client, never be swallowed here). A call whose
+arguments fail fastmcp's own schema validation never reaches a handler at all
+(fastmcp validates before invoking the registered callable); that call class is
+ledgered instead by ``SchemaRejectionLedgerMiddleware``
+(``mcp/schema_rejection_middleware.py``), the MCP-boundary counterpart to this
+wrapper.
 """
 
 import contextlib
