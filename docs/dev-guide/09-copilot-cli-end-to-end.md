@@ -202,6 +202,19 @@ multi-agent runner (`scripts/agent_runner.py`, [00](00-getting-started.md) Part 
 the **governed `context.*` lanes** — evidence packs, human-approval gates, verification receipts —
 for when citation-grade provenance is the goal.
 
+## Known behaviors when opening THIS repo (verified on Copilot CLI 1.0.63, 2026-07-06)
+
+Two artifacts of this repository being *built with* Claude Code leak into a Copilot CLI session
+opened here — neither exists in your own team repos, so pilot developers won't see them:
+
+- **`.mcp.json` is merged into the workspace MCP config.** That file configures Claude Code's
+  *build-plane* tooling for developing this platform, and Copilot CLI 1.0.63 reads it as workspace
+  MCP servers — and ignores `"disabled": true` entries. Don't enable those servers in a product
+  session; the broker config in §3 is the product surface.
+- **`.claude/agents/*` appear as invocable agents.** Those are Claude Code *build* subagents
+  (reviewers, migration writers) for working on this platform's code — not the product roster,
+  which lives in `.copilot/agents/`.
+
 ## Troubleshooting
 
 | Symptom | Fix |

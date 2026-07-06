@@ -44,3 +44,6 @@
 - One builder per registry (advisory lock aborts a second, loudly).
 - Cloud/multi-user (production connectors, team auth, scheduling) is the layer-2 track — nothing
   in the local pilot is throwaway; the same schema, tools, and configs move as-is.
+- If a pilot session opens THIS platform repo (rather than your own) in Copilot CLI, two
+  build-tooling artifacts leak into the session — see dev-guide 09 "Known behaviors" for why
+  they're harmless and absent from your own repos.
