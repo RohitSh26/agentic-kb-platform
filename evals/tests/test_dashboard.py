@@ -124,13 +124,16 @@ async def _seed(engine: AsyncEngine) -> None:
                     "kb_version": KB_VERSION,
                 },
             )
-        # builds: an active one (published an hour ago) and a newer failed publish
+        # builds: an active one (published an hour ago) and a newer failed publish.
+        # The active build also seeds the ledger-mining counters (PR-43): its
+        # started_at defaults to now(), landing in TODAY's v_retrieval_health row.
         await session.execute(
             text(
                 "INSERT INTO kb_build_run (kb_version, build_seq, status, completed_at,"
-                " sources_seen, sources_changed, llm_calls, embedding_calls)"
+                " sources_seen, sources_changed, llm_calls, embedding_calls,"
+                " ledger_mining_misses_seen, ledger_mining_mined, ledger_mining_unresolved)"
                 " VALUES ('kb-dash-active', 9101, 'active', now() - interval '1 hour',"
-                " 10, 5, 10, 10)"
+                " 10, 5, 10, 10, 6, 4, 1)"
             )
         )
         await session.execute(
@@ -178,6 +181,11 @@ async def test_retrieval_health_rates(seeded_data: DashboardData) -> None:
     assert today["kb_search_answered"] == 3
     assert today["kb_search_zero_thin"] == 2
     assert today["kb_search_zero_thin_rate"] == pytest.approx(2 / 3)
+    # mined-vs-unresolved split (PR-43): rolled up from kb-dash-active's
+    # ledger_mining_mined=4 / ledger_mining_unresolved=1 (started_at = today)
+    assert today["ledger_mined"] == 4
+    assert today["ledger_unresolved"] == 1
+    assert today["ledger_mined_rate"] == pytest.approx(4 / 5)
 
 
 @requires_db
@@ -237,6 +245,7 @@ async def test_markdown_and_html_show_the_operator_answers(seeded_data: Dashboar
     assert "27,300" in markdown  # tokens this week
     assert "Budget breaches (runs over / agents over): **1 / 1**" in markdown
     assert "run-big" in markdown and "run-c" in markdown
+    assert "Ledger-mined vs unresolved" in markdown and "4 / 1" in markdown
 
     html = render_html(seeded_data)
     assert html.startswith("<!doctype html>")

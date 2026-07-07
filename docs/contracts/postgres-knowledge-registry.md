@@ -37,11 +37,11 @@ and the migrations. Summary:
 | Table | Purpose | Written by |
 |---|---|---|
 | `source_item` | Source identity (`source_type`, `source_uri`, `source_version`, `content_hash`) + normalized text + `acl_teams`. Drives incremental skip. | kb-builder |
-| `knowledge_artifact` | Chunks, summaries, concepts, source-backed facts, code artifacts (with spans), and `alias_reference` rows (PR-38 — deterministic alias index; see `alias-reference.md`). `knowledge_kind` ∈ interpreted / source_backed. Carries `acl_teams`, the validity interval (`valid_from_seq`, `invalidated_at_seq`), and the rename link `prior_identity_id`. | kb-builder |
+| `knowledge_artifact` | Chunks, summaries, concepts, source-backed facts, code artifacts (with spans), and `alias_reference` rows — deterministic build-mined (PR-38) or ledger-mined (PR-43, `provenance: "ledger_mined"` in `body_text`); see `alias-reference.md`. `knowledge_kind` ∈ interpreted / source_backed. Carries `acl_teams`, the validity interval (`valid_from_seq`, `invalidated_at_seq`), and the rename link `prior_identity_id`. | kb-builder |
 | `knowledge_edge` | Graph edges: `edge_type`, `confidence`, `source` (graphify/linker), `kb_version`, and the validity interval (`valid_from_seq`, `invalidated_at_seq`). The V1 graph store — no graph DB. | kb-builder |
 | `generation_cache` / `generation_cache_artifact` | Cache key ⇒ generated outputs ⇒ produced artifacts. | kb-builder |
 | `embedding_cache` | Embedding call gate, keyed `(artifact_id, text_hash, embedding_model)`. The vector itself is stored as a float array (`ARRAY(double precision)` — no pgvector in V1), so the Search index rebuilds without re-embedding. | kb-builder |
-| `kb_build_run` | One row per nightly build: `kb_version`, `build_seq` (monotonic BIGINT, UNIQUE — the interval-membership cutoff), `status` (`running`/`completed`/`failed`/`validation_failed`/`active`/`superseded`), counters, timestamps. | kb-builder |
+| `kb_build_run` | One row per nightly build: `kb_version`, `build_seq` (monotonic BIGINT, UNIQUE — the interval-membership cutoff), `status` (`running`/`completed`/`failed`/`validation_failed`/`active`/`superseded`), counters, timestamps. Migration `0022` (ADR-0034, PR-43) adds `ledger_mining_misses_seen` / `ledger_mining_mined` / `ledger_mining_unresolved` (`INTEGER NOT NULL DEFAULT 0`) — the ledger-mining build step's own per-build counters, rolled up by day into `v_retrieval_health` (`observability-dashboard.md`). | kb-builder |
 | `retrieval_event` | Ledger: one row per MCP retrieval call — `run_id`, `context_pack_id`, `agent_name`, `tool_name`, `status`, `query_text`/`normalized_query`, `retrieval_profile`, `kb_version`, `source_filters`, `returned_artifact_ids`, `reused_evidence_ids`, `new_evidence_ids`, `cache_hit`, `semantic_reuse`, `tokens_returned`, `latency_ms`, `created_at`, `details` (nullable JSONB — per-tool observability payload; see below). | **mcp-server** |
 | `relationship_candidate` | Phase-3B audit/measurement row: a cross-domain artifact pair the cheap generator flagged for the LLM judge (`from_artifact_id`, `to_artifact_id`, `signals` JSONB, `candidate_recall_bucket`, `kb_version` label). Migration `0013`. Never served through MCP — no membership columns. | kb-builder |
 | `relationship_judgment_cache` | Cache gate for the phase-3B LLM judge, keyed `(hash_a, hash_b, relation_schema_version, prompt_version, model_version)`; stores the verdict (`relation_type`, `trust_bucket`, `supporting_quote`, `reason`). Migration `0014`. Cache-only — never served. | kb-builder |
@@ -50,7 +50,7 @@ and the migrations. Summary:
 | `embedding_output` | Crash-durable embedding-vector cache (ADR-0027), keyed `(text_hash, embedding_model)` only — the vector is a pure function of text + model. Migration `0018`. | kb-builder |
 | `trace_span` | Per-step tracing (ADR-0032): `span_id`, `trace_id`, `parent_span_id`, `name`, `service`, `started_at`/`ended_at`, `status` (`ok`/`error`), `attributes` (nullable JSONB, aggregate-only), `created_at`. Migration `0021_trace_span`. Full shape and the `TraceSink` port: `tracing.md`. | **mcp-server** |
 
-## Views (ADR-0014 dashboard, migration `0020`)
+## Views (ADR-0014 dashboard, migration `0020`; ledger-mining split, migration `0023`)
 
 Four read-only, aggregate-only views over `retrieval_event` and `kb_build_run` — pure
 projections (no tables, no columns, no data); downgrade drops them and loses nothing
@@ -59,7 +59,7 @@ projections (no tables, no columns, no data); downgrade drops them and loses not
 
 | View | Purpose |
 |---|---|
-| `v_retrieval_health` | Daily approved/reused/denied/needs_human_approval/error counts, error rate, evidence-reuse rate, semantic-cache-hit rate, cache-hit rate, and the `kb_search` zero/thin-result rate (the ADR-0025 KB-gap proxy). |
+| `v_retrieval_health` | Daily approved/reused/denied/needs_human_approval/error counts, error rate, evidence-reuse rate, semantic-cache-hit rate, cache-hit rate, and the `kb_search` zero/thin-result rate (the ADR-0025 KB-gap proxy). Migration `0023` adds `ledger_mined` / `ledger_unresolved` / `ledger_mined_rate` — a day roll-up of `kb_build_run`'s new ledger-mining counters (migration `0022`), still zero new `retrieval_event` columns and no content-column reference (`observability-dashboard.md` "Mined-vs-unresolved split"). |
 | `v_token_economics` | Daily runs, distinct agents, events, tokens charged, tokens per run, retrieval calls per agent. |
 | `v_build_health` | Per-build duration, sources seen/changed, artifacts created/updated/deleted, LLM/embedding call counts (and per-changed-source ratios), extractor failures, failed gate, active-build age. |
 | `v_budget_adherence` | Per-run/per-agent token and follow-up-request usage against the `.claude/rules/token-budgets.md` literals, flagging over-budget runs/agents. |

@@ -42,7 +42,8 @@ BREACH_LIMIT = 50
 SQL_RETRIEVAL_HEALTH = """
 SELECT day, events, approved, reused, denied, needs_human_approval, errors,
        error_rate, evidence_reuse_rate, semantic_cache_hit_rate, cache_hit_rate,
-       kb_search_answered, kb_search_zero_thin, kb_search_zero_thin_rate
+       kb_search_answered, kb_search_zero_thin, kb_search_zero_thin_rate,
+       ledger_mined, ledger_unresolved, ledger_mined_rate
 FROM v_retrieval_health
 ORDER BY day DESC
 LIMIT :days
@@ -227,6 +228,9 @@ def _build_tiles(data: DashboardData) -> list[Tile]:
     reuse_rate = _rate(_sum(recent, "reused"), reuse_eligible)
     gap_rate = _rate(_sum(recent, "kb_search_zero_thin"), _sum(recent, "kb_search_answered"))
     week_tokens = _sum(data.token_economics[:SUMMARY_DAYS], "tokens_charged")
+    ledger_mined = _sum(recent, "ledger_mined")
+    ledger_unresolved = _sum(recent, "ledger_unresolved")
+    ledger_rate = _rate(ledger_mined, ledger_mined + ledger_unresolved)
 
     tiles = [
         Tile(
@@ -250,6 +254,11 @@ def _build_tiles(data: DashboardData) -> list[Tile]:
             status=_rate_status(gap_rate, warn=0.2, bad=0.5),
         ),
         Tile(label=f"Tokens charged ({SUMMARY_DAYS}d)", value=_fmt_num(week_tokens), status="ok"),
+        Tile(
+            label=f"Ledger-mined vs unresolved ({SUMMARY_DAYS}d builds)",
+            value=f"{ledger_mined} / {ledger_unresolved} ({_fmt_rate(ledger_rate)} mined)",
+            status="ok" if ledger_unresolved == 0 else "warn",
+        ),
     ]
 
     runs_over = int(data.budget_totals["runs_over_budget"] or 0)
@@ -316,6 +325,7 @@ def _section(title: str, columns: list[str], rows: list[Row], empty_note: str) -
         "semantic_cache_hit_rate",
         "cache_hit_rate",
         "kb_search_zero_thin_rate",
+        "ledger_mined_rate",
     }
 
     def cell(row: Row, col: str) -> str:
@@ -345,6 +355,9 @@ def _sections(data: DashboardData) -> list[Section]:
                 "kb_search_answered",
                 "kb_search_zero_thin",
                 "kb_search_zero_thin_rate",
+                "ledger_mined",
+                "ledger_unresolved",
+                "ledger_mined_rate",
             ],
             data.retrieval_health,
             "no retrieval events recorded",

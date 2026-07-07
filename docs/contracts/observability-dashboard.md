@@ -37,6 +37,37 @@ definition use a distinct name (`context_tokens_per_run`, not `context_tokens_pe
 | `kb_search_answered` | `kb_search` rows with status `approved` |
 | `kb_search_zero_thin` | answered `kb_search` rows with ≤ 1 returned artifact id |
 | `kb_search_zero_thin_rate` | `kb_search_zero_thin / kb_search_answered`; NULL when none — the **KB-gap proxy** ratified in ADR-0014 (host-side file fallbacks are invisible to the server; an answered-but-empty/thin `kb_search` is what the ledger can prove). Budget `denied` rows are not gaps and are excluded. |
+| `ledger_mined` / `ledger_unresolved` | Migration `0023` (ADR-0034, PR-43): that day's `kb_build_run` rows' summed `ledger_mining_mined` / `ledger_mining_unresolved` counters (0 on a day with no build). **Not** a per-event join against `kb_search_zero_thin` — see below. |
+| `ledger_mined_rate` | `ledger_mined / (ledger_mined + ledger_unresolved)`; NULL when neither is > 0 |
+
+### Mined-vs-unresolved split — why it is a `kb_build_run` roll-up, not a per-event flag
+
+The ledger-mining build step (`alias/ledger_mining.py`, `docs/contracts/alias-reference.md` "Ledger-
+mined aliases") reads `retrieval_event` misses and classifies each DISTINCT phrase as `mined`
+(resolved to a target — a new/refreshed alias, or already covered by an existing one) or
+`unresolved` (no match). Two hard constraints shape how that split reaches the dashboard:
+
+1. kb-builder **never writes `retrieval_event`** — that table's runtime-write ownership is
+   mcp-server's alone (`postgres-knowledge-registry.md`); a build-time actor inserting rows there
+   would violate the boundary this contract and that one both pin.
+2. The aggregate-only ACL posture (above) forbids any view SQL from touching
+   `retrieval_event.query_text` / `normalized_query` — which is the only column that could join an
+   individual historical miss row to the alias phrase that later resolved it. There is therefore no
+   privacy-safe way to retroactively flag EXISTING `kb_search` rows as "now mined".
+
+Given both, the split is instead persisted as three counters kb-builder ALREADY has write access to
+— `kb_build_run.ledger_mining_misses_seen` / `ledger_mining_mined` / `ledger_mining_unresolved`
+(migration `0022`, plain `INTEGER NOT NULL DEFAULT 0` columns, same idiom as the existing
+`extractor_failures` / `llm_calls` build counters) — populated once per build from the SAME
+`LedgerMiningResult` the structured completion log reports. `v_retrieval_health` (migration `0023`)
+LEFT JOINs a `date_trunc('day', kb_build_run.started_at)` roll-up of those three counters onto its
+existing per-day `retrieval_event` aggregate, on `day`. This reads only `retrieval_event` and
+`kb_build_run` (the two tables this whole contract is pinned to), never `knowledge_artifact` /
+`body_text` / `query_text` / `normalized_query`. The trade-off: the split answers "how much did
+LAST NIGHT'S build resolve" (build-grain, correct and exact), not "which of TODAY's individual miss
+events are now fixed" (per-event, would require the privacy-unsafe join) — the existing
+`kb_search_zero_thin` / `kb_search_zero_thin_rate` columns remain the one honest per-event gap
+signal; `ledger_mined` / `ledger_unresolved` are the build's own account of what it did about it.
 
 ## `v_token_economics` — one row per day over `retrieval_event`
 
@@ -58,6 +89,11 @@ definition use a distinct name (`context_tokens_per_run`, not `context_tokens_pe
 cache-efficiency signal), `extractor_failures`, `failed_gate`, `gate_measured_value`,
 `error_summary`, `is_active`, and `active_kb_age_seconds` (`now() - completed_at` on the single
 `status='active'` row, NULL elsewhere — the pinned `active_kb_age`).
+
+Out of scope for this view (PR-43): `kb_build_run.ledger_mining_misses_seen` /
+`ledger_mining_mined` / `ledger_mining_unresolved` (migration `0022`) are NOT projected here — only
+their day roll-up in `v_retrieval_health` (below). Per-build values remain queryable directly on
+`kb_build_run` or from that build's `event=ledger_mining_completed` structured log line.
 
 ## `v_budget_adherence` — one row per (`run_id`, `agent_name`)
 

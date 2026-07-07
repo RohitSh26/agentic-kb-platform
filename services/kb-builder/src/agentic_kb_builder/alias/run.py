@@ -62,6 +62,15 @@ ALIAS_EDGE_TRUST_CLASS = "EXTRACTED"
 MAX_EDGE_TARGETS = 20
 # Deterministic preference when a target path resolves to several live artifacts.
 _TARGET_TYPE_PREFERENCE = {"code_file": 0, "summary": 1}
+# Provenance marker (PR-43, ADR-0034, docs/contracts/alias-reference.md "Ledger-mined
+# aliases") for rows owned exclusively by the SEPARATE ledger-mining pass
+# (alias/ledger_mining.py, wired in immediately after this one). This module's own
+# body-shape contract (ALIAS_BODY_SCHEMA) already covers the ledger-mined row shape,
+# so the constant lives here rather than creating a reverse dependency from this
+# module onto ledger_mining.py. Referenced below so the invalidation sweep never
+# reconciles a row it does not own — the ledger-mining pass has its own, independent
+# upsert/invalidate lifecycle over the SAME retrieval_event window each build.
+LEDGER_MINED_PROVENANCE = "ledger_mined"
 
 
 @dataclass(frozen=True)
@@ -544,6 +553,12 @@ async def _reconcile_artifacts(
     for title, row in sorted(prior_rows.items()):
         if title in desired_titles or row.invalidated_at_seq is not None:
             continue
+        body = _parse_body(row)
+        if body is not None and body.get("provenance") == LEDGER_MINED_PROVENANCE:
+            # Owned + reconciled exclusively by the ledger-mining pass (PR-43): this
+            # pass never desires a ledger-mined title, so without this skip it would
+            # invalidate every ledger-mined row on every single build.
+            continue
         row.invalidated_at_seq = valid_from_seq
         invalidated += 1
         logger.info(
@@ -690,8 +705,10 @@ async def load_alias_entries(session: AsyncSession) -> list[AliasEntry]:
 
 __all__ = [
     "ALIAS_ARTIFACT_TYPE",
+    "ALIAS_BODY_SCHEMA",
     "ALIAS_EDGE_SOURCE",
     "ALIAS_EDGE_TYPE",
+    "LEDGER_MINED_PROVENANCE",
     "MAX_EDGE_TARGETS",
     "AliasMinerResult",
     "load_alias_entries",

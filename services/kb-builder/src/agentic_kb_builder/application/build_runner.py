@@ -19,6 +19,10 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agentic_kb_builder.alias.ledger_mining import (
+    DEFAULT_WINDOW_DAYS as LEDGER_MINING_DEFAULT_WINDOW_DAYS,
+)
+from agentic_kb_builder.alias.ledger_mining import run_ledger_alias_miner
 from agentic_kb_builder.alias.run import run_alias_miner
 from agentic_kb_builder.application.cache_gates import (
     EmbeddingCacheGate,
@@ -129,6 +133,13 @@ class _Counters:
     # publish gate (docs/contracts/publish-gates.md). A failed file is skipped,
     # not fatal — one unparsable file must not abort an otherwise-good build.
     extractor_failures: int = 0
+    # Ledger-mining counters (PR-43, ADR-0034): populated from this build's
+    # LedgerMiningResult, persisted on kb_build_run, and rolled up by day into
+    # v_retrieval_health's ledger_mined / ledger_unresolved split (migration
+    # 0022/0023, docs/contracts/observability-dashboard.md).
+    ledger_mining_misses_seen: int = 0
+    ledger_mining_mined: int = 0
+    ledger_mining_unresolved: int = 0
 
 
 class BuildRunner:
@@ -143,9 +154,13 @@ class BuildRunner:
         similarity: SimilarityProvider | None = None,
         judge: RelationshipJudge | None = None,
         durable_cache: DurableOutputCache | None = None,
+        ledger_mining_window_days: int = LEDGER_MINING_DEFAULT_WINDOW_DAYS,
     ) -> None:
         self._session = session
         self._kb_version = kb_version
+        # Trailing window for the ledger-mining build step (ADR-0034: "window
+        # configurable (default 14 days)").
+        self._ledger_mining_window_days = ledger_mining_window_days
         # Assigned once at run start from the kb_build_seq SEQUENCE (set in run()).
         self._build_seq: int = 0
         # This run's kb_build_run.started_at (DATABASE clock), assigned once in
@@ -195,7 +210,7 @@ class BuildRunner:
             # re-verify the world was not reset/swapped underneath us BEFORE running
             # the destructive finalize (deletion sweep, linker reconcile).
             await self._assert_run_row_alive(build_id)
-            await self._finalize_graph(seen_source_ids, changed_source_ids)
+            await self._finalize_graph(seen_source_ids, changed_source_ids, counters)
             await self._reconcile_index(build_id, counters)
             await self._finish_run(build_id, counters, status="completed")
             await self._session.commit()
@@ -389,7 +404,10 @@ class BuildRunner:
         return seen_source_ids, changed_source_ids
 
     async def _finalize_graph(
-        self, seen_source_ids: set[uuid.UUID], changed_source_ids: set[uuid.UUID]
+        self,
+        seen_source_ids: set[uuid.UUID],
+        changed_source_ids: set[uuid.UUID],
+        counters: _Counters,
     ) -> None:
         """Post-source graph work: deterministic linker, cross-domain candidate
         generation + judge, then the identity invalidation pass. Runs AFTER all
@@ -436,6 +454,25 @@ class BuildRunner:
         await run_alias_miner(
             self._session, kb_version=self._kb_version, valid_from_seq=self._build_seq
         )
+        # Ledger-mined corrections (PR-43, ADR-0034) run immediately AFTER the
+        # deterministic alias miner: it reads recent kb_search MISSES from the
+        # SAME registry (retrieval_event, read-only) and mines them into
+        # alias_reference rows with provenance='ledger_mined', so a phrase a
+        # developer typed and missed resolves on the next build. Deterministic,
+        # zero-LLM, no retrieval_event writes (mcp-server owns that table's
+        # writes) — see docs/contracts/alias-reference.md "Ledger-mined aliases".
+        ledger_result = await run_ledger_alias_miner(
+            self._session,
+            kb_version=self._kb_version,
+            valid_from_seq=self._build_seq,
+            window_days=self._ledger_mining_window_days,
+        )
+        counters.ledger_mining_misses_seen = ledger_result.misses_seen
+        # ledger_result.mined already counts every RESOLVED phrase, including
+        # ones already covered by another provenance (already_aliased) — do not
+        # add already_aliased again (that would double-count them).
+        counters.ledger_mining_mined = ledger_result.mined
+        counters.ledger_mining_unresolved = ledger_result.unresolved
         # Graph centrality (ADR-0028) runs LAST in finalize — AFTER invalidation, so it ranks the
         # served, post-sweep live set — and before index reconciliation + activation. Pure graph
         # math (no model call), written in this same pre-activation transaction.
@@ -489,6 +526,9 @@ class BuildRunner:
                 embedding_calls=counters.embedding_calls,
                 search_docs_upserted=counters.search_docs_upserted,
                 extractor_failures=counters.extractor_failures,
+                ledger_mining_misses_seen=counters.ledger_mining_misses_seen,
+                ledger_mining_mined=counters.ledger_mining_mined,
+                ledger_mining_unresolved=counters.ledger_mining_unresolved,
             )
             .returning(KbBuildRun.build_id)
         )

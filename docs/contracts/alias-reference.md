@@ -48,6 +48,109 @@ sorted changed-file list in `body_text`; `parse_changed_files` recovers it deter
 }
 ```
 
+- `provenance` (PR-43, ADR-0034): optional field. **Absent ⇒ `"build_mined"`** — every row this
+  document has described so far (mined at build time from commit subjects / doc filename slugs,
+  §"Mining rules" below) is written WITHOUT this field, and stays that way (PR-43 does not rewrite
+  existing rows). A row written by the ledger-mining pass (`alias/ledger_mining.py`) instead carries
+  `"provenance": "ledger_mined"` explicitly. The two provenances share the SAME artifact/edge shape,
+  reconcile independently (own lifecycle, §"Ledger-mined aliases" below), and never overwrite each
+  other's row for the same phrase (a title collision is resolved in favour of whichever provenance
+  already owns it — see below).
+
+## Ledger-mined aliases (PR-43, ADR-0034)
+
+A second, independent build step — `alias/ledger_mining.py`'s `run_ledger_alias_miner`, wired into
+`build_runner.py` immediately AFTER the deterministic alias miner (`run_alias_miner`) and before
+graph centrality — mines alias phrases from the KB's **own retrieval misses** instead of commit/doc
+content, closing the loop ADR-0034 describes: a phrase a developer typed and missed resolves on the
+next build.
+
+**Input (read-only).** Recent `retrieval_event` rows where `tool_name = 'kb_search'`,
+`status = 'approved'`, and `coalesce(cardinality(returned_artifact_ids), 0) <= 1` (the SAME
+zero/thin predicate migration `0020_dashboard_views`'s `kb_search_zero_thin` column uses — the two
+must never disagree), within a trailing window (`window_days`, default **14**). Ledger rows are
+never modified — this pass only ever `SELECT`s them. kb-builder never writes `retrieval_event`
+(that table's runtime-write ownership is mcp-server's alone, `postgres-knowledge-registry.md`).
+
+**Untrusted-input handling.** Each row's raw `query_text` is treated as untrusted content: ASCII
+control characters (`\x00`–`\x1f`, `\x7f`) are stripped, the result is length-capped at **80**
+characters, and ONLY THEN normalized with `alias/mining.py`'s `normalize_phrase` — the identical
+normalizer commit/doc mining and `alias/resolve.py` already use. A query is a search string, never
+executed or templated. Misses are grouped by their normalized phrase; `miss_count` = row count,
+`confirmation_count` = number of DISTINCT calendar days (UTC) the phrase appeared, `first_seen` /
+`last_seen` = min/max `created_at` in the group.
+
+**Candidate matching — zero new matching code.** Candidates are every LIVE `knowledge_artifact` row
+(any `artifact_type` except `alias_reference` itself) with a non-null `title`, joined to its
+`source_item.path` (also non-null, source not deleted): each becomes a single-target
+`alias/resolve.py` `AliasEntry(alias=normalize_phrase(title), targets=(path,))`. The miss phrase is
+resolved against this candidate set with the UNMODIFIED `alias/resolve.py` `resolve()` (same
+exact-match-then-Jaccard-fuzzy algorithm, same `MIN_FUZZY_SCORE` floor, §"Resolution" above) — no
+new scoring code. A match's `resolution.targets[0]` is the ONE target path (each candidate is
+single-target by construction, so a winning entry never has more than one). No match ⇒ the phrase
+stays an open gap (dashboard `kb_search_zero_thin`) — nothing is written.
+
+**Title-collision rule.** If the normalized miss phrase is already the `title` of a LIVE
+`alias_reference` row of a DIFFERENT provenance (e.g. a commit/doc already mined the exact same
+phrase), the phrase counts as resolved (`mined`) but this pass writes NOTHING for it — the
+one-row-per-phrase invariant (`alias-reference.md` "Incrementality + idempotency") is never
+violated by a second writer racing a title. `_reconcile_artifacts`'s existing invalidation sweep
+(`alias/run.py`) is taught to skip any prior row whose body carries `provenance: "ledger_mined"` —
+that pass never desires ledger-mined titles, so without this skip it would invalidate every
+ledger-mined row on every build; the exclusion means the ledger-mining pass has EXCLUSIVE,
+independent ownership of the rows it writes (its own reconcile: upsert-if-changed, soft-invalidate
+what it no longer mines — same discipline as PR-38, `docs/contracts/postgres-knowledge-registry.md`
+"idempotent build jobs").
+
+**ACL.** The never-widen intersection over the ONE resolved target path's `source_item.acl_teams`,
+via the existing `domain.acl_intersection.commit_acl_intersection` helper (no bespoke ACL logic).
+
+**Ledger-mined `body_text` shape** (schema stays `alias_reference_v1`; only the provenance/evidence
+values differ from a build-mined row):
+
+```json
+{
+  "schema": "alias_reference_v1",
+  "alias": "the durable cache fix",
+  "variants": ["the-durable-cache-fix", "the_durable_cache_fix"],
+  "confidence_tier": "interpreted",
+  "confirmation_count": 3,
+  "provenance": "ledger_mined",
+  "targets": [
+    { "path": "services/kb-builder/.../durable_output_cache.py",
+      "artifact_id": "uuid", "count": 1 }
+  ],
+  "evidence": [
+    { "first_seen": "2026-06-24T10:03:00+00:00", "last_seen": "2026-07-06T08:41:00+00:00",
+      "miss_count": 5 }
+  ]
+}
+```
+
+`evidence` is a **single-element list** containing the `{first_seen, last_seen, miss_count}` object
+(list-wrapped, not a bare object) — `alias/run.py`'s `_prior_extractions` iterates `body["evidence"]`
+generically for EVERY live `alias_reference` row (any provenance) to rebuild its own watermark map;
+a bare object there would break that iteration (`for entry in {...}` walks dict KEYS, not entries)
+the next time the deterministic alias miner runs. Each entry's `.get("source")` /
+`.get("content_hash")` come back `None` for a ledger-mined entry, which `_prior_extractions` already
+treats as "not a recognized watermark row" and skips — no crash, no false incremental-skip.
+
+**No `aliases` edges (open question, v1).** Unlike build-mined rows, this pass does not write
+`knowledge_edge` rows for its targets — ledger-mined aliases ride the existing keyword search
+surface (`search_text`) only, exactly like a build-mined row before its edge is written. Whether
+ledger-mined aliases should also be graph-traversable (`aliases` edges, so `graph.get_neighbors` can
+route through them) is left open for a follow-up PR; nothing here blocks adding it later (same
+`edge_type = 'aliases'`, no ontology change).
+
+**Structured log:** `event=ledger_mining_completed kb_version=... build_seq=... window_days=...
+misses_seen=... phrases_seen=... mined=... unresolved=... artifacts_inserted=...
+artifacts_refreshed=... artifacts_unchanged=... artifacts_invalidated=...`.
+
+**Privacy note (ADR-0034 Consequences).** A ledger-mined alias's `title` IS the normalized phrase a
+developer typed. It becomes an org-visible, ACL-gated search hit only when it resolves to a target
+whose own ACL admits the requester (never widened beyond that target's visibility) — the alias is
+exactly as visible as the artifact it points to, never more.
+
 - `targets` is ranked: `count` desc (how many contributing sources name the path), then
   non-test paths before test paths, then filename-token overlap with the phrase desc, then path
   asc. Fully deterministic.
