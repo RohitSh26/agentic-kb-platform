@@ -28,6 +28,7 @@ from agentic_mcp_server.context_broker.error_ledger import (
     write_error_event,
 )
 from agentic_mcp_server.context_broker.task_context_nodes import (
+    BlastEntry,
     BlastResolution,
     NodeSpan,
     ScopeResolution,
@@ -86,7 +87,7 @@ def _floor_scope(scope: ScopeResolution, request: GetTaskContextRequest) -> Scop
 def _floor_blast(blast: BlastResolution, request: GetTaskContextRequest) -> BlastResolution:
     floor = request.confidence_floor
 
-    def keep(entries: tuple[BlastRadiusEntity, ...]) -> tuple[BlastRadiusEntity, ...]:
+    def keep(entries: tuple[BlastEntry, ...]) -> tuple[BlastEntry, ...]:
         return tuple(e for e in entries if admits_floor(e.confidence_tier, floor))
 
     return BlastResolution(
@@ -124,18 +125,42 @@ def _build_response(
     calls_used: int,
     tokens: int = 0,
 ) -> GetTaskContextResponse:
+    # Cross-section path dedup (1.12.0, ADR-0033): the canonical path table holds
+    # every blast-surfaced path once, sorted lexicographically; entries carry the
+    # index. Rebuilt on every trim iteration so the table never carries orphans.
+    referenced_paths = sorted(
+        {entry.path for entry in (*blast.callers, *blast.callees, *blast.tests)}
+    )
+    path_index = {path: position for position, path in enumerate(referenced_paths)}
+
+    def to_wire(entries: tuple[BlastEntry, ...]) -> list[BlastRadiusEntity]:
+        return [
+            BlastRadiusEntity(
+                entity_id=entry.entity_id,
+                path_ref=path_index[entry.path],
+                symbol=entry.symbol,
+                edge_type=entry.edge_type,
+                confidence_tier=entry.confidence_tier,
+                caveat=entry.caveat,
+            )
+            for entry in entries
+        ]
+
     return GetTaskContextResponse(
         resolved_scope=ResolvedScope(
             entities=list(scope.entities), ambiguous_candidates=list(scope.ambiguous)
         ),
+        referenced_paths=referenced_paths,
         blast_radius=BlastRadius(
-            callers=list(blast.callers), callees=list(blast.callees), tests=list(blast.tests)
+            callers=to_wire(blast.callers),
+            callees=to_wire(blast.callees),
+            tests=to_wire(blast.tests),
         ),
         conventions=list(conventions),
         similar_prior_changes=list(prior),
         evidence_ids=_collect_evidence(scope, blast, conventions, prior),
-        budget_used=TaskContextBudget(tokens=tokens, calls=calls_used),
         open_questions=open_questions,
+        budget_used=TaskContextBudget(tokens=tokens, calls=calls_used),
     )
 
 
@@ -198,7 +223,7 @@ async def synthesize_node(state: TaskContextState) -> TaskContextUpdate:
     # ALL equal items, trimming the wrong entries).
     prior_kept: list[PriorChange] = list(prior)
     conventions_kept: list[Convention] = list(conventions)
-    blast_lists: dict[str, list[BlastRadiusEntity]] = {
+    blast_lists: dict[str, list[BlastEntry]] = {
         "callees": list(blast.callees),
         "callers": list(blast.callers),
         "tests": list(blast.tests),

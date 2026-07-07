@@ -113,7 +113,10 @@ def _render_tool_response(response: Any) -> tuple[str, set[str]]:
         if entries:
             lines.append(f"BLAST RADIUS ({bucket}):")
             for entry in entries:
-                path = _normalize(entry.path)
+                # 1.12.0 cross-section path dedup: entries carry path_ref into the
+                # response's canonical referenced_paths table; resolve it here so the
+                # model sees full paths and tool_cover stays truthful.
+                path = _normalize(response.referenced_paths[entry.path_ref])
                 surfaced.add(path)
                 caveat = f" CAVEAT: {entry.caveat}" if entry.caveat else ""
                 lines.append(f"- {path} [{entry.edge_type}, {entry.confidence_tier}]{caveat}")

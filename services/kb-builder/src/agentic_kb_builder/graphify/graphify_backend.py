@@ -28,6 +28,7 @@ from agentic_kb_builder.domain import (
     CodeEdgeDraft,
     GraphifyResult,
 )
+from agentic_kb_builder.graphify.code_skeleton import file_skeleton
 from agentic_kb_builder.graphify.keys import file_key, symbol_key
 from agentic_kb_builder.graphify.span_recovery import (
     SymbolSpan,
@@ -104,6 +105,7 @@ def map_extraction(
     *,
     known_paths: frozenset[str] | None = None,
     spans_by_file: Mapping[str, Mapping[int, list[SymbolSpan]]] | None = None,
+    skeletons_by_file: Mapping[str, str] | None = None,
 ) -> GraphifyResult:
     """Normalize a Graphify whole-tree extraction dict into our artifacts + edges.
 
@@ -112,7 +114,11 @@ def map_extraction(
     extracted (Graphify reports `source_file` repo-relative under its cache_root); nodes
     whose source_file is NOT one of them are EXTERNAL references (builtins/stdlib/third-party)
     and are dropped. `spans_by_file` (ADR-0018) is the per-file deterministic ast span map
-    keyed by def-line; a matched symbol gets its EXACT body.
+    keyed by def-line; a matched symbol gets its EXACT body. `skeletons_by_file` (ADR-0033)
+    maps a Python file's path to its deterministic code skeleton, stored as the `code_file`
+    artifact's `search_text` (display/search material — for thinking, never citing; the
+    file's `body_text` stays None, pointer-only). Files absent from the map (non-Python)
+    pass through unchanged (search_text stays None).
     """
     nodes = cast("list[Mapping[str, Any]]", list(data.get("nodes", [])))
     raw_edges = data.get("edges")
@@ -157,7 +163,12 @@ def map_extraction(
             key = file_key(path)
             node_key[nid] = key
             node_is_file[nid] = path
-            artifacts.append(CodeArtifactDraft(key=key, artifact_type="code_file", title=path))
+            skeleton = skeletons_by_file.get(path) if skeletons_by_file is not None else None
+            artifacts.append(
+                CodeArtifactDraft(
+                    key=key, artifact_type="code_file", title=path, search_text=skeleton
+                )
+            )
             continue
         prefix = file_node_id.get(path, "")
         name = nid.removeprefix(prefix + "_") if prefix and nid.startswith(prefix + "_") else nid
@@ -303,6 +314,24 @@ def graphify_tree(files: Sequence[tuple[str, str]]) -> GraphifyResult:
         rel: recover_spans(file_text=text, suffix=Path(rel).suffix or ".py", path=rel)
         for rel, text in files
     }
+    # Skeletonize each Python file (ADR-0033) so its code_file artifact carries a dense,
+    # deterministic display/search surface. Non-Python files pass through unchanged (no
+    # entry). Incremental for free: this pass only runs when a code file's hash changed.
+    skeletons_by_file: dict[str, str] = {}
+    for rel, text in files:
+        result = file_skeleton(text, path=rel)
+        if result is None:
+            continue
+        skeletons_by_file[rel] = result.text
+        logger.info(
+            "event=code_file_skeletonized path=%s method=%s original_tokens=%d "
+            "skeleton_tokens=%d saved_pct=%.0f",
+            rel,
+            result.method,
+            result.original_tokens,
+            result.skeleton_tokens,
+            result.saved_pct,
+        )
     with tempfile.TemporaryDirectory(prefix="kb-graphify-tree-") as tmp:
         root = Path(tmp).resolve()
         paths: list[Path] = []
@@ -315,7 +344,12 @@ def graphify_tree(files: Sequence[tuple[str, str]]) -> GraphifyResult:
         # Graphify reports source_file repo-relative under cache_root (e.g. "httpx/_auth.py"),
         # so the known input paths ARE the keys; nodes outside this set are external refs.
         known = frozenset(rel for rel, _ in files)
-        return map_extraction(data, known_paths=known, spans_by_file=spans_by_file)
+        return map_extraction(
+            data,
+            known_paths=known,
+            spans_by_file=spans_by_file,
+            skeletons_by_file=skeletons_by_file,
+        )
 
 
 __all__ = ["graphify_tree", "map_extraction"]

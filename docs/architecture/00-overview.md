@@ -242,7 +242,7 @@ than interleaving with the first
 ## 8. MCP Context Broker
 
 The broker is the policy/retrieval/dedupe/evidence/budget layer — not a thin wrapper over search.
-It registers **thirteen tools** (`MCP_SCHEMA_VERSION = "1.11.0"`; the versioned request/response
+It registers **thirteen tools** (`MCP_SCHEMA_VERSION = "1.12.0"`; the versioned request/response
 schemas and full semantics live in `docs/contracts/mcp-tools-contract.md`).
 
 The preferred first stops (ADR-0025, ADR-0030):

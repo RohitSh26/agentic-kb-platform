@@ -49,8 +49,11 @@ def test_the_golden_set_loads_and_has_ten_hand_written_cases() -> None:
 
 def _surfaced_paths(response: GetTaskContextResponse) -> set[str]:
     scope = {entity.path for entity in response.resolved_scope.entities}
+    # 1.12.0 cross-section path dedup: blast entries carry path_ref into the
+    # canonical referenced_paths table (mcp-tools-contract.md), so coverage
+    # resolves the reference — tool_cover stays truthful over the deduped shape.
     blast = {
-        entry.path
+        response.referenced_paths[entry.path_ref]
         for entry in (
             *response.blast_radius.callers,
             *response.blast_radius.callees,

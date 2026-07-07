@@ -121,6 +121,75 @@ async def test_search_returns_shaped_hits_and_writes_an_approved_ledger_row(
     assert returned.query_text == "payment validation"
 
 
+async def test_pointer_only_code_file_snippet_serves_the_stored_skeleton(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """ADR-0033 (1.12.0): a code_file row has body_text=NULL (pointer-only), so its
+    snippet falls back to the build-time skeleton stored in search_text — a dense
+    structural preview instead of the empty snippet it served before."""
+    search = FakeSearchClient()
+    skeleton = 'def top():\n    """Entry point doc."""\n    ... # 3 lines elided'
+    async with factory() as session:
+        artifact_id = await insert_artifact(
+            session,
+            title="pkg/service.py",
+            body_text=None,
+            artifact_type="code_file",
+            source_type="github_code",
+            source_uri="github://org/repo/pkg/service.py",
+            search_text=skeleton,
+        )
+    search.seed("service", [SearchHit(artifact_id=artifact_id, score=2.0)])
+    deps = make_broker_deps(factory, search, budget_policy=_policy(4, 3000))
+
+    response = await kb_search(
+        deps, KbSearchRequest(query="service entry point"), REQUESTER, session_key=SESSION
+    )
+
+    (hit,) = response.results
+    assert hit.artifact_type == "code_file"
+    assert "def top():" in hit.snippet
+    assert "lines elided" in hit.snippet
+    # body_text still wins when present (raw span prefix, unchanged behavior)
+    async with factory() as session:
+        raw_id = await _seed_payment_artifact(session, search)
+    raw = await kb_search(
+        deps, KbSearchRequest(query="payment validation"), REQUESTER, session_key=SESSION
+    )
+    assert [h for h in raw.results if "checkout/validators.py" in h.snippet]
+    assert raw_id  # seeded and surfaced through the body_text path
+
+
+async def test_two_identical_requests_are_byte_identical_modulo_the_volatile_tail(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Response-stability discipline (1.12.0, ADR-0033): identical requests against
+    the same served build serialize byte-identically up to the documented volatile
+    tail (budget_remaining + notice, which reflect prior window usage)."""
+    search = FakeSearchClient()
+    async with factory() as session:
+        await _seed_payment_artifact(session, search)
+        await _seed_payment_artifact(session, search, title="Payment refund rules")
+    deps = make_broker_deps(factory, search, budget_policy=_policy(10, 100_000))
+    request = KbSearchRequest(query="payment validation")
+
+    first = await kb_search(deps, request, REQUESTER, session_key=SESSION)
+    second = await kb_search(deps, request, REQUESTER, session_key=SESSION)
+
+    first_json = first.model_dump_json()
+    second_json = second.model_dump_json()
+    # stable identifiers serialize first; the volatile tail starts at budget_remaining
+    assert '"budget_remaining"' in first_json
+    stable_prefix = first_json.split('"budget_remaining"')[0]
+    assert second_json.split('"budget_remaining"')[0] == stable_prefix
+    assert stable_prefix.startswith('{"schema_version":"1.12.0","results":')
+    # only the documented volatile fields may differ between the two calls
+    first_fields = first.model_dump()
+    second_fields = second.model_dump()
+    assert first_fields["results"] == second_fields["results"]
+    assert first_fields["budget_remaining"] != second_fields["budget_remaining"]
+
+
 async def test_call_cap_blocks_the_next_call_even_with_tokens_left(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:

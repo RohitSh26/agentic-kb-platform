@@ -82,6 +82,14 @@ projections (no tables, no columns, no data); downgrade drops them and loses not
   ADR-0028) — a normalized [0,1] graph-centrality (PageRank over `knowledge_edge`) recomputed each
   build. The broker reads it and folds it into its rank key as a transparent multiplicative prior;
   NULL/0 means no graph signal and ranks exactly as before. Derived data, never a citation.
+- `knowledge_artifact.search_text` (`text`, nullable) — the deterministic display/search
+  surface: the ADR-0018 Phase 2 word bag for `code_symbol` rows, and (since PR-42,
+  ADR-0033) the build-time **code skeleton** for Python `code_file` rows (signatures +
+  docstrings, bodies elided; other languages stay NULL). The broker's Postgres keyword
+  scorer ranks on it (weight 1.5) and `kb_search` builds a hit's `snippet` from
+  `body_text` **else** `search_text`, so pointer-only `code_file` hits carry the skeleton.
+  Display/search material only — for *thinking*, never *citing*: `open_evidence` L2 and
+  the verifier's quote guard read `body_text`, which skeletonization never touches.
 - `retrieval_event` full row shape — written by the Context Broker (PR-10).
 - `knowledge_artifact.acl_teams` (`text[]`, NOT NULL, default `'{}'`; added by
   kb-builder migration 0008, also on `source_item`) — the broker's

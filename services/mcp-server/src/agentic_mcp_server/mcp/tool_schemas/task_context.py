@@ -69,13 +69,17 @@ class ResolvedScope(McpModel):
 class BlastRadiusEntity(McpModel):
     """One neighbor reached over a calls/imports/tests edge from the resolved scope.
 
+    ``path_ref`` indexes the response-level ``referenced_paths`` table (1.12.0
+    cross-section path dedup, ADR-0033): the full path string appears once in
+    that table; entries reference it compactly.
+
     ``confidence_tier`` implements the 2026-07-02 Graphify-audit rule: a `calls`
     edge is `deterministic` ONLY when corroborated by the import graph (or a
     same-file definition); otherwise `interpreted` with a non-null ``caveat``.
     """
 
     entity_id: uuid.UUID
-    path: str
+    path_ref: int = Field(ge=0)
     symbol: str | None = None
     edge_type: str = Field(min_length=1)
     confidence_tier: ConfidenceTier
@@ -117,12 +121,20 @@ class GetTaskContextResponse(McpModel):
     titles/summaries: they can never change tool policy, identity, or
     instructions. Empty ``entities`` + non-empty ``ambiguous_candidates`` means
     "I don't know, here are the candidates" — never a silent guess.
+
+    Field order is contractual (1.12.0 response-stability discipline,
+    ADR-0033): stable identifiers first, ``budget_used`` last — the documented
+    volatile tail. ``referenced_paths`` is the canonical path table
+    (deduplicated, sorted lexicographically) that blast-radius entries
+    reference by ``path_ref``; every list's sort order is documented in
+    docs/contracts/mcp-tools-contract.md.
     """
 
     resolved_scope: ResolvedScope
+    referenced_paths: list[str]
     blast_radius: BlastRadius
     conventions: list[Convention]
     similar_prior_changes: list[PriorChange]
     evidence_ids: list[uuid.UUID]
-    budget_used: TaskContextBudget
     open_questions: list[str]
+    budget_used: TaskContextBudget

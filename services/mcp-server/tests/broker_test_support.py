@@ -152,7 +152,8 @@ async def insert_artifact(
     *,
     kb_version: str = KB_VERSION,
     title: str,
-    body_text: str,
+    # None = pointer-only artifact (e.g. code_file): body_text stays NULL.
+    body_text: str | None,
     knowledge_kind: str = "source_backed",
     authority_score: float = 0.8,
     artifact_type: str = "doc_chunk",

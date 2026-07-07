@@ -10,6 +10,7 @@ artifact, and a measured, printed p50 on the seeded KB.
 """
 
 import json
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -111,8 +112,9 @@ async def _seed_alias_scope(
 
 def _paths(response: GetTaskContextResponse) -> set[str]:
     scope = {entity.path for entity in response.resolved_scope.entities}
+    # 1.12.0 dedup: blast entries reference the canonical referenced_paths table.
     blast = {
-        entry.path
+        response.referenced_paths[entry.path_ref]
         for entry in (
             *response.blast_radius.callers,
             *response.blast_radius.callees,
@@ -383,7 +385,7 @@ async def test_collision_1_uncorroborated_calls_edge_is_interpreted_with_caveat(
     response = await get_task_context(deps, HANDLE_HINT, REQUESTER)
 
     (callee,) = [e for e in response.blast_radius.callees if e.edge_type == "calls"]
-    assert callee.path == "services/x/module_a.py"
+    assert response.referenced_paths[callee.path_ref] == "services/x/module_a.py"
     assert callee.confidence_tier == "interpreted"
     assert callee.caveat is not None and "module_a.py" in callee.caveat
 
@@ -631,7 +633,95 @@ async def test_acl_drops_a_restricted_blast_neighbor_before_it_reveals_connectiv
     assert "services/x/module_a.py" not in _paths(outsider)
 
     insider = await get_task_context(deps, HANDLE_HINT, MEMBER)
-    assert [entry.path for entry in insider.blast_radius.callees] == ["services/x/module_a.py"]
+    assert [insider.referenced_paths[entry.path_ref] for entry in insider.blast_radius.callees] == [
+        "services/x/module_a.py"
+    ]
+
+
+# --------------------------------------------- response economy (1.12.0, ADR-0033, PR-42)
+
+
+async def test_cross_section_path_dedup_keeps_every_path_recoverable(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Two callees defined in the SAME neighbor file: the full path string appears
+    exactly once (in referenced_paths, sorted), both entries reference it by
+    path_ref, and every pre-dedup path is still recoverable through the table —
+    with no orphan table entries."""
+    search = FakeSearchClient()
+    async with factory() as session:
+        caller_file, caller_symbols = await insert_code_unit(
+            session,
+            source_uri="github://org/repo/services/x/caller.py",
+            symbols={"handle": "def handle(): return resolve() + helper()"},
+        )
+        neighbor_file, neighbor_symbols = await insert_code_unit(
+            session,
+            source_uri="github://org/repo/services/x/module_a.py",
+            symbols={"resolve": "def resolve(): ...", "helper": "def helper(): ..."},
+        )
+        for target in ("resolve", "helper"):
+            await insert_edge(
+                session,
+                from_artifact_id=caller_symbols["handle"],
+                to_artifact_id=neighbor_symbols[target],
+                edge_type="calls",
+            )
+        await insert_edge(
+            session,
+            from_artifact_id=caller_file,
+            to_artifact_id=neighbor_file,
+            edge_type="imports",
+        )
+    search.seed("handle", [SearchHit(artifact_id=caller_symbols["handle"], score=3.0)])
+    deps = make_broker_deps(factory, search)
+
+    response = await get_task_context(deps, HANDLE_HINT, REQUESTER)
+
+    entries = [
+        *response.blast_radius.callers,
+        *response.blast_radius.callees,
+        *response.blast_radius.tests,
+    ]
+    assert len([e for e in entries if e.edge_type == "calls"]) == 2
+    # the canonical table: sorted, deduplicated, one full string per path
+    assert response.referenced_paths == sorted(set(response.referenced_paths))
+    assert response.referenced_paths.count("services/x/module_a.py") == 1
+    # every entry's reference resolves (discoverability preserved) ...
+    resolved = {response.referenced_paths[e.path_ref] for e in entries}
+    assert "services/x/module_a.py" in resolved
+    # ... and every table entry is referenced by at least one entry (no orphans)
+    assert {e.path_ref for e in entries} == set(range(len(response.referenced_paths)))
+
+
+async def test_two_identical_requests_serialize_byte_identical(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Determinism discipline (1.12.0): same request, same served build ⇒
+    byte-identical JSON. get_task_context's volatile tail (budget_used) is itself
+    deterministic — tokens meter the exact serialized response and calls count the
+    fixed retrieval plan — so the equality holds over the WHOLE payload."""
+    search = FakeSearchClient()
+    async with factory() as session:
+        await _seed_collision(session, search, import_to="file_a")
+        _, target_id = await _seed_alias_scope(session, search)
+    search.seed("validation", [SearchHit(artifact_id=target_id, score=0.5)])
+    deps = make_broker_deps(factory, search)
+    request = GetTaskContextRequest(
+        task_description="change what handle does to the payment validation",
+        hints=TaskContextHints(symbols=["handle"]),
+    )
+
+    first = await get_task_context(deps, request, REQUESTER)
+    second = await get_task_context(deps, request, REQUESTER)
+
+    first_json = first.model_dump_json()
+    assert first_json == second.model_dump_json()
+    # stable identifiers early, the documented volatile tail (budget_used) last
+    assert first_json.startswith('{"schema_version":"1.12.0","resolved_scope":')
+    assert re.search(r'"budget_used":\{[^{}]*\}\}$', first_json), (
+        "budget_used must be the final field (the documented volatile tail)"
+    )
 
 
 # ------------------------------------------------------------------------------- perf

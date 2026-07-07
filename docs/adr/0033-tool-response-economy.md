@@ -58,3 +58,37 @@ disqualifying where exact citation matters).
   experiment (recorded 2026-07-07), separate from platform code.
 - **Compress at the MCP server at request time** — rejected: build-time is cheaper (cached once),
   and the server stays zero-transform on the hot path.
+
+## Implementation note (PR-42, 2026-07-07) — grounded narrowing of Decision 1
+
+Grounding the graphify write path and the governed serve paths settled which stored text may
+become the skeleton. What the registry actually holds today:
+
+- `code_symbol.body_text` = the symbol's **exact recovered source span** (ADR-0018), and two
+  governed paths contractually serve it as raw source: `context.open_evidence` returns it
+  verbatim as the L2 `untrusted_content`, and `context.verify_answer`'s L1 quote-substring
+  guard grounds quotes against it verbatim (`fetch_cited_body_texts`). Skeletonizing it would
+  break quote grounding — the disqualifying "lossy transform near evidence".
+- `code_symbol.search_text` = the ADR-0018 Phase 2 **word bag** (split identifiers + docstring
+  + signature + call/import names) — already deterministic, compact, derived material carrying
+  no raw code bodies; replacing it with a skeleton would *regress* concept-word retrieval.
+- `code_file` rows are **pointer-only** (`body_text = NULL`, `search_text = NULL`), so
+  `kb_search` served them with an empty `snippet`.
+
+Therefore the second branch of the PR-42 decision tree applies, further narrowed by the facts
+above: **`body_text` is untouched everywhere; `code_symbol.search_text` (already non-code) is
+kept as-is; the skeleton lands where there was no display/search text at all** —
+
+1. kb-builder stores the deterministic skeleton of each **Python `code_file`** as that
+   artifact's `search_text` (compressor duplicated from `scripts/codeskeleton.py` into
+   `graphify/code_skeleton.py`, ADR-0008 no-cross-imports; other languages pass through
+   unchanged, i.e. stay `NULL` — never a stored raw document). Incremental for free: the
+   whole-tree graphify pass only runs when a code file's content hash changed.
+2. `kb_search`'s snippet source widens to `body_text` **else** `search_text`, so `code_file`
+   hits carry the skeleton prefix instead of an empty snippet. `code_symbol` snippets keep
+   serving from the raw span — its 200-char prefix is already decorator/signature/docstring,
+   i.e. skeleton-equivalent by construction, so no transform is needed or added there.
+
+Citation semantics are untouched (hard gate held): evidence ids still resolve to
+`source_item` pointers, L2 expansion and the L0–L3 verifier read the same raw `body_text`
+as before. Skeleton text remains for *thinking*, never *citing*.

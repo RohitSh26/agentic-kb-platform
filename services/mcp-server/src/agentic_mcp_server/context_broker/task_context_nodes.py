@@ -26,7 +26,6 @@ from agentic_mcp_server.infrastructure.postgres.edges import EdgeRow, fetch_edge
 from agentic_mcp_server.mcp.tool_schemas.search import ConfidenceTier
 from agentic_mcp_server.mcp.tool_schemas.task_context import (
     AmbiguousCandidate,
-    BlastRadiusEntity,
     Convention,
     GetTaskContextRequest,
     GetTaskContextResponse,
@@ -137,10 +136,27 @@ class ScopeResolution:
 
 
 @dataclass(frozen=True)
+class BlastEntry:
+    """One blast-radius neighbor with its FULL path — internal graph state only.
+
+    The wire shape dedups paths (1.12.0): synthesize maps each entry's path to a
+    ``path_ref`` into the response's ``referenced_paths`` table. Keeping the full
+    path here keeps the nodes and the floor/trim logic independent of the table.
+    """
+
+    entity_id: uuid.UUID
+    path: str
+    symbol: str | None
+    edge_type: str
+    confidence_tier: ConfidenceTier
+    caveat: str | None
+
+
+@dataclass(frozen=True)
 class BlastResolution:
-    callers: tuple[BlastRadiusEntity, ...] = ()
-    callees: tuple[BlastRadiusEntity, ...] = ()
-    tests: tuple[BlastRadiusEntity, ...] = ()
+    callers: tuple[BlastEntry, ...] = ()
+    callees: tuple[BlastEntry, ...] = ()
+    tests: tuple[BlastEntry, ...] = ()
 
 
 @dataclass
@@ -599,7 +615,7 @@ async def blast_radius_node(state: TaskContextState) -> TaskContextUpdate:
 
     def _blast_entity(
         neighbor_id: uuid.UUID, edge: EdgeRow, *, caller_id: uuid.UUID, target_id: uuid.UUID
-    ) -> BlastRadiusEntity | None:
+    ) -> BlastEntry | None:
         row = allowed.get(neighbor_id)
         if row is None:
             return None  # ACL-suppressed: neither returned nor acknowledged
@@ -613,7 +629,7 @@ async def blast_radius_node(state: TaskContextState) -> TaskContextUpdate:
         else:
             # imports/tests are direct AST facts (the statement names the module).
             tier, caveat = "deterministic", None
-        return BlastRadiusEntity(
+        return BlastEntry(
             entity_id=row.artifact_id,
             path=readable_path(row.source_uri),
             symbol=row.title if row.artifact_type in _SYMBOL_TYPES else None,
@@ -622,7 +638,8 @@ async def blast_radius_node(state: TaskContextState) -> TaskContextUpdate:
             caveat=caveat,
         )
 
-    def _ordered(entities: list[BlastRadiusEntity | None]) -> tuple[BlastRadiusEntity, ...]:
+    def _ordered(entities: list[BlastEntry | None]) -> tuple[BlastEntry, ...]:
+        # Documented sort (mcp-tools-contract.md 1.12.0): (path, symbol, entity_id).
         present = [entity for entity in entities if entity is not None]
         present.sort(key=lambda e: (e.path, e.symbol or "", str(e.entity_id)))
         return tuple(present)

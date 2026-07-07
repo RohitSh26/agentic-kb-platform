@@ -180,6 +180,24 @@ def test_spans_attach_exact_body_text_to_matched_symbols() -> None:
     assert by_key["sym:pkg/util.py::helper"].body_text is None
 
 
+def test_skeletons_attach_to_code_file_search_text_only() -> None:
+    # ADR-0033: a skeletons_by_file entry becomes the code_file's search_text
+    # (display/search material); a file absent from the map (non-Python
+    # pass-through) keeps search_text None. body_text stays None either way —
+    # code_file remains pointer-only, never a stored raw document.
+    skeletons = {"pkg/service.py": "def top():\n    ... # 2 lines elided"}
+    by_key = {a.key: a for a in map_extraction(GRAPH, skeletons_by_file=skeletons).artifacts}
+    service = by_key["file:pkg/service.py"]
+    assert service.search_text == "def top():\n    ... # 2 lines elided"
+    assert service.body_text is None
+    util = by_key["file:pkg/util.py"]
+    assert util.search_text is None
+    assert util.body_text is None
+    # symbols are untouched by the skeleton map (their search_text is the
+    # ADR-0018 word bag, attached via spans_by_file, not this map)
+    assert by_key["sym:pkg/service.py::top"].search_text is None
+
+
 def test_span_collision_disambiguated_by_name() -> None:
     # Two defs on one physical line (def_line 7) are resolved by the bare label name.
     from agentic_kb_builder.graphify.span_recovery import SymbolSpan

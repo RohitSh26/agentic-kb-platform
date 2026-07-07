@@ -3,7 +3,7 @@
 > Versioned tool surface served by mcp-server. Schema before code: every tool
 > has a frozen pydantic request/response model (`extra="forbid"`) in
 > `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`, registered in
-> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.11.0"` (1.1.0 = PR-13:
+> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.12.0"` (1.1.0 = PR-13:
 > `authorization` decision on every retrieval response, `injection_*` markers
 > on cards and expansions; 1.2.0 = PR-18: `read_pack.role` opened from the
 > closed six-role enum to a free-form charset-guarded string — response
@@ -68,7 +68,28 @@
 > clean `{found: false}` response, never a tool error. Carries **no**
 > `kb_search`-style budget charge (fetching a stored draft is not knowledge
 > retrieval) — the only gates are authentication (same as every other tool)
-> and the client-scope check. Additive: no existing tool changes.
+> and the client-scope check. Additive: no existing tool changes; 1.12.0 =
+> PR-42 (ADR-0033, response economy): `get_task_context` adopts
+> **cross-section path dedup** — the response gains `referenced_paths`
+> (the canonical, deduplicated, lexicographically sorted table of every path
+> any blast-radius entry surfaces) and `blast_radius` entries replace
+> `path: str` with `path_ref: int`, an index into `referenced_paths`
+> (`resolved_scope` entities keep their full `path`; `similar_prior_changes`
+> entries carry commit ids, never file paths, so nothing to reference there).
+> `budget_used` moves to the END of the response — the documented volatile
+> tail — so the stable identifiers serialize first. Both `get_task_context`
+> and `kb_search` adopt the **response-stability discipline**: deterministic
+> field order, a documented sort for every list, stable identifiers early and
+> volatile values late; two identical requests produce byte-identical JSON
+> modulo the documented volatile tail (`get_task_context`: `budget_used`;
+> `kb_search`: `budget_remaining` + `notice`, which reflect prior window
+> usage). `kb_search`'s `snippet` source widens from `body_text` only to
+> `body_text` **else** `search_text`, so `code_file` hits (pointer-only,
+> `body_text=NULL`) stop serving empty snippets and carry the build-time
+> deterministic code skeleton the registry now stores in their `search_text`
+> (ADR-0033; skeletons are display/search material — for *thinking*, never
+> *citing*). Breaking only in the `get_task_context` wire shape
+> (`path` → `path_ref` + `referenced_paths`); every other tool is unchanged.
 
 ## The V1 tools
 
@@ -283,6 +304,17 @@ provenance is required; `kb_search` is the preferred first stop.
   same discipline as card titles/summaries), and a `confidence_tier` ∈
   `ground_truth | deterministic | interpreted`
   (`docs/proposals/2026-07-02-tool-design-first-kb-architecture.md` §3).
+  `snippet` is built from the artifact's `body_text` **else** its
+  `search_text` (1.12.0, ADR-0033): a pointer-only `code_file` row
+  (`body_text=NULL`) serves the build-time deterministic code skeleton stored
+  in its `search_text` instead of an empty snippet. Skeleton text is
+  display/search material — for *thinking*, never *citing*; citations still
+  resolve through evidence ids to the raw `body_text` / source pointer.
+  **Determinism (1.12.0):** `results` are in deterministic rank order (stable
+  `artifact_id` tie-break); field order is fixed with `results` first;
+  `budget_remaining` + `notice` are the documented **volatile tail** (they
+  reflect prior usage of the caller's budget window, so two identical requests
+  are byte-identical up to that tail).
   Keyword-ranked hits are always `interpreted` (relevance-ranked, not
   cross-validated); the field is the declared extension point for graph-derived
   hits to carry `deterministic` once blast-radius wiring lands (follow-up PR —
@@ -297,9 +329,12 @@ provenance is required; `kb_search` is the preferred first stop.
   factors, semantic dedupe, 3–5 results max) and ledgered with
   `run_id = "-"` (the request carries no run handle; the session is recorded in
   `details`).
-- `get_task_context` returns `{resolved_scope, blast_radius, conventions,
-  similar_prior_changes, evidence_ids, budget_used, open_questions}`
-  (`docs/proposals/2026-07-02-tool-design-first-kb-architecture.md` §2):
+- `get_task_context` returns `{resolved_scope, referenced_paths, blast_radius,
+  conventions, similar_prior_changes, evidence_ids, open_questions,
+  budget_used}` — in exactly that field order: stable identifiers first,
+  `budget_used` last as the documented **volatile tail**
+  (`docs/proposals/2026-07-02-tool-design-first-kb-architecture.md` §2,
+  path dedup + stability per ADR-0033 / 1.12.0):
   - `resolved_scope.entities[]`: `{entity_id, path, symbol, resolution_source ∈
     alias_index | hint | search, confidence_tier}`. When resolution is genuinely
     ambiguous (a hint or alias matches several distinct targets with no clear
@@ -307,8 +342,16 @@ provenance is required; `kb_search` is the preferred first stop.
     (`{alias_text, candidates[], reason}`) plus an `open_questions` entry and
     NO guessed entity — an ambiguous answer is an answer, so it does not
     trigger the broadened retry (only a truly empty scope does, once).
-  - `blast_radius.{callers,callees,tests}[]`: `{entity_id, path, symbol,
-    edge_type, confidence_tier, caveat}`. Traversal covers `calls` / `imports` /
+  - `referenced_paths[]`: the canonical **path table** — every path any
+    blast-radius entry surfaces, deduplicated, sorted lexicographically. A
+    path string appears here once in full; blast entries reference it by
+    index. Scope entities keep their full `path` (the primary answer, ≤5
+    entries); `similar_prior_changes` entries carry commit ids, never file
+    paths, so they reference nothing.
+  - `blast_radius.{callers,callees,tests}[]`: `{entity_id, path_ref, symbol,
+    edge_type, confidence_tier, caveat}` where `path_ref` is the entry's index
+    into `referenced_paths` (dedup: the full path string is never repeated
+    per entry). Traversal covers `calls` / `imports` /
     `tests` edges from the resolved entities, EXTRACTED trust class only.
     **Confidence rule (2026-07-02 Graphify audit):** a `calls` edge is
     `deterministic` ONLY if the caller and target are defined in the same file
@@ -329,6 +372,17 @@ provenance is required; `kb_search` is the preferred first stop.
     `budget_used = {tokens, calls}` where `tokens` is the estimate of the EXACT
     serialized response (meter == wire, the kb_search rule) and `calls` counts
     the internal retrieval operations the backend ran.
+  - **Determinism (1.12.0):** every list has a documented sort —
+    `resolved_scope.entities` in resolution order (hint order, then alias
+    target rank, then search rank with an `artifact_id` tie-break);
+    `ambiguous_candidates` in hint/alias encounter order; `referenced_paths`
+    lexicographic; each `blast_radius` bucket by `(path, symbol, entity_id)`;
+    `conventions` and `similar_prior_changes` in search-rank order;
+    `evidence_ids` sorted by UUID string; `open_questions` in generation
+    order. Two identical requests against the same served build produce
+    byte-identical JSON (the volatile tail, `budget_used`, is itself
+    deterministic here — it derives from the serialized response and the
+    internal call count, not wall-clock state).
   - Budget: the serialized response is capped server-side at the Evidence-Pack
     band (`task_context_max_tokens`, default 8k — the top of the 6k–8k band).
     Over-budget responses are trimmed deterministically from the lowest-value

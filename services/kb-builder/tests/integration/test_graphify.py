@@ -58,6 +58,39 @@ def test_graphify_tree_single_function_file() -> None:
     assert defined_in.confidence == 1.0
 
 
+def test_graphify_tree_code_file_carries_the_skeleton_as_search_text() -> None:
+    """ADR-0033 (PR-42 grounded decision): the Python file's deterministic skeleton
+    becomes the code_file artifact's search_text — display/search material only.
+    body_text stays None (pointer-only) and the symbol's raw span + word bag are
+    untouched, so the governed L2/verify paths keep serving raw source."""
+    source = 'def get_user():\n    """Load one user."""\n    row = db()\n    return row\n'
+    result = graphify_tree([("a.py", source)])
+    by_key = {a.key: a for a in result.artifacts}
+
+    code_file = by_key["file:a.py"]
+    assert code_file.body_text is None  # still pointer-only: never a stored raw document
+    assert code_file.search_text is not None
+    assert "def get_user():" in code_file.search_text
+    assert '"""Load one user."""' in code_file.search_text
+    assert "row = db()" not in code_file.search_text  # the body is elided
+    assert "lines elided" in code_file.search_text
+
+    symbol = by_key["sym:a.py::get_user"]
+    assert symbol.body_text is not None
+    assert "row = db()" in symbol.body_text  # raw citable span, untouched
+    assert symbol.search_text is not None
+    assert "def " not in symbol.search_text  # still the ADR-0018 word bag, not a skeleton
+    assert "load" in symbol.search_text.split()
+
+
+def test_graphify_tree_skeleton_is_deterministic_across_runs() -> None:
+    source = 'def f(x: int) -> int:\n    """Double."""\n    y = x * 2\n    return y\n'
+    first = graphify_tree([("d.py", source)])
+    second = graphify_tree([("d.py", source)])
+    skeleton = {a.key: a.search_text for a in first.artifacts}
+    assert skeleton == {a.key: a.search_text for a in second.artifacts}
+
+
 def test_graphify_tree_assignment_only_file_has_no_symbol_or_edge() -> None:
     result = graphify_tree([("x.py", "x = 1\n")])
     assert {a.key for a in result.artifacts} == {"file:x.py"}

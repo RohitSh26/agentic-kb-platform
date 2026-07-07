@@ -23,9 +23,9 @@ SOURCE_ITEM_TABLE = "source_item"
 # kb_version. valid_from_seq <= S AND (invalidated_at_seq IS NULL OR > S).
 _FETCH_ARTIFACTS_QUERY = text(
     f"""
-    SELECT a.artifact_id, a.artifact_type, a.title, a.body_text, a.knowledge_kind,
-           a.authority_score, a.centrality_score, a.acl_teams, a.invalidated_at_seq,
-           s.source_uri, s.source_type, s.is_deleted
+    SELECT a.artifact_id, a.artifact_type, a.title, a.body_text, a.search_text,
+           a.knowledge_kind, a.authority_score, a.centrality_score, a.acl_teams,
+           a.invalidated_at_seq, s.source_uri, s.source_type, s.is_deleted
     FROM {KNOWLEDGE_ARTIFACT_TABLE} a
     JOIN {SOURCE_ITEM_TABLE} s ON s.source_id = a.source_id
     WHERE a.artifact_id = ANY(CAST(:artifact_ids AS uuid[]))
@@ -77,6 +77,10 @@ class ArtifactRow:
     # Normalized [0,1] graph-centrality prior (ADR-0028); None ⇒ no graph signal (ranks as before).
     # Defaulted so existing constructors stay valid; fetch_artifacts sets it by keyword.
     centrality_score: float | None = None
+    # Deterministic display/search surface (ADR-0018 word bag for code_symbol; ADR-0033
+    # build-time skeleton for code_file). kb_search's snippet falls back to it when the
+    # row is pointer-only (body_text NULL) — for thinking, never citing.
+    search_text: str | None = None
 
 
 async def fetch_artifacts(
@@ -111,6 +115,7 @@ async def fetch_artifacts(
             source_type=row.source_type,
             invalidated_at_seq=row.invalidated_at_seq,
             source_is_deleted=row.is_deleted,
+            search_text=row.search_text,
         )
         for row in result
     ]

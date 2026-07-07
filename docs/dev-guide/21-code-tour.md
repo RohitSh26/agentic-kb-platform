@@ -1,6 +1,6 @@
 # 21 — Code tour
 
-> **Point in time: 2026-07-07** (migration head `0021`, MCP schema `1.11.0`). A code tour ages;
+> **Point in time: 2026-07-07** (migration head `0021`, MCP schema `1.12.0`). A code tour ages;
 > this one is dated so it can age honestly. Trust the *structure* — which subsystem lives where,
 > what talks to what — over the specifics, and verify any load-bearing detail against the code.
 
@@ -71,7 +71,7 @@ Build-plane schemas, all under `services/kb-builder/src/agentic_kb_builder/`:
 Runtime-plane schemas, under `services/mcp-server/src/agentic_mcp_server/mcp/`:
 
 - `tool_schemas/` — the Context Broker tool contracts, mirrored in
-  `docs/contracts/mcp-tools-contract.md` (`MCP_SCHEMA_VERSION` **1.11.0**). `base.py` holds
+  `docs/contracts/mcp-tools-contract.md` (`MCP_SCHEMA_VERSION` **1.12.0**). `base.py` holds
   `McpModel` (frozen, `extra="forbid"`, pinned `schema_version`); the request+response pairs cover
   all **thirteen** registered tools — the ten governed/graph/ledger tools that grew through PR-33
   (`context.create_pack` with its optional `intent`, `read_pack`, `request_more`, `open_evidence`,
@@ -515,7 +515,7 @@ lifespan's anyio cancel scope must enter/exit in one task.
 ## 11. Context Broker (`services/mcp-server/src/agentic_mcp_server/context_broker/`)
 
 The policy layer behind the tools. The surface is **thirteen tools**
-(`docs/contracts/mcp-tools-contract.md`, `MCP_SCHEMA_VERSION` **1.11.0**) in three families:
+(`docs/contracts/mcp-tools-contract.md`, `MCP_SCHEMA_VERSION` **1.12.0**) in three families:
 
 - **The preferred, everyday retrieval surface (ADR-0025 / ADR-0030):** `kb_search` (PR-37) and
   `get_task_context` (PR-39) — simple to call, hard-capped in code, no run/pack ceremony.

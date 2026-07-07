@@ -88,7 +88,8 @@ everything an implementer needs to *start*, in one budgeted payload:
 - **`blast_radius.callers / callees / tests`** — walked from the real `calls`/`imports`/`tests`
   graph. Honesty is structural: a `calls` edge reads `deterministic` **only** when the import
   graph corroborates it; otherwise it's `interpreted` with a `caveat` naming the missing
-  corroboration.
+  corroboration. Since 1.12.0 (ADR-0033) each entry carries a compact `path_ref` — an index
+  into the response's `referenced_paths` table, where every path string appears once in full.
 - **`conventions`** — the rules and decision records that apply to those directories, with
   evidence ids.
 - **`similar_prior_changes`** — commits that changed this area before, with evidence ids.

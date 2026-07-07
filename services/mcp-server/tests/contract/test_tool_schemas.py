@@ -27,7 +27,9 @@ from agentic_mcp_server.mcp.tool_schemas.review_draft import (
 )
 from agentic_mcp_server.mcp.tool_schemas.task_context import (
     AmbiguousCandidate,
+    BlastRadiusEntity,
     GetTaskContextRequest,
+    GetTaskContextResponse,
 )
 from agentic_mcp_server.mcp.tool_schemas.verification import ClaimInput, VerifyAnswerRequest
 
@@ -104,6 +106,50 @@ def test_get_task_context_accepts_a_bare_task_description() -> None:
     with pytest.raises(ValidationError):
         GetTaskContextRequest.model_validate(
             {"task_description": "x", "confidence_floor": "certain"}
+        )
+
+
+def test_get_task_context_response_pins_the_deduped_stable_shape() -> None:
+    """1.12.0 (ADR-0033): blast entries carry path_ref (an index into the
+    response-level referenced_paths table) instead of a repeated path string,
+    and the field order is contractual — stable identifiers first, budget_used
+    last (the documented volatile tail)."""
+    assert list(GetTaskContextResponse.model_fields) == [
+        "schema_version",
+        "resolved_scope",
+        "referenced_paths",
+        "blast_radius",
+        "conventions",
+        "similar_prior_changes",
+        "evidence_ids",
+        "open_questions",
+        "budget_used",
+    ]
+    entry = BlastRadiusEntity(
+        entity_id=uuid.uuid4(),
+        path_ref=0,
+        symbol="resolve",
+        edge_type="calls",
+        confidence_tier="deterministic",
+    )
+    assert entry.path_ref == 0
+    with pytest.raises(ValidationError):  # the pre-1.12.0 shape is gone, not aliased
+        BlastRadiusEntity.model_validate(
+            {
+                "entity_id": str(uuid.uuid4()),
+                "path": "services/x/module_a.py",
+                "edge_type": "calls",
+                "confidence_tier": "deterministic",
+            }
+        )
+    with pytest.raises(ValidationError):  # a negative index can never resolve
+        BlastRadiusEntity.model_validate(
+            {
+                "entity_id": str(uuid.uuid4()),
+                "path_ref": -1,
+                "edge_type": "calls",
+                "confidence_tier": "deterministic",
+            }
         )
 
 

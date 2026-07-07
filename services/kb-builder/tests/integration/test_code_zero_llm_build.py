@@ -494,3 +494,68 @@ async def test_search_text_idempotent_rebuild(session: AsyncSession, tmp_path: P
     # All Python symbols must have non-null search_text.
     for title, st in search_texts_second.items():
         assert st is not None, f"symbol '{title}' must have non-null search_text"
+
+
+@requires_db
+async def test_code_file_skeleton_search_text_and_incremental_skip(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    """ADR-0033 (PR-42): each Python code_file artifact stores the deterministic
+    skeleton as its search_text (bodies elided, structure kept), body_text stays
+    None (pointer-only), and an unchanged rebuild neither duplicates the rows nor
+    recomputes different text — the content-hash gate skips the whole graphify
+    (and therefore skeleton) pass."""
+    workspace, sources = _workspace(tmp_path)
+    client = FakeSearchClient()
+    kb_version = "v-skel.1"
+
+    async def _run() -> None:
+        await run_build(
+            session,
+            sources_path=str(sources),
+            workspace=str(workspace),
+            kb_version=kb_version,
+            version="local",
+            collaborators=Collaborators(
+                doc_extractor=ExplodingDocExtractor(),
+                embedder=LocalHashEmbedder(),
+                indexer=SearchDocUpserter(session, client),
+                search_client=client,
+            ),
+            activate=False,
+        )
+
+    async def _code_files() -> list[KnowledgeArtifact]:
+        return list(
+            (
+                await session.execute(
+                    select(KnowledgeArtifact).where(
+                        KnowledgeArtifact.artifact_type == "code_file",
+                        KnowledgeArtifact.kb_version == kb_version,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    await _run()
+    files_first = await _code_files()
+    assert len(files_first) == 2  # pkg/service.py + pkg/util.py
+    by_title = {f.title: f for f in files_first}
+    service = by_title["pkg/service.py"]
+    assert service.body_text is None, "code_file stays pointer-only (no raw document)"
+    assert service.search_text is not None
+    assert "def top():" in service.search_text  # signature kept
+    assert '"""Entry point doc."""' in service.search_text  # docstring kept
+    assert "return helper()" not in service.search_text  # body elided
+    assert "line elided" in service.search_text  # counted placeholder marks each elision
+
+    # Unchanged rebuild: the content-hash gate skips graphify entirely, so the
+    # rows are not duplicated and the skeleton text is byte-identical.
+    await _run()
+    files_second = await _code_files()
+    assert len(files_second) == len(files_first), "rebuild must not duplicate code_file rows"
+    assert {f.title: f.search_text for f in files_second} == {
+        f.title: f.search_text for f in files_first
+    }

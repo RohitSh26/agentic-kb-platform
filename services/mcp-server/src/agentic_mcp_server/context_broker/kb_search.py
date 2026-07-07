@@ -58,11 +58,15 @@ def _hit(artifact: ArtifactRow) -> KbSearchHit:
     # Keyword-ranked hits are `interpreted` (relevance-ranked, not cross-validated);
     # a future graph-derived path constructs hits with tier="deterministic" — the
     # schema's ConfidenceTier already admits it (tool_schemas/search.py).
+    # Snippet source (ADR-0033, 1.12.0): body_text else search_text, so a pointer-only
+    # code_file row serves its build-time skeleton instead of an empty snippet. The
+    # skeleton is display material — citations still resolve to the raw source.
+    snippet_source = artifact.body_text or artifact.search_text or ""
     return KbSearchHit(
         title=artifact.title or artifact.artifact_type,
         artifact_type=artifact.artifact_type,
         source_uri=artifact.source_uri,
-        snippet=" ".join((artifact.body_text or "").split())[:_SNIPPET_CHARS],
+        snippet=" ".join(snippet_source.split())[:_SNIPPET_CHARS],
         confidence_tier="interpreted",
     )
 
