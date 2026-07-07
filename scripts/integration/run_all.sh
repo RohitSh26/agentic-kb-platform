@@ -4,7 +4,7 @@
 #
 #   EVIDENCE_DIR=/abs/path scripts/integration/run_all.sh
 #
-# Preconditions: agentic_kb_full built + active (dev-guide 04), copilot + gh
+# Preconditions: agentic_kb_full built + active (docs/dev-guide/getting-started.md), copilot + gh
 # authed, opencode installed, repo-root .env with the Groq credential
 # (LLM_API_KEY — loaded in-process, never printed).
 

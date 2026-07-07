@@ -91,5 +91,5 @@ inside the call, not at build start.
 shape — `{"model","input"} -> {"data":[{"embedding":[...]}]}`, `EMBEDDINGS_API_KEY` required).
 Any other value raises a `RuntimeError` at build start. Both embedders share a small `HttpEmbedder`
 base for client lifecycle (`embeddings/http_embedder.py`); `EmbeddingSimilarityProvider.aclose()`
-closes either via `isinstance(embedder, HttpEmbedder)`. See docs/dev-guide/07-providers-and-api-keys.md
-§3 for the full var/shape reference.
+closes either via `isinstance(embedder, HttpEmbedder)`. See docs/dev-guide/reference/environment-variables.md
+for the full var/shape reference.

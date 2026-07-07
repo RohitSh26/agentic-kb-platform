@@ -1,39 +1,57 @@
-# Developer Guide
+# Developer guide
 
-How to run, use, and work on the Agentic KB Platform. The guide is split into two tracks: pages
-**01–08** are for anyone who wants to *run and use* the platform (task-first, no history, no
-architecture required); pages **20–22** are for people *changing* the platform. History —
-decisions, build records, measured results — lives in `docs/adr/`, `docs/pr-briefs/`, and
-`docs/reports/`, **not here**.
+Documentation for installing, using, and operating the Agentic KB Platform. Pick the section
+that matches what you need right now.
 
-## Run and use the platform
+## Start here
 
-Read **01 → 02 → 03** in order; reach for **04–08** as the need arises.
+**[Getting started](getting-started.md)** — the 10-minute golden path: prerequisites →
+`./scripts/bootstrap.sh` → serve → your first `kb_search` answer.
 
-| Page | One line |
-|---|---|
-| **[01 — Run the platform](01-run-the-platform.md)** | From clone to a built, served, verified KB: prerequisites, `bootstrap.sh`, what success looks like, serving the MCP server, incremental rebuilds, and the one-time fresh-rebuild case. |
-| **[02 — Connect your editor](02-connect-your-editor.md)** | VS Code Copilot (agent mode), GitHub Copilot CLI, and OpenCode — each connected in ≤5 steps with one real question walked through, plus the ledger proof it was governed. |
-| **[03 — Using the knowledge tools](03-using-the-knowledge-tools.md)** | `kb_search` and `get_task_context` day to day, budget notices, KB-first/file-fallback, and (as an aside) the governed citation-grade path. |
-| **[04 — Review drafts](04-review-drafts.md)** | Get a four-lens PR review draft, edit it, publish it under your own name — the panel never posts to GitHub. |
-| **[05 — Database operations](05-database-operations.md)** | Postgres recipes: connect, health checks, backup/restore, reset, the useful-queries cookbook, maintenance, test-DB quirks. |
-| **[06 — Observability](06-observability.md)** | "What happened, and what did it cost?" — `make dashboard`, the `v_*` views, per-step traces, and reading the retrieval ledger. |
-| **[07 — Providers and API keys](07-providers-and-api-keys.md)** | The one reference for every key: which component needs one, per-provider setup (Groq/OpenAI/Azure/Claude/Ollama), where keys live, broker bearer tokens. |
-| **[08 — Troubleshooting](08-troubleshooting.md)** | Every known failure mode by symptom: build gates, server health, ports, editors not seeing tools, budget notices, locks, database errors. |
+## Tutorials — learn by doing
 
-## Work on the platform
+A numbered journey. Each tutorial builds on the last; do them in order.
 
-Read **20–22**, then go deep in [`docs/architecture/`](../architecture/00-overview.md) and the
-ADR index ([`docs/adr/README.md`](../adr/README.md)).
+1. [Explore what got built](tutorials/01-explore-what-got-built.md) — see your artifacts,
+   aliases, and build health with `psql` and `make dashboard`.
+2. [Ask your first questions](tutorials/02-ask-your-first-questions.md) — connect VS Code
+   Copilot, ask real questions, watch the ledger record them.
+3. [Scope a real task](tutorials/03-scope-a-real-task.md) — `get_task_context` end to end,
+   field by field.
+4. [Review a pull request](tutorials/04-review-a-pull-request.md) — draft a four-lens review,
+   revise it, publish it under your own name.
 
-| Page | One line |
-|---|---|
-| **[20 — Architecture for contributors](20-architecture-for-contributors.md)** | What we're building and why it's shaped this way, ending in the invariants → enforcement map every change is reviewed against. |
-| **[21 — Code tour](21-code-tour.md)** | A dated, subsystem-by-subsystem walk through the code — structure over specifics. |
-| **[22 — Testing and builds](22-testing-and-builds.md)** | The verify gate, test databases and fakes, Docker compose, and the complete bare-machine build runbook (providers, flags, SQL health reference). |
+## How-to guides — one task per page
+
+Recipes for when you already know what you want: connect a host
+([VS Code](how-to/connect-vscode.md) · [Copilot CLI](how-to/connect-copilot-cli.md) ·
+[OpenCode](how-to/connect-opencode.md)), [switch LLM providers](how-to/switch-llm-providers.md),
+[index your own sources](how-to/index-your-own-sources.md),
+[rebuild after changes](how-to/rebuild-after-changes.md),
+[back up and restore](how-to/back-up-and-restore.md), [reset the database](how-to/reset-the-database.md),
+[read the dashboard](how-to/read-the-dashboard.md),
+[query traces and the ledger](how-to/query-traces-and-the-ledger.md),
+[tune budgets](how-to/tune-budgets.md), and [troubleshoot](how-to/troubleshoot.md).
+
+## Reference — complete and dry
+
+[Tools](reference/tools.md) (request/response fields, budgets, errors) ·
+[Environment variables](reference/environment-variables.md) · [CLI](reference/cli.md) ·
+[Database](reference/database.md) · [Agent roles](reference/agent-roles.md).
+
+## Explanation — how and why it works
+
+[How your knowledge base is built](explanation/how-your-knowledge-base-is-built.md) ·
+[Governance and budgets](explanation/governance-and-budgets.md) ·
+[The review flow](explanation/the-review-flow.md) · [Observability](explanation/observability.md).
+
+## Contributors
+
+Changing the platform itself, not just using it? Start at
+[contributors/README.md](contributors/README.md) — architecture, decision records, code tour,
+testing.
 
 ---
 
-Deep specs: [`docs/architecture/`](../architecture/00-overview.md). Cross-service agreements
-(the source of truth when prose disagrees): `docs/contracts/`. History: `docs/adr/` (decision
-records), `docs/pr-briefs/` (the implemented build units), `docs/reports/` (measured results).
+Cross-service contracts live in `docs/contracts/` — the source of truth when any prose
+disagrees.

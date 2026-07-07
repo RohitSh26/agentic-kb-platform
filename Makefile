@@ -5,7 +5,7 @@ TEST_DATABASE_URL ?= postgresql+asyncpg://postgres:postgres@localhost:5432/agent
 	sync-evals lint-evals types-evals test-evals verify-evals \
 	$(foreach s,$(SERVICES),sync-$(s) lint-$(s) types-$(s) test-$(s) verify-$(s))
 
-# Hermetic local end-to-end demo (Postgres + uv only; no Ollama/Azure). See dev-guide 04-review-drafts.
+# Hermetic local end-to-end demo (Postgres + uv only; no Ollama/Azure). See docs/dev-guide/tutorials/04-review-a-pull-request.md.
 demo:
 	./scripts/e2e-local.sh
 

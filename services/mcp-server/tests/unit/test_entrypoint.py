@@ -4,7 +4,7 @@ A developer on a separate machine starts the server with `uv run python -m
 agentic_mcp_server`; that imports `__main__` and calls `create_app()`. This is a
 construction smoke test only — it asserts the production entrypoint assembles the
 same FastMCP app (auth + full tool surface) without a live database (engines
-connect lazily), so the run command in docs/dev-guide/05 cannot rot silently. It
+connect lazily), so the run command in docs/dev-guide/getting-started.md cannot rot silently. It
 deliberately does NOT bind a socket.
 """
 

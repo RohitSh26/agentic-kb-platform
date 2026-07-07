@@ -1,9 +1,9 @@
-# Code + docs LOCAL build for `scripts/bootstrap.sh --with-docs` (dev-guide 00-quickstart.md).
+# Code + docs LOCAL build for `scripts/bootstrap.sh --with-docs` (docs/dev-guide/how-to/switch-llm-providers.md).
 # Same code scope as local-code-sources.yaml, PLUS this repo's own markdown docs so docify
 # (Graphify's LLM doc extractor, ADR-0023) has something to summarize. Still --backend local
 # (reads this checkout; no GitHub/ADO token is ever resolved for it) — the ONLY extra
 # requirement over the zero-LLM default is a chat model for the docs (LLM_PROVIDER / LLM_API_KEY
-# / LLM_MODEL — a Groq key is cheap/fast; see dev-guide 00-quickstart.md and the repo-root .env).
+# / LLM_MODEL — a Groq key is cheap/fast; see docs/dev-guide/how-to/switch-llm-providers.md and the repo-root .env).
 #
 # Deliberately narrower than services/kb-builder/sources.example.yaml: that file also lists
 # azure_wiki/ado_card sources, which are remote-only and are NOT filtered out by --backend

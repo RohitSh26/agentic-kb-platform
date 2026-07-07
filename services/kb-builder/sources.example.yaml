@@ -23,7 +23,7 @@ sources:
   # deterministic version). You set IDENTIFIERS, not URLs: github_* build from
   # repo+branch (api.github.com); azure_wiki/ado_card build from organization+
   # project (dev.azure.com). Replace contoso/platform below with your own. The only
-  # connector backlog item is managed-identity auth instead of PATs. See dev-guide 04-review-drafts.
+  # connector backlog item is managed-identity auth instead of PATs. See docs/dev-guide/how-to/index-your-own-sources.md.
   - name: platform-code
     type: github_code
     repo: RohitSh26/agentic-kb-platform

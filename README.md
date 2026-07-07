@@ -25,15 +25,15 @@ About 2–3 minutes: synced dependencies → a migrated Postgres database → an
 knowledge base** built from this repo's own source (zero LLM calls, no API keys, no cloud
 accounts) → a real retrieval check proving it works → printed next steps to serve it and connect
 a host. The full walkthrough and what to do next:
-[`docs/dev-guide/01-run-the-platform.md`](docs/dev-guide/01-run-the-platform.md); when something
-misbehaves, [`docs/dev-guide/08-troubleshooting.md`](docs/dev-guide/08-troubleshooting.md).
+[`docs/dev-guide/getting-started.md`](docs/dev-guide/getting-started.md); when something
+misbehaves, [`docs/dev-guide/how-to/troubleshoot.md`](docs/dev-guide/how-to/troubleshoot.md).
 
 ## What's in the repo
 
 | Project | One line |
 |---|---|
 | `services/kb-builder` | Build plane: connectors → incremental build engine → docify/graphify → linker → alias miner → indexing. Owns the Knowledge Registry schema and its Alembic migrations. |
-| `services/mcp-server` | Runtime plane: the MCP Context Broker — auth, ACL filtering, server-enforced budgets, the 12-tool surface, retrieval ledger, tracing. Never builds, never migrates. |
+| `services/mcp-server` | Runtime plane: the MCP Context Broker — auth, ACL filtering, server-enforced budgets, the 13-tool surface, retrieval ledger, tracing. Never builds, never migrates. |
 | `services/review-panel` | Dev-gated review draft engine (ADR-0031): LangGraph fan-out of four reviewer lenses → reconcile → one stored draft. Never posts to GitHub; owns only the `review_panel` schema. |
 | `evals` | The evaluation system (T0–T4): golden-query retrieval cases, agent task cases, the consolidated `run_all.py` report, and the operator dashboard renderer. |
 
@@ -45,10 +45,11 @@ interface, pinned by contract tests on both sides (including import-boundary tes
 
 Read in this order:
 
-1. **[`docs/dev-guide/`](docs/dev-guide/README.md)** — two tracks: *run and use the platform*
-   (01 run it → 02 connect your editor → 03 use the knowledge tools, plus review drafts, database
-   operations, observability, providers/keys, troubleshooting) and *work on the platform*
-   (20 architecture → 21 code tour → 22 testing and builds).
+1. **[`docs/dev-guide/`](docs/dev-guide/README.md)** — the product documentation:
+   `getting-started.md` (the 10-minute golden path), `tutorials/` (a numbered exploration
+   journey), `how-to/` (one task per page), `reference/` (tools, environment variables, CLI,
+   database, agent roles), `explanation/` (how and why it works), and `contributors/` (the
+   maintainer track: code tour, testing and builds).
 2. **[`docs/contracts/`](docs/contracts/)** — living truth: the versioned cross-service
    agreements (the MCP tool surface, the registry schema, tracing, the review panel, agent output
    schemas). If prose and a contract disagree, the contract wins.
@@ -56,10 +57,10 @@ Read in this order:
    architecture reference, with the diagrams beside it (`e2e-flow-detailed.mmd`,
    `seq-task-flow.mmd`, `seq-review-flow.mmd`) and the eval design
    (`docs/architecture/evaluation-system.md`).
-4. **History**: [`docs/adr/`](docs/adr/README.md) — 32 decision records (0001–0032) with a
-   one-line index; [`docs/pr-briefs/`](docs/pr-briefs/README.md) — the 40 build units, all
-   implemented (a historical record, not a queue); `docs/reports/` and `docs/reviews/` — measured
-   results and audits.
+4. **History**: [`docs/adr/`](docs/adr/README.md) — 34 decision records (0001–0034) with a
+   one-line index; [`docs/pr-briefs/`](docs/pr-briefs/README.md) — the implemented build units
+   (a historical record, not a queue); `docs/reports/` and `docs/reviews/` — measured results
+   and audits.
 5. **`docs/proposals/`** — exploration documents, each bannered with what superseded it. Never a
    current reference.
 

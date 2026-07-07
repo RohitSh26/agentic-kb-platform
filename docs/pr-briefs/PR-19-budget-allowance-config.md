@@ -28,7 +28,7 @@ allowances by configuration, not by code.
 - `docker-compose.yml` passes the var through (`${MCP_AGENT_ALLOWANCES:-}`) so the compose stack
   can exercise it; empty string is treated as unset.
 - Docs: contract note in `docs/contracts/mcp-tools-contract.md` (budgets section), dev-guide
-  update, drop the stale "PR-11 role manifests" promise from `budgets.py`'s docstring.
+  update (now `docs/dev-guide/how-to/tune-budgets.md`), drop the stale "PR-11 role manifests" promise from `budgets.py`'s docstring.
 
 ## Do NOT
 

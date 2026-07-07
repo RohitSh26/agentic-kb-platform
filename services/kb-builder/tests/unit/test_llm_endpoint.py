@@ -113,7 +113,7 @@ def test_ollama_still_needs_no_key_even_with_groq_key_unset(
 def test_accepted_provider_set_is_pinned() -> None:
     # Any addition/removal of a specially-handled provider (or a generic-provider default) is a
     # deliberate, reviewed change — not a silent divergence from the other two LLM_PROVIDER
-    # consumers documented in docs/dev-guide/07-providers-and-api-keys.md.
+    # consumers documented in docs/dev-guide/how-to/switch-llm-providers.md.
     assert AZURE_PROVIDER == "azure"
     assert ANTHROPIC_FOUNDRY_PROVIDER == "anthropic_foundry"
     assert set(PROVIDER_DEFAULTS) == {"ollama", "groq", "openai"}

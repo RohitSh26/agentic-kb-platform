@@ -1,7 +1,7 @@
 """LLM_PROVIDER dispatch drift guard for kb_agent.py (task #38).
 
 Three consumers resolve LLM_PROVIDER (kb-builder's llm_endpoint.py, this script, and
-review-panel's ModelClient shim); docs/dev-guide/07-providers-and-api-keys.md documents
+review-panel's ModelClient shim); docs/dev-guide/how-to/switch-llm-providers.md documents
 each one's exact accepted set. These tests pin kb_agent.py's actual dispatch (`_is_openai`
 + `_make_client`) against real SDK client construction (no network — SDK constructors are
 local-only) so the next divergence from that doc fails loudly, not silently.

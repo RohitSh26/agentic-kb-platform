@@ -45,7 +45,7 @@ place, its native config was **generated from** the committed one, substituting 
 serving requires — each mechanic below is codified in `scripts/integration/`:
 
 - **Copilot**: `~/.copilot/mcp-config.json` generated from `.copilot/mcp/repository-settings.json`
-  per dev-guide 09 §3 (now dev-guide 02 §Copilot CLI) (URL → `http://127.0.0.1:8765/mcp/`, bearer
+  per dev-guide 09 §3 (now `docs/dev-guide/how-to/connect-copilot-cli.md`) (URL → `http://127.0.0.1:8765/mcp/`, bearer
   → local-dev placeholder; the
   two-tool allowlist verbatim). Agent renderings `.copilot/agents/*.agent.md` installed to
   `~/.copilot/agents/` (the discovery location `.copilot/README.md` names) with one generation
@@ -175,7 +175,7 @@ re-seat (T3, gpt-oss) is recorded in the case meta.
    config.** A dev checkout therefore exposes `postgres-dev`, `github`, and `agentic-kb`
    (ignoring its `"disabled": true`) to the Copilot host, outside the committed `.copilot`
    policy. Tests used session-scoped `--disable-mcp-server` flags. *Proposed fix*: document in
-   dev-guide 09 (now dev-guide 02) and decide whether `.mcp.json` should carry a no-Copilot note
+   dev-guide 09 (now `docs/dev-guide/how-to/connect-copilot-cli.md`) and decide whether `.mcp.json` should carry a no-Copilot note
    or the entries move to untracked local config.
 3. **Copilot CLI lists `.claude/agents/*` (build subagents) as invocable custom agents** —
    the build layer leaks into the product host surface on a dev checkout. Document, or accept.
@@ -286,7 +286,7 @@ time. Run 2 proves the committed file itself now loads:
 
 ### Findings 2–3 (`7123c25`) — documented, confirmed
 
-`docs/dev-guide/09-copilot-cli-end-to-end.md` (now `docs/dev-guide/02-connect-your-editor.md`)
+`docs/dev-guide/09-copilot-cli-end-to-end.md` (now `docs/dev-guide/how-to/connect-copilot-cli.md`)
 "Known behaviors" (`.mcp.json` read as workspace
 MCP config incl. ignoring `"disabled": true`; `.claude/agents/*` listed as invocable) and
 `docs/runbooks/pilot-checklist.md` (build-tooling leak note, absent from team repos). Both

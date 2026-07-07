@@ -421,8 +421,8 @@ provenance is required; `kb_search` is the preferred first stop.
   to `review_panel` or any registry table, and never calls a model or
   triggers computation. **Known limitation:** this only works when
   `DATABASE_URL` and `REVIEW_PANEL_DATABASE_URL` point at the same Postgres
-  database (`docs/dev-guide/05-database-operations.md` §"review_panel drafts
-  list" already flags they are not always the same); when the `review_panel`
+  database (`docs/dev-guide/reference/database.md`, on the `review_panel`
+  schema, already flags they are not always the same); when the `review_panel`
   schema/table is absent (a different database, or review-panel has never run)
   the call fails as an unexpected error, ledgered `status="error"` — distinct
   from the clean `found=false` "no draft yet" case. Every call writes exactly

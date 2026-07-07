@@ -6,7 +6,7 @@ The panel needs exactly one capability (system+user -> text), so the port is one
 and the adapters are raw JSON calls; no SDK dependency.
 
 Accepted LLM_PROVIDER values — this is the EXACT set, kept in sync with
-docs/dev-guide/07-providers-and-api-keys.md and pinned by a drift test
+docs/dev-guide/how-to/switch-llm-providers.md and pinned by a drift test
 (tests/unit/test_model_client.py):
 - `groq` | `openai` | `openai_compatible` | `ollama` -> OpenAI-compatible chat.completions
   (`OpenAICompatModelClient`).

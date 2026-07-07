@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/bootstrap.sh — fresh-machine onboarding (docs/dev-guide/01-run-the-platform.md).
+# scripts/bootstrap.sh — fresh-machine onboarding (docs/dev-guide/getting-started.md).
 #
 # One command, ~2-3 minutes: fresh clone -> synced dependencies -> a migrated Postgres
 # database -> an ACTIVE, queryable knowledge base -> a real zero-LLM retrieval check ->
@@ -16,8 +16,8 @@
 # Env overrides (all optional): DB_NAME, PGHOST, PGPORT, PGUSER.
 #
 # What it does NOT do: touch services/ source code, read or print any secret, or require
-# network access / credentials on the default path. See docs/dev-guide/01-run-the-platform.md
-# for the walkthrough and docs/dev-guide/08-troubleshooting.md for the symptom -> fix table.
+# network access / credentials on the default path. See docs/dev-guide/getting-started.md
+# for the walkthrough and docs/dev-guide/how-to/troubleshoot.md for the symptom -> fix table.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -188,24 +188,25 @@ Next steps:
   2. Connect a host to it:
        - VS Code + GitHub Copilot: already wired via .vscode/mcp.json (points at
          http://127.0.0.1:${MCP_PORT}/mcp/) — open the folder, start the "context-broker"
-         connection, switch Copilot Chat to Agent mode. See docs/dev-guide/02-connect-your-editor.md
-         for the click-by-click version.
+         connection, switch Copilot Chat to Agent mode. See
+         docs/dev-guide/how-to/connect-vscode.md for the click-by-click version.
        - OpenCode: copy .opencode/ to your project root, set the broker URL in
          opencode.json to http://127.0.0.1:${MCP_PORT}/mcp/ and export CONTEXT_BROKER_TOKEN
-         (any non-empty value in local-dev mode). See .opencode/README.md.
+         (any non-empty value in local-dev mode). See docs/dev-guide/how-to/connect-opencode.md.
        - GitHub Copilot CLI / cloud agent: use .copilot/mcp/repository-settings.json (repo
          settings) or .copilot/mcp/vscode-mcp.json (already = .vscode/mcp.json). See
-         .copilot/README.md and docs/dev-guide/02-connect-your-editor.md.
+         docs/dev-guide/how-to/connect-copilot-cli.md.
 
   3. Run the eval suite:  make eval-all
-     (T1/T2 need TEST_DATABASE_URL / DATABASE_URL — see docs/dev-guide/22-testing-and-builds.md;
-     tiers that need creds you don't have just SKIP with a stated reason, they don't fail.)
+     (T1/T2 need TEST_DATABASE_URL / DATABASE_URL — see
+     docs/dev-guide/contributors/testing-and-builds.md; tiers that need creds you don't
+     have just SKIP with a stated reason, they don't fail.)
 
   4. Want doc/wiki/ticket summaries too, not just code? That needs a chat model (a Groq key
      is cheap/fast): add LLM_PROVIDER=groq, LLM_API_KEY=..., LLM_MODEL=... to a repo-root
      .env (never committed — see .gitignore), then re-run:  ./scripts/bootstrap.sh --with-docs
      (this script never reads or prints the key's value — only whether it's present.)
 
-Full walkthrough (this script, serving, rebuilds): docs/dev-guide/01-run-the-platform.md
-Something not behaving as described: docs/dev-guide/08-troubleshooting.md
+Full walkthrough (this script, serving, first questions): docs/dev-guide/getting-started.md
+Something not behaving as described: docs/dev-guide/how-to/troubleshoot.md
 EOF

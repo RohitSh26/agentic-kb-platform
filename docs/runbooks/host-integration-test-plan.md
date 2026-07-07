@@ -22,7 +22,7 @@
 |---|---|---|
 | Copilot CLI | **installed** (1.0.63), `gh` authed (account live-verified against this server in June) | none — runnable today |
 | OpenCode | not installed | one install command + Groq provider config (key already in `.env`, per standing directive) |
-| MCP server + active KB | ready (`agentic_kb_full`, clean, p50 0.93s) | start server per dev-guide 01 §"Serve it" |
+| MCP server + active KB | ready (`agentic_kb_full`, clean, p50 0.93s) | start server per docs/dev-guide/getting-started.md |
 | Committed host configs | `.copilot/mcp/repository-settings.json` = `[get_task_context, kb_search]`; `.opencode/` full rendering | none — the test MUST use these, never ad-hoc config |
 
 ## 3. Test matrix — two hosts × five layers

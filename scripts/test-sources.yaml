@@ -1,4 +1,4 @@
-# Real-source test config (dev-guide 04-review-drafts). GitHub code is zero-LLM (graphify);
+# Real-source test config (docs/dev-guide/how-to/index-your-own-sources.md). GitHub code is zero-LLM (graphify);
 # github_doc / azure_wiki / ado_card go through wikify (LLM). Run with:
 #   --backend production   (GITHUB_TOKEN + ADO_PAT in the environment)
 version: 1
@@ -32,7 +32,7 @@ sources:
       - "docs/adr/0013-kb-version-membership-and-identity-over-time.md"
       - "docs/adr/0017-local-search-projection-parity.md"
       - "docs/architecture/00-overview.md"
-      - "docs/dev-guide/06-end-to-end-walkthrough.md"
+      - "docs/dev-guide/getting-started.md"
       - "README.md"
     auth:
       token_env: GITHUB_TOKEN

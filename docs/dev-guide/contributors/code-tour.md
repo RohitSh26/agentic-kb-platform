@@ -1,11 +1,12 @@
-# 21 — Code tour
+# Code tour
 
-> **Point in time: 2026-07-07** (migration head `0021`, MCP schema `1.12.0`). A code tour ages;
+> **Point in time: 2026-07-07** (migration head `0023`, MCP schema `1.12.0`). A code tour ages;
 > this one is dated so it can age honestly. Trust the *structure* — which subsystem lives where,
 > what talks to what — over the specifics, and verify any load-bearing detail against the code.
 
 > A guided walk through the code, organized by subsystem. Read
-> [20 — Architecture for contributors](20-architecture-for-contributors.md) first for the *why*;
+> [the architecture overview](../../architecture/00-overview.md) and the
+> [explanation pages](../explanation/how-your-knowledge-base-is-built.md) first for the *why*;
 > this document is the *how* and *where*. Paths are repo-relative; line numbers drift, so prefer
 > the named symbols. PR/ADR numbers appear as provenance — where a behavior came from — not as a
 > reading order.
@@ -15,12 +16,12 @@
 ```
 services/kb-builder   the nightly build: connectors → build engine → docify/graphify → linker →
                       alias miner → indexing. Owns the Knowledge Registry: SQLAlchemy models +
-                      Alembic migrations (head: 0021).
-services/mcp-server   the runtime plane: auth, telemetry, the 12-tool Context Broker surface,
+                      Alembic migrations (head: 0023).
+services/mcp-server   the runtime plane: auth, telemetry, the 13-tool Context Broker surface,
                       tracing, health.
 services/review-panel the dev-gated review draft engine (ADR-0031): LangGraph fan-out of the four
                       reviewer lenses → reconcile → one stored draft. Owns only the dedicated
-                      `review_panel` schema. Operations: dev-guide 04.
+                      `review_panel` schema. Operations: tutorials/04-review-a-pull-request.md.
 docs/contracts/       markdown cross-service contracts — the only thing the services share
 agents/               the 12 product runtime agent manifests (not Claude Code agents)
 evals/                dev-only uv project: benchmark cases + harness + the consolidated tiered
@@ -247,7 +248,7 @@ are opt-in by env var: `RELATIONSHIP_JUDGE` (any non-empty value hands the phase
 model; unset ⇒ candidates are generated but never judged) and `EMBEDDINGS_PROVIDER` (validated —
 `ollama` or `openai`, selecting `OllamaEmbedder` or `OpenAIEmbedder` via `embeddings/factory.py`
 for the ADR-0019 semantic-linker pass; unset ⇒ that pass is skipped; any other value fails the
-build loudly — see [07 §3](07-providers-and-api-keys.md#3-embeddings)).
+build loudly — see the [environment-variable reference](../reference/environment-variables.md)).
 
 Flags: `--backend {local,production}` (default `local`; `production` selects the GitHub/ADO
 factory of §4), `--validate-only` (config pre-flight only — no DB, no network; exit 0/1),
@@ -488,7 +489,8 @@ into an already-secured, already-observable server.
   client secret at all. The test seam is fastmcp's `TokenVerifier` base class: tests inject a
   `FakeVerifier`; fastmcp wraps the `/mcp` endpoint in `RequireAuthMiddleware`, so requests
   without a valid token get 401 before any tool or middleware runs. (The opt-in, loopback-only
-  local-dev verifier is ADR-0016 — see dev-guide 01 §"Server configuration reference".)
+  local-dev verifier is ADR-0016 — see the
+  [environment-variable reference](../reference/environment-variables.md).)
 - `telemetry/middleware.py` — one structured line per tool call:
   `event=mcp_request tool=... agent=... run_id=... latency_ms=... status=ok|error`. The agent is
   the verified token's subject (never a client-asserted field); `run_id` is read from the
@@ -501,8 +503,9 @@ into an already-secured, already-observable server.
   200 + the active `kb_version` (invariant 5: MCP serves the last successful active version),
   or 503 with `active_kb_version: null` when no build has been activated yet.
 - `config.py` — env-only configuration (`DATABASE_URL`, `MCP_ENTRA_TENANT_ID`,
-  `MCP_ENTRA_AUDIENCE` required; see dev-guide 01 §"Server configuration reference" for the full
-  table). Identifiers, not secrets.
+  `MCP_ENTRA_AUDIENCE` required; see the
+  [environment-variable reference](../reference/environment-variables.md) for the full table).
+  Identifiers, not secrets.
 
 Tests (`services/mcp-server/tests/`) exercise the boundary at the right layer: auth tests
 (`tests/integration/`) go through the real HTTP app in-process (httpx ASGI transport — the
@@ -584,7 +587,7 @@ configured; `none` ⇒ null sink; anything else fails the boot) and hands a cons
 through `BrokerDeps.trace_sink`. `get_task_context` emits one root span + one span per node,
 `kb_search` one span per call, into the registry's `trace_span` table (migration 0021) — after the
 call's own work is done, fail-soft, never budget-charging. Contract: `docs/contracts/tracing.md`;
-operator queries: dev-guide [06](06-observability.md).
+operator queries: [how-to/query-traces-and-the-ledger.md](../how-to/query-traces-and-the-ledger.md).
 
 **The governed tools:**
 
@@ -715,7 +718,7 @@ never runs Alembic (kb-builder owns the schema) and never requires Azure.
   `RunRecord` dataclasses; `metrics.py` computes the eleven §13 metrics DB-free (build-plane
   metrics emit `not_measured` with null values, never faked); `baseline.py` diffs against the
   committed `baseline.json` (±5% relative ⇒ improved/regressed, else flat); `dashboard.py` is the
-  ADR-0014 renderer behind `make dashboard` (dev-guide [06](06-observability.md)).
+  ADR-0014 renderer behind `make dashboard` ([how-to/read-the-dashboard.md](../how-to/read-the-dashboard.md)).
 - `run.py` — the T1 entrypoint (`make eval-run`); writes `report.json` (gitignored), prints the
   table the `eval-runner` Claude Code subagent reads, `--update-baseline` reseeds the baseline.
 - `run_all.py` — the **consolidated tiered runner** (`make eval-all`): T1 golden sets, T2 live-KB
@@ -783,8 +786,8 @@ agent files** (the twelve roles + `_template`) and the **two** framework skills
   canon's native tools), `skills/*.md` as host-neutral instruction modules, and
   `mcp/repository-settings.json` (`$COPILOT_MCP_CONTEXT_BROKER_TOKEN`,
   **`tools: ["get_task_context", "kb_search"]`**) + `mcp/vscode-mcp.json`
-  (`${input:context-broker-token}`). See dev-guide
-  [02](02-connect-your-editor.md) for using it.
+  (`${input:context-broker-token}`). See
+  [how-to/connect-copilot-cli.md](../how-to/connect-copilot-cli.md) for using it.
 - `.opencode/` — `agents/*.md` (OpenCode frontmatter: `description`, `mode` — orchestrator
   `primary`, specialists `subagent` — and a `tools` map enabling `context-broker_kb_search` plus
   the native tools), `skills/<name>/SKILL.md`, and `opencode.json` (remote MCP entry with
@@ -819,7 +822,8 @@ subprocess (exit 0 on this repo, exit 1 on seeded tool drift or a literal-lookin
 ## 16. Review-panel draft engine (`services/review-panel`, PR-40)
 
 The third service (ADR-0030 §3 as amended by ADR-0031), summarized here for the tour — the
-operations guide is [04 — Review drafts](04-review-drafts.md) and the contract is
+operations guide is [tutorials/04-review-a-pull-request.md](../tutorials/04-review-a-pull-request.md)
+and the contract is
 `docs/contracts/review-panel.md`:
 
 - **One bounded job per PR**: a LangGraph fan-out of the four reviewer lenses (each one LLM call
@@ -868,11 +872,6 @@ Verified against the tree as of 2026-07-05 — recorded follow-ups, not forgotte
 - **A run-owner/orchestrator ledger view** — `ledger.list_retrievals` is subject-scoped (each
   agent sees only its own events); the cross-subject view for a run's owner is a recorded
   follow-up.
-- **An MCP fetch tool for review drafts** (the PR-41 candidate) — today the CLI is the fetch path
-  (§16); the in-session `code_reviewer` reads drafts through it.
-- **`get_task_context` in the role grants** — the tool is registered and shipped, but no agent
-  manifest (and neither host rendering) grants it yet; wiring it into the roster is an open
-  decision, not an accident.
 - **Graph-corroborated `deterministic`-tier `kb_search` hits** — the `confidence_tier` field is
   the declared extension point, but every keyword-ranked hit is `interpreted` today.
 - **A true per-task `kb_search` budget boundary** — the window is per (MCP session, subject), so
@@ -882,7 +881,7 @@ Verified against the tree as of 2026-07-05 — recorded follow-ups, not forgotte
 ## 19. Reading order for a new dev
 
 1. `docs/architecture/00-overview.md` (15 min) — the blueprint.
-2. [20 — Architecture for contributors](20-architecture-for-contributors.md) — the invariants and why.
+2. The [explanation pages](../explanation/how-your-knowledge-base-is-built.md) — the invariants and why.
 3. `services/kb-builder/src/agentic_kb_builder/domain/` — the vocabulary.
 4. `services/kb-builder/src/agentic_kb_builder/application/build_runner.py` top-to-bottom — the
    spine everything hangs on.

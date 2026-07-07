@@ -4,7 +4,7 @@
 - Date: 2026-06-16
 - Deciders: Rohit Sharma
 - Related: `agents/orchestrator.md` + subagents, ADR-0009 (portable agent framework),
-  the MCP retrieval ledger, dev-guide 03 (using the knowledge tools)
+  the MCP retrieval ledger, docs/dev-guide/reference/tools.md
 
 ## Context
 

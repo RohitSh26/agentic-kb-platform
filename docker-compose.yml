@@ -1,7 +1,7 @@
 # Local spin-up of the whole system (PR-17): Postgres (the truth store), a
 # one-shot kb-builder migration job (it owns the schema — ADR-0008), and the
 # MCP Context Broker. This is a local convenience, not the deployment story —
-# that is infra/ (Azure). Guide: docs/dev-guide/22-testing-and-builds.md §Docker.
+# that is infra/ (Azure). Guide: docs/dev-guide/contributors/testing-and-builds.md §Docker.
 #
 # The Entra values are identifiers, never secrets; the placeholders boot the
 # stack, but no bearer token verifies until you set a real tenant (auth is
@@ -50,8 +50,9 @@ services:
   #
   # It reuses the kb-builder image, mounts the repo read-only at /workspace for
   # the local-FS fetch backend + git-metadata connector, and reaches an Ollama
-  # running on the HOST (host.docker.internal) for wikify — point LLM_* elsewhere
-  # to use a hosted provider (docs/dev-guide/04 §4). Build activation is the CLI
+  # running on the HOST (host.docker.internal) for docify — point LLM_* elsewhere
+  # to use a hosted provider (docs/dev-guide/how-to/switch-llm-providers.md). Build
+  # activation is the CLI
   # default; pass nothing to activate, --no-activate to skip.
   kb-build:
     profiles: ["build"]

@@ -196,7 +196,7 @@ hand-written fixture rows) — that is what T2's probe adds, and it is a genuine
 of this consolidation (see §4).
 
 **Where it runs / what it needs:** `DATABASE_URL` pointing at a locally built KB (see
-`docs/dev-guide/22-testing-and-builds.md` §5 "Run a local build"). Both checks are
+`docs/dev-guide/getting-started.md`). Both checks are
 **read-only** with respect to KB content: the alias script only executes `SELECT`s
 (`harness.alias`/`agentic_kb_builder.alias.resolve` never write); the latency probe calls the real
 broker tool, which writes exactly one `retrieval_event` ledger row per call (the broker's only

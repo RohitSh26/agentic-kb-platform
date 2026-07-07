@@ -148,8 +148,8 @@ only if a newer commit landed after the last draft computation.
   head_sha])` — the developer's agent falls back to reviewing cold (ADR-0031 Decision §4). A
   genuinely unexpected read failure (most likely: `DATABASE_URL` and `REVIEW_PANEL_DATABASE_URL`
   point at different databases, so the `review_panel` schema/table is simply absent from
-  mcp-server's connection — see `docs/dev-guide/05-database-operations.md` §"review_panel drafts
-  list") is a distinct case: a tool error, ledgered `status="error"`.
+  mcp-server's connection — see `docs/dev-guide/reference/database.md` on the `review_panel`
+  schema) is a distinct case: a tool error, ledgered `status="error"`.
 - **No `kb_search` budget charge.** Fetching an already-computed draft is not knowledge retrieval
   — recorded explicitly so a future reader does not "fix" this into the budgeted path by analogy
   with `kb_search`/`get_task_context`. The only gates are authentication (every MCP tool requires

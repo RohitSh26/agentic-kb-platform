@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Copilot CLI runner — T2/T3/T4 of docs/runbooks/host-integration-test-plan.md.
 #
-# Policy source: the COMMITTED .copilot/mcp/repository-settings.json (the two-tool
+# Policy source: the COMMITTED .copilot/mcp/repository-settings.json (the tool
 # allowlist). The Copilot CLI cannot consume that file in place, so — exactly as
-# dev-guide 02-connect-your-editor §3 documents — its native ~/.copilot/mcp-config.json is GENERATED
+# docs/dev-guide/how-to/connect-copilot-cli.md documents — its native ~/.copilot/mcp-config.json is GENERATED
 # from the committed file, changing only the URL (local broker) and the bearer
 # (any non-empty value under ADR-0016 local-dev auth). The pre-existing user
 # config is backed up and restored on exit.

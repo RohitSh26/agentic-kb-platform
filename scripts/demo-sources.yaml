@@ -1,4 +1,4 @@
-# Hermetic local-demo source config (dev-guide 04-review-drafts).
+# Hermetic local-demo source config (docs/dev-guide/reference/cli.md documents `make demo`).
 # The one entry below intentionally matches NO files, so the LLM-backed wikify
 # pipeline never runs and the whole demo is ZERO-LLM (Postgres + uv only — no
 # Ollama, no Azure). All demo content comes from the git_metadata connector,

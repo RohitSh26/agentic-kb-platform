@@ -24,8 +24,8 @@ its native config is **generated from** the committed one, substituting only the
 (and, for local-dev auth per ADR-0016, a placeholder bearer):
 
 - **Copilot CLI**: `~/.copilot/mcp-config.json` is generated from
-  `.copilot/mcp/repository-settings.json` exactly as dev-guide 02 §Copilot CLI documents (the committed
-  two-tool allowlist is preserved verbatim). The pre-existing user file is backed up to the
+  `.copilot/mcp/repository-settings.json` exactly as docs/dev-guide/how-to/connect-copilot-cli.md documents
+  (the committed tool allowlist is preserved verbatim). The pre-existing user file is backed up to the
   evidence dir and restored on exit. The committed agent renderings `.copilot/agents/*.agent.md`
   are installed to `~/.copilot/agents/` (the user-level discovery location named in
   `.copilot/README.md`) with one generation transform — the frontmatter `description:` value is

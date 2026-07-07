@@ -204,7 +204,7 @@ def run_t2(
     if not database_url:
         reason = (
             "DATABASE_URL not set (needs a locally built KB — "
-            "docs/dev-guide/22-testing-and-builds.md 'Running an end-to-end build locally')"
+            "docs/dev-guide/getting-started.md)"
         )
         return TierResult(
             "T2",
