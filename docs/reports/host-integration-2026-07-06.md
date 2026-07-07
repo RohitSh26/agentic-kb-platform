@@ -6,11 +6,22 @@
 > `docs/architecture/evaluation-system.md`: verbatim failures, skip-with-reason, flakes counted
 > separately, no waivers. Date: 2026-07-06.
 
-**GATE VERDICT: FAIL — pilot may not start yet.** The Copilot CLI lane passed the full matrix
+## CURRENT GATE VERDICT: **PASS — pilot cleared** (run 2, same day)
+
+Two runs were needed; **run 2 (post-fix, "Run 2" section below) is the standing verdict**:
+Copilot CLI **10/10** with the committed orchestrator active; both code fixes verified through the
+real hosts; OpenCode mechanically green with **one scoped condition** — OpenCode users configure a
+strong host model (no Groq free-tier model passed agent discipline; 4 tested, 3 documented failure
+modes). Everything below this line is the preserved run-by-run record.
+
+---
+
+**GATE VERDICT (run 1 — SUPERSEDED by run 2): FAIL — pilot may not start yet.** The Copilot CLI
+lane passed the full matrix
 (13/13 after one committed-config finding was worked around at install time). The OpenCode lane
 passed discovery, single-tool correctness, and governance (T2/T3/T5 = 100%) but **failed T4 agent
 discipline on both Groq models tested**, with two different, well-characterized failure modes
-(findings 5–6). Issues are filed below; the matrix re-runs on their fixes.
+(findings 5–6). Issues were filed below; the matrix re-ran on their fixes (run 2) and passed.
 
 ## Setup
 
