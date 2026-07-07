@@ -21,6 +21,10 @@ from agentic_mcp_server.mcp.tool_schemas import (
     RequestMoreResponse,
     RequestMoreStatus,
 )
+from agentic_mcp_server.mcp.tool_schemas.review_draft import (
+    GetReviewDraftRequest,
+    GetReviewDraftResponse,
+)
 from agentic_mcp_server.mcp.tool_schemas.task_context import (
     AmbiguousCandidate,
     GetTaskContextRequest,
@@ -40,6 +44,7 @@ EXPECTED_TOOLS = {
     "context.create_change_pack",
     "kb_search",
     "get_task_context",
+    "get_review_draft",
 }
 
 
@@ -100,6 +105,40 @@ def test_get_task_context_accepts_a_bare_task_description() -> None:
         GetTaskContextRequest.model_validate(
             {"task_description": "x", "confidence_floor": "certain"}
         )
+
+
+def test_get_review_draft_accepts_a_bare_repo_and_pr_number() -> None:
+    """head_sha is optional (omitted => the newest stored draft)."""
+    request = GetReviewDraftRequest.model_validate({"repo": "acme/platform", "pr_number": 7})
+    assert request.head_sha is None
+    with_sha = GetReviewDraftRequest.model_validate(
+        {"repo": "acme/platform", "pr_number": 7, "head_sha": "abc123"}
+    )
+    assert with_sha.head_sha == "abc123"
+    with pytest.raises(ValidationError):
+        GetReviewDraftRequest.model_validate({"repo": "no-slash", "pr_number": 7})
+    with pytest.raises(ValidationError):
+        GetReviewDraftRequest.model_validate({"repo": "acme/platform", "pr_number": 0})
+    with pytest.raises(ValidationError):
+        GetReviewDraftRequest.model_validate({"repo": "acme/platform"})
+
+
+def test_get_review_draft_repo_and_head_sha_reject_log_injection_charsets() -> None:
+    # repo/head_sha land verbatim in structured logs and the ledger `details` —
+    # same guard as run_id/role.
+    for bad_repo in ("acme/platform extra", "acme/plat\nform", "acme/repo=1", "a/b/c"):
+        with pytest.raises(ValidationError):
+            GetReviewDraftRequest.model_validate({"repo": bad_repo, "pr_number": 1})
+    for bad_sha in ("sha 1", "sha\nstatus=ok", "sha=1"):
+        with pytest.raises(ValidationError):
+            GetReviewDraftRequest.model_validate(
+                {"repo": "acme/platform", "pr_number": 1, "head_sha": bad_sha}
+            )
+
+
+def test_get_review_draft_not_found_is_a_clean_envelope() -> None:
+    response = GetReviewDraftResponse.model_validate({"found": False})
+    assert response.draft is None
 
 
 def test_ambiguous_candidates_carry_at_least_two_candidates() -> None:

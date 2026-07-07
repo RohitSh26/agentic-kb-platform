@@ -30,9 +30,11 @@ passes; tool drift and literal-looking credentials fail.
 ## Namespace mapping
 
 ADR-0025 (KB-first, file-fallback) retired the mandatory `create_pack → expand → open_evidence →
-verify` broker flow. Exactly **one** canonical tool is still broker-mediated; the rest are host
-**native** tools restored directly to the agent — never routed through the broker, never gated by
-it. Renderings must tell the two apart, because they map completely differently:
+verify` broker flow. The broker-mediated canonical tools are `kb_search` (all roles),
+`get_task_context` (the four task-scoped BUILD roles), and `get_review_draft` (code_reviewer,
+PR-41); the rest are host **native** tools restored directly to the agent — never routed through
+the broker, never gated by it. Renderings must tell the two apart, because they map completely
+differently:
 
 | Canon (`agents/*.md`) | Kind | OpenCode (`tools` map / `opencode.json`) | Copilot (`tools` frontmatter list) |
 |---|---|---|---|

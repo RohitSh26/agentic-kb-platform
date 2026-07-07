@@ -30,6 +30,11 @@ from agentic_mcp_server.mcp.tool_schemas.ledger import (
     ListRetrievalsResponse,
     RetrievalEventRecord,
 )
+from agentic_mcp_server.mcp.tool_schemas.review_draft import (
+    GetReviewDraftRequest,
+    GetReviewDraftResponse,
+    ReviewDraftRecord,
+)
 from agentic_mcp_server.mcp.tool_schemas.search import (
     ConfidenceTier,
     KbSearchBudget,
@@ -81,6 +86,8 @@ __all__ = [
     "ExpandResponse",
     "GetNeighborsRequest",
     "GetNeighborsResponse",
+    "GetReviewDraftRequest",
+    "GetReviewDraftResponse",
     "GetTaskContextRequest",
     "GetTaskContextResponse",
     "GraphNeighbor",
@@ -105,6 +112,7 @@ __all__ = [
     "ResolutionSource",
     "ResolvedScope",
     "RetrievalEventRecord",
+    "ReviewDraftRecord",
     "ScopeEntity",
     "TaskContextBudget",
     "TaskContextHints",

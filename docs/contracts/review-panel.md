@@ -120,7 +120,46 @@ uv run review-panel draft <owner/repo> <pr-number>
 - stdout carries ONLY the JSON document; structured logs go to stderr. Exit 0 on success, 1 on
   failure. `scripts/run_review_panel_local.sh` wraps this command. There is **no auto-triggering
   GitHub Actions workflow** (ADR-0031: trigger is on-demand; a non-posting CI precompute is a
-  later decision). The MCP fetch tool is PR-41, in mcp-server.
+  later decision). The MCP fetch tool is PR-41, in mcp-server (below).
+
+## Fetching drafts over MCP (PR-41)
+
+Hosts without a shell (VS Code Copilot chat) fetch a stored draft through the Context Broker's
+`get_review_draft` MCP tool instead of the CLI — full request/response contract:
+`docs/contracts/mcp-tools-contract.md`. The two paths answer the SAME question two different
+ways and intentionally diverge on one point: the CLI resolves the PR's *current* head SHA via a
+live (read-only) GitHub call before looking up the draft; `get_review_draft` never calls GitHub
+at all (mcp-server holds no GitHub credential and this tool's whole point is to stay Postgres-only)
+— an omitted `head_sha` instead returns the **newest stored** draft for `(repo, pr_number)`, which
+is the current head's draft whenever the panel has already run for it, and a slightly stale one
+only if a newer commit landed after the last draft computation.
+
+- **Read-only, compute-never (the same dev gate, from the other side).** `get_review_draft`
+  `SELECT`s the `review_panel.review_draft` table this contract owns; it never inserts, updates,
+  or triggers `compute_draft`. review-panel remains the schema's sole writer. This is the SAME
+  cross-schema READ posture mcp-server already has on the kb-builder-owned Knowledge Registry
+  (a reader service that does not own the schema it reads) — mcp-server duplicates only the tiny
+  row shape from the Draft table above (`draft_key`, `repo`, `pr_number`, `head_sha`, `draft`,
+  `created_at`) as a plain dataclass; it does not import `review_panel` Python code or its
+  `ReviewDraft` pydantic model (ADR-0008). The inner `draft` jsonb document is returned to the MCP
+  caller **verbatim** — mcp-server does not parse, validate, or reshape the `review_draft_v1`
+  shape; that schema stays owned here.
+- **No draft yet is not an error.** `{found: false}` when no row matches `(repo, pr_number[,
+  head_sha])` — the developer's agent falls back to reviewing cold (ADR-0031 Decision §4). A
+  genuinely unexpected read failure (most likely: `DATABASE_URL` and `REVIEW_PANEL_DATABASE_URL`
+  point at different databases, so the `review_panel` schema/table is simply absent from
+  mcp-server's connection — see `docs/dev-guide/05-database-operations.md` §"review_panel drafts
+  list") is a distinct case: a tool error, ledgered `status="error"`.
+- **No `kb_search` budget charge.** Fetching an already-computed draft is not knowledge retrieval
+  — recorded explicitly so a future reader does not "fix" this into the budgeted path by analogy
+  with `kb_search`/`get_task_context`. The only gates are authentication (every MCP tool requires
+  an authenticated session) and the client-scope check (`context.read`, additive, opt-in per
+  client — `docs/contracts/mcp-tools-contract.md`).
+- **Authorization (v1 scope).** Any authenticated requester may fetch any draft in v1 — this
+  platform instance is single-team/local scope, so there is no per-repo or per-team ACL on
+  `review_draft` rows the way `knowledge_artifact.acl_teams` gates registry artifacts. A
+  multi-team deployment sharing one `review_panel` schema across repos with different visibility
+  needs a draft-level ACL; that is a recorded **layer-2 item**, not solved by PR-41.
 
 ## Panelist output schema
 

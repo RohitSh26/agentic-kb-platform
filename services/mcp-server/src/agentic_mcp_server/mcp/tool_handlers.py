@@ -41,6 +41,9 @@ from agentic_mcp_server.context_broker import (
     kb_search as kb_search_mod,
 )
 from agentic_mcp_server.context_broker import (
+    review_draft as review_draft_mod,
+)
+from agentic_mcp_server.context_broker import (
     task_context as task_context_mod,
 )
 from agentic_mcp_server.context_broker.dependencies import (
@@ -67,6 +70,7 @@ from agentic_mcp_server.mcp.tool_schemas.context import (
 )
 from agentic_mcp_server.mcp.tool_schemas.graph import GetNeighborsRequest
 from agentic_mcp_server.mcp.tool_schemas.ledger import ListRetrievalsRequest
+from agentic_mcp_server.mcp.tool_schemas.review_draft import GetReviewDraftRequest
 from agentic_mcp_server.mcp.tool_schemas.search import KbSearchRequest
 from agentic_mcp_server.mcp.tool_schemas.task_context import GetTaskContextRequest
 from agentic_mcp_server.mcp.tool_schemas.verification import (
@@ -194,6 +198,13 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         # request escape hatch), so no per-window budget key is needed here.
         return await task_context_mod.get_task_context(deps, request, current_requester())
 
+    async def get_review_draft(request: GetReviewDraftRequest) -> McpModel:
+        _client("get_review_draft")
+        # Read-only, compute-never (PR-41, ADR-0031): identity binds to the
+        # authenticated session; no budget window — fetching a stored draft is
+        # not knowledge retrieval (docs/contracts/review-panel.md).
+        return await review_draft_mod.get_review_draft(deps, request, current_requester())
+
     async def platform_trust(request: PlatformTrustRequest) -> McpModel:
         # Official-client gate: trusted ONLY for a verification_required client with a
         # valid, client-matched, passing receipt; structured denial otherwise; a
@@ -217,6 +228,7 @@ def make_handlers(deps: BrokerDeps) -> dict[str, HandlerFn]:
         "context.create_change_pack": create_change_pack,
         "kb_search": kb_search,
         "get_task_context": get_task_context,
+        "get_review_draft": get_review_draft,
     }
     handlers: dict[str, HandlerFn] = {}
     for tool_name, handler in raw_handlers.items():

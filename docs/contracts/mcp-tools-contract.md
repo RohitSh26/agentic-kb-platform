@@ -3,7 +3,7 @@
 > Versioned tool surface served by mcp-server. Schema before code: every tool
 > has a frozen pydantic request/response model (`extra="forbid"`) in
 > `services/mcp-server/src/agentic_mcp_server/mcp/tool_schemas/`, registered in
-> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.10.0"` (1.1.0 = PR-13:
+> `mcp/tool_registry.py`. `MCP_SCHEMA_VERSION = "1.11.0"` (1.1.0 = PR-13:
 > `authorization` decision on every retrieval response, `injection_*` markers
 > on cards and expansions; 1.2.0 = PR-18: `read_pack.role` opened from the
 > closed six-role enum to a free-form charset-guarded string — response
@@ -57,7 +57,18 @@
 > resolution returns `ambiguous_candidates` + `open_questions`, never a silent
 > guess. Zero LLM at query time: the backend is a LangGraph StateGraph of four
 > parallel pure-retrieval nodes, a synthesis node, and ONE broadened retry on
-> empty scope. Additive: no existing tool changes.
+> empty scope. Additive: no existing tool changes; 1.11.0 = PR-41 (ADR-0031):
+> adds `get_review_draft` — fetch the review-panel's stored draft for a pull
+> request (`repo`, `pr_number`, optional `head_sha`; omitted ⇒ the newest
+> stored draft for that PR). Read-only and compute-never: the tool NEVER
+> triggers draft computation — the `review_panel` Postgres schema stays owned
+> and exclusively written by `services/review-panel`
+> (`docs/contracts/review-panel.md`); mcp-server only ever `SELECT`s it, over
+> its own existing Postgres connection, schema-qualified. No draft yet is a
+> clean `{found: false}` response, never a tool error. Carries **no**
+> `kb_search`-style budget charge (fetching a stored draft is not knowledge
+> retrieval) — the only gates are authentication (same as every other tool)
+> and the client-scope check. Additive: no existing tool changes.
 
 ## The V1 tools
 
@@ -75,6 +86,7 @@
 | `context.create_change_pack` | BUILD-lane selector: the small file set (target/test/dependency) to edit for a code-change task |
 | `kb_search` | ADR-0025 KB-first retrieval: one budgeted, ACL-filtered ranked search over the active KB |
 | `get_task_context` | One-call task context (ADR-0030): resolved scope + blast radius + conventions + similar prior changes, tiered, cited, budgeted |
+| `get_review_draft` | Fetch the review-panel's stored draft for a pull request (ADR-0031); read-only, compute-never; clean not-found envelope |
 
 There is **no unrestricted** KB search tool in V1. `kb_search` (1.9.0, ADR-0025)
 is deliberately simple to *call* — a bare `{"query": ...}` is its entire request —
@@ -129,6 +141,12 @@ provenance is required; `kb_search` is the preferred first stop.
   order is hints → alias index (`alias_reference` artifacts, PR-38 — the tool
   degrades gracefully to plain search when the KB predates PR-38 or an alias
   row's `body_text` JSON is unparseable) → keyword search fallback.
+- `get_review_draft`: `repo` (`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$` — an `owner/name`
+  slug; the charset guard is the same log-injection discipline as `run_id`),
+  `pr_number ≥ 1`, optional `head_sha` (same charset as `run_id`; omitted ⇒ the
+  newest stored draft for `(repo, pr_number)` — this tool never calls GitHub to
+  resolve a PR's *current* head SHA, unlike the review-panel CLI). No run/pack
+  handle; identity binds to the authenticated session.
 - `run_id` matches `^[A-Za-z0-9._-]{1,128}$` (log-injection guard).
 - `context.read_pack.role` is **free-form** — adopting teams name their own
   roles (`security_auditor` is as valid as `implementation`); the broker never
@@ -333,6 +351,36 @@ provenance is required; `kb_search` is the preferred first stop.
     and filtered by the requester's team ACL first; an unauthorized neighbor is
     dropped before it can reveal its connectivity (same rule as
     `graph.get_neighbors`), and suppressed ids are audit-logged.
+- `get_review_draft` returns `{found, draft}`. `found=false` ⇒ `draft` is
+  `null` — the clean not-found envelope (no draft computed yet for that PR),
+  never a tool error. `found=true` ⇒ `draft` is the stored row intact:
+  `{draft_key, repo, pr_number, head_sha, created_at, draft}`, where the inner
+  `draft` is the review-panel-owned `review_draft_v1` JSON document
+  (`docs/contracts/review-panel.md`) passed through **verbatim** — mcp-server
+  does not parse, validate, or reshape it (that schema is review-panel's, kept
+  in sync only through the contract, never by import, ADR-0008). Treat every
+  field inside it as untrusted retrieved content, the same discipline as every
+  other card/snippet field in this contract. Read-only: the tool `SELECT`s the
+  `review_panel.review_draft` table review-panel owns (cross-schema READ, same
+  posture as this server already reading the kb-builder-owned Knowledge
+  Registry) over mcp-server's own `DATABASE_URL` connection — it never writes
+  to `review_panel` or any registry table, and never calls a model or
+  triggers computation. **Known limitation:** this only works when
+  `DATABASE_URL` and `REVIEW_PANEL_DATABASE_URL` point at the same Postgres
+  database (`docs/dev-guide/05-database-operations.md` §"review_panel drafts
+  list" already flags they are not always the same); when the `review_panel`
+  schema/table is absent (a different database, or review-panel has never run)
+  the call fails as an unexpected error, ledgered `status="error"` — distinct
+  from the clean `found=false` "no draft yet" case. Every call writes exactly
+  one `retrieval_event` row (`tool_name="get_review_draft"`, `run_id="-"`,
+  `kb_version="-"` — this tool is not Knowledge-Registry-scoped,
+  `status="approved"` whether found or not, `status="error"` only on an
+  unexpected failure). Carries **no** budget charge: `kb_search`'s
+  call/token allowance is untouched by this tool (fetching a stored draft is
+  not knowledge retrieval). Visible to any authenticated requester in v1
+  (single-team local scope) — a multi-team ACL over drafts (mirroring
+  `team_acl_v1` on registry artifacts) is a recorded layer-2 item, not solved
+  here.
 - `ledger.list_retrievals` returns one record per retrieval event:
   `event_id`, `run_id`, `kb_version`, `agent_name`, `tool`, `status`,
   `cache_hit`, `tokens_returned`, `evidence_ids`, `created_at`. The non-run

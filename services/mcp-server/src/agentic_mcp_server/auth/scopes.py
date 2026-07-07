@@ -40,6 +40,9 @@ TOOL_REQUIRED_SCOPES: dict[str, str] = {
     # get_task_context (PR-39) is the same read-capability class: pure retrieval over
     # the active KB, so the one `context.read` grant covers the whole read path.
     "get_task_context": SCOPE_CONTEXT_READ,
+    # get_review_draft (PR-41) is a read too — over the review-panel-owned schema
+    # instead of the Knowledge Registry, but the same `context.read` capability class.
+    "get_review_draft": SCOPE_CONTEXT_READ,
     "graph.get_neighbors": SCOPE_GRAPH_READ,
     "ledger.list_retrievals": SCOPE_LEDGER_READ,
     "context.verify_answer": SCOPE_VERIFY,

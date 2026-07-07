@@ -133,9 +133,12 @@ partial run (that is what the `event=persistence_fallback` log line is warning y
 The intended flow (ADR-0031): the panel computes, **you** publish.
 
 1. **Get the draft** — run the CLI (above) and read the JSON, or have your in-session agent do it:
-   in Copilot/Claude chat, ask the `code_reviewer` agent to fetch and summarize the draft for a PR
-   (in v1 the CLI is the fetch path; a broker-served MCP fetch tool is the recorded PR-41
-   candidate).
+   in Copilot/Claude chat, ask the `code_reviewer` agent to fetch and summarize the draft for a
+   PR. On hosts with a shell (OpenCode) the CLI works directly; on hosts without one (VS Code
+   Copilot chat) the agent calls the `get_review_draft` MCP tool instead (`repo`, `pr_number`,
+   optional `head_sha`) — read-only, compute-never, and it returns a clean `{found: false}` when
+   no draft is ready yet rather than an error. Full contract:
+   [`docs/contracts/review-panel.md`](../contracts/review-panel.md) §"Fetching drafts over MCP".
 2. **Edit it** — `summary_markdown` and each finding's `suggested_comment` are written to be
    edited. The verdict is advisory; drop or reword anything you disagree with.
 3. **Publish under your own auth** — from your own session, e.g.:

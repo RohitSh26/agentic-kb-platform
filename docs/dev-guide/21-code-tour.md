@@ -1,6 +1,6 @@
 # 21 — Code tour
 
-> **Point in time: 2026-07-07** (migration head `0021`, MCP schema `1.10.0`). A code tour ages;
+> **Point in time: 2026-07-07** (migration head `0021`, MCP schema `1.11.0`). A code tour ages;
 > this one is dated so it can age honestly. Trust the *structure* — which subsystem lives where,
 > what talks to what — over the specifics, and verify any load-bearing detail against the code.
 
@@ -71,14 +71,16 @@ Build-plane schemas, all under `services/kb-builder/src/agentic_kb_builder/`:
 Runtime-plane schemas, under `services/mcp-server/src/agentic_mcp_server/mcp/`:
 
 - `tool_schemas/` — the Context Broker tool contracts, mirrored in
-  `docs/contracts/mcp-tools-contract.md` (`MCP_SCHEMA_VERSION` **1.10.0**). `base.py` holds
+  `docs/contracts/mcp-tools-contract.md` (`MCP_SCHEMA_VERSION` **1.11.0**). `base.py` holds
   `McpModel` (frozen, `extra="forbid"`, pinned `schema_version`); the request+response pairs cover
-  all **twelve** registered tools — the ten governed/graph/ledger tools that grew through PR-33
+  all **thirteen** registered tools — the ten governed/graph/ledger tools that grew through PR-33
   (`context.create_pack` with its optional `intent`, `read_pack`, `request_more`, `open_evidence`,
   `expand`, `create_change_pack`, `verify_answer`, `platform_trust`, `graph.get_neighbors` with
-  `trust_floor`/`include_inferred`, `ledger.list_retrievals`) plus the two ADR-0025/0030 additions:
-  **`kb_search`** (1.9.0, PR-37 — the whole request is one `query` string) and
-  **`get_task_context`** (1.10.0, PR-39). Policy is encoded in the schema itself:
+  `trust_floor`/`include_inferred`, `ledger.list_retrievals`) plus the three ADR-0025/0030/0031
+  additions: **`kb_search`** (1.9.0, PR-37 — the whole request is one `query` string),
+  **`get_task_context`** (1.10.0, PR-39), and **`get_review_draft`** (1.11.0, PR-41 — read-only,
+  compute-never fetch of a review-panel-computed draft; no budget charge). Policy is encoded in
+  the schema itself:
   `RequestMoreRequest` requires question/why_needed/decision_needed/already_checked/max_tokens (a
   bare `{"query": ...}` fails validation before any broker code runs — *for that tool*; `kb_search`
   is deliberately exactly that shape), denied responses must carry `denial_reason`,
@@ -512,8 +514,8 @@ lifespan's anyio cancel scope must enter/exit in one task.
 
 ## 11. Context Broker (`services/mcp-server/src/agentic_mcp_server/context_broker/`)
 
-The policy layer behind the tools. The surface is **twelve tools**
-(`docs/contracts/mcp-tools-contract.md`, `MCP_SCHEMA_VERSION` **1.10.0**) in two families:
+The policy layer behind the tools. The surface is **thirteen tools**
+(`docs/contracts/mcp-tools-contract.md`, `MCP_SCHEMA_VERSION` **1.11.0**) in three families:
 
 - **The preferred, everyday retrieval surface (ADR-0025 / ADR-0030):** `kb_search` (PR-37) and
   `get_task_context` (PR-39) — simple to call, hard-capped in code, no run/pack ceremony.
@@ -521,6 +523,9 @@ The policy layer behind the tools. The surface is **twelve tools**
   `request_more` / `open_evidence` / `expand` / `create_change_pack` / `verify_answer` /
   `platform_trust`, plus `graph.get_neighbors` and `ledger.list_retrievals`. Demoted from "the
   single retrieval path" to the deliberate provenance path — but fully registered and maintained.
+- **The dev-gated review path (ADR-0031):** `get_review_draft` (PR-41) — read-only, compute-never
+  fetch of a review-panel-computed draft; not knowledge retrieval, so it carries none of
+  `kb_search`'s budget machinery.
 
 Identity is always the authenticated session subject — `agent_name`/`role` request fields are
 correlation/view data only (since PR-18 `role` is free-form, charset-guarded because it lands in

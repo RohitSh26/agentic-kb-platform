@@ -47,6 +47,7 @@
     "code_reviewer": {
       "tools": {
         "context-broker_kb_search": true,
+        "context-broker_get_review_draft": true,
         "read": true,
         "grep": true
       }

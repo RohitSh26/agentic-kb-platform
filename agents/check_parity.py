@@ -637,12 +637,19 @@ class ParityChecker:
             self.copilot_dir / "mcp" / "repository-settings.json",
             self.copilot_dir / "mcp" / "vscode-mcp.json",
         )
+        # Vendored/generated dirs are NOT shipped policy: a local `npm install` under
+        # .opencode/ dumped node_modules there twice (2026-07-06/07) and its library
+        # files legitimately contain the word "secret" — scanning them produced 46
+        # false failures. The scan covers what the repo ships, not what a tool cached.
+        skip_dirs = {"node_modules", ".venv", "__pycache__", ".git"}
         parsed: dict[Path, object | None] = {}
         for tree in (self.opencode_dir, self.copilot_dir):
             if not tree.is_dir():
                 continue
             for path in sorted(tree.rglob("*")):
                 if not path.is_file():
+                    continue
+                if skip_dirs.intersection(part for part in path.parts):
                     continue
                 self.files_scanned += 1
                 # errors="replace" keeps the marker scan working on non-UTF-8 files

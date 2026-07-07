@@ -4,8 +4,10 @@ mcp-server never runs migrations, so these helpers insert via raw SQL into an
 externally migrated TEST_DATABASE_URL (kb-builder `make migrate-test-db`).
 """
 
+import json
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -23,6 +25,75 @@ from agentic_mcp_server.infrastructure.search.search_client import (
 from agentic_mcp_server.infrastructure.tracing.trace_sink import NullTraceSink, Span, TraceSink
 
 KB_VERSION = "kb-test"
+
+# PR-41 (ADR-0031): get_review_draft reads the review-panel-owned `review_panel`
+# schema cross-schema, exactly like this server already reads the kb-builder-owned
+# registry. That schema is bootstrapped by services/review-panel itself in
+# production (idempotent CREATE SCHEMA/TABLE IF NOT EXISTS,
+# infrastructure/draft_store.py) — mcp-server's suite must not import review-panel
+# code (ADR-0008) and must not depend on that service having run first, so this
+# mirrors the SAME idempotent DDL from docs/contracts/review-panel.md purely for
+# test setup.
+REVIEW_PANEL_SCHEMA = "review_panel"
+REVIEW_DRAFT_TABLE = f"{REVIEW_PANEL_SCHEMA}.review_draft"
+
+_REVIEW_DRAFT_DDL_STATEMENTS = (
+    f"CREATE SCHEMA IF NOT EXISTS {REVIEW_PANEL_SCHEMA}",
+    f"""
+    CREATE TABLE IF NOT EXISTS {REVIEW_DRAFT_TABLE} (
+        draft_key  text PRIMARY KEY,
+        repo       text NOT NULL,
+        pr_number  integer NOT NULL,
+        head_sha   text NOT NULL,
+        draft      jsonb NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+    )
+    """,
+)
+
+
+async def require_review_panel_schema(session: AsyncSession) -> None:
+    """Idempotently bootstrap `review_panel.review_draft` for cross-schema read tests."""
+    for statement in _REVIEW_DRAFT_DDL_STATEMENTS:
+        await session.execute(text(statement))
+    await session.commit()
+
+
+async def clean_review_drafts(session: AsyncSession) -> None:
+    await session.execute(text(f"DELETE FROM {REVIEW_DRAFT_TABLE}"))
+    await session.commit()
+
+
+async def insert_review_draft(
+    session: AsyncSession,
+    *,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    draft: dict[str, Any],
+    created_at: datetime | None = None,
+) -> str:
+    """Seed one draft row directly (review-panel's own writer, duplicated for tests)."""
+    draft_key = f"{repo}#{pr_number}@{head_sha}"
+    await session.execute(
+        text(
+            f"INSERT INTO {REVIEW_DRAFT_TABLE}"
+            " (draft_key, repo, pr_number, head_sha, draft, created_at)"
+            " VALUES (:draft_key, :repo, :pr_number, :head_sha, CAST(:draft AS jsonb),"
+            " COALESCE(:created_at, now()))"
+        ),
+        {
+            "draft_key": draft_key,
+            "repo": repo,
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+            "draft": json.dumps(draft),
+            "created_at": created_at,
+        },
+    )
+    await session.commit()
+    return draft_key
+
 
 _REGISTRY_TABLES = (
     "entailment_cache",

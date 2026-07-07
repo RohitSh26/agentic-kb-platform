@@ -29,6 +29,10 @@ from agentic_mcp_server.mcp.tool_schemas.ledger import (
     ListRetrievalsRequest,
     ListRetrievalsResponse,
 )
+from agentic_mcp_server.mcp.tool_schemas.review_draft import (
+    GetReviewDraftRequest,
+    GetReviewDraftResponse,
+)
 from agentic_mcp_server.mcp.tool_schemas.search import KbSearchRequest, KbSearchResponse
 from agentic_mcp_server.mcp.tool_schemas.task_context import (
     GetTaskContextRequest,
@@ -133,5 +137,14 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
         "similar prior changes — each item tiered by confidence and citing its source. Call "
         "this FIRST for any change task instead of exploring files; ambiguous scope comes back "
         "as candidates + open questions, never a guess.",
+    ),
+    # PR-41 (ADR-0031): read-only, compute-never fetch of a review-panel-computed draft.
+    "get_review_draft": ToolSchema(
+        GetReviewDraftRequest,
+        GetReviewDraftResponse,
+        "Fetch the review-panel's stored draft review for a pull request (repo, pr_number, "
+        "optional head_sha — omitted picks the newest stored draft for that PR). Read-only: "
+        "this NEVER computes a draft. Returns {found: false} when none exists yet, never an "
+        "error. No budget charge (not knowledge retrieval).",
     ),
 }
