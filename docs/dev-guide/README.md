@@ -46,6 +46,11 @@ three tiers below go from "make it run" to "understand it" to "operate it".
 - **[10 — VS Code (Copilot agent mode) against the broker](10-vscode-against-the-broker.md)** —
   redirect stub: this flow is Parts 6–8 of [00 — Getting Started](00-getting-started.md); the
   connection config ships at `.vscode/mcp.json`.
+- **[11 — Providers and API keys](11-providers-and-api-keys.md)** — the one reference table for
+  "which key does this system need, for what, and how do I use Groq / OpenAI / Azure OpenAI /
+  Claude on Azure AI Foundry / Ollama instead of the default." Covers every component (build,
+  mcp-server's opt-in L3 entailment, review-panel, evals, hosts, production connectors) and where
+  keys live (`.env` vs shell export), cited to source.
 
 ## Operating
 

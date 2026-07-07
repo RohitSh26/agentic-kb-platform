@@ -23,6 +23,10 @@ That's it. Python 3.12 itself is **not** a separate prerequisite — `uv` fetche
 first time it's needed (`bootstrap.sh` checks for it and tells you either way, but only *fails* on
 git/uv/Postgres being genuinely missing).
 
+**No API key for the default build.** For doc summaries, cloud LLM providers (Groq/OpenAI/Azure
+OpenAI/Claude on Azure AI Foundry), and every other key this platform can use, see
+[11 — Providers and API keys](11-providers-and-api-keys.md).
+
 ## The one command
 
 ```sh

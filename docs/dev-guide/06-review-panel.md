@@ -50,6 +50,11 @@ Configuration is env-only — identifiers and references, never secret values on
 > surfaced only in the boot log and is not this platform's tracing story (ADR-0032 withdrew the
 > LangSmith commitment before it ever shipped). Tracing is Postgres, via `TRACE_SINK`.
 
+> Note: the review panel's `LLM_PROVIDER` accepts a **narrower** set of values than kb-builder's —
+> no `azure`, no `anthropic_foundry`. See the provider-acceptance matrix in
+> [11 — Providers and API keys](11-providers-and-api-keys.md) before assuming a kb-builder provider
+> config carries over here unchanged.
+
 ## Running it
 
 The one-command path (sources the repo-root `.env`, points `REVIEW_PANEL_AGENTS_DIR` at `agents/`,

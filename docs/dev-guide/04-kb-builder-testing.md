@@ -88,6 +88,11 @@ Only **docify** and the **relationship judge** call the chat model. A code-only 
 provider; you need one only when your sources include prose (docs/wiki/cards). Embeddings for
 artifacts are always computed locally (a deterministic hash embedder) — no embedding API needed.
 
+> This section is the full kb-builder provider runbook. For the cross-service picture — which
+> *other* components (mcp-server, review-panel, evals, hosts) need a key, and a precise
+> provider-acceptance matrix (kb-builder's provider set is not the same as review-panel's or
+> `kb_agent.py`'s) — see [11 — Providers and API keys](11-providers-and-api-keys.md).
+
 The model client speaks the **OpenAI chat-completions protocol** for everything except Azure OpenAI,
 which has its own path. Configure entirely by environment variables — no code change.
 
