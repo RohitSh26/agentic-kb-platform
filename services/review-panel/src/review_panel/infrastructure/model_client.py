@@ -1,10 +1,27 @@
 """ModelClient shim: provider-agnostic chat completion over plain httpx.
 
-Mirrors the proven provider pattern of scripts/kb_agent.py (LLM_PROVIDER /
-LLM_MODEL / LLM_API_KEY / LLM_BASE_URL, OpenAI-compatible vs Anthropic branch),
-deliberately duplicated into this service per ADR-0008 — never imported. The
-panel needs exactly one capability (system+user -> text), so the port is one
-method and the adapters are raw JSON calls; no SDK dependency.
+Mirrors scripts/kb_agent.py's provider pattern (LLM_PROVIDER / LLM_MODEL / LLM_API_KEY /
+LLM_BASE_URL), deliberately duplicated into this service per ADR-0008 — never imported.
+The panel needs exactly one capability (system+user -> text), so the port is one method
+and the adapters are raw JSON calls; no SDK dependency.
+
+Accepted LLM_PROVIDER values — this is the EXACT set, kept in sync with
+docs/dev-guide/07-providers-and-api-keys.md and pinned by a drift test
+(tests/unit/test_model_client.py):
+- `groq` | `openai` | `openai_compatible` | `ollama` -> OpenAI-compatible chat.completions
+  (`OpenAICompatModelClient`).
+- `anthropic` -> native Anthropic Messages API at `https://api.anthropic.com`
+  (`AnthropicModelClient`).
+- `anthropic_foundry` -> Claude on Azure AI Foundry: the SAME Messages API shape as
+  `anthropic` (confirmed against `anthropic.lib.foundry.AsyncAnthropicFoundry`: same
+  `/v1/messages` path, same `anthropic-version` header), but at the caller-supplied
+  Foundry `LLM_BASE_URL` (no default — always required) and with BOTH `x-api-key` and
+  `api-key` auth headers (the Foundry client sends both; `api-key` is documented there
+  as "for backwards compatibility"). `AnthropicModelClient` handles both providers.
+- `azure` (Azure OpenAI) is NOT supported here and never has been — kb_agent.py, the
+  pattern this module mirrors, does not support it either (it is a kb-builder-only
+  provider with its own AZURE_OPENAI_* config shape that doesn't fit the LLM_* vars
+  this shim reads). Any other value, including `azure`, raises ModelAPIError.
 """
 
 import os
@@ -20,12 +37,16 @@ from review_panel.structured_logging import get_logger
 logger = get_logger("review_panel.infrastructure.model_client")
 
 _OPENAI_COMPATIBLE = ("groq", "openai", "openai_compatible", "ollama")
+ANTHROPIC_FOUNDRY_PROVIDER = "anthropic_foundry"
+_ANTHROPIC_LIKE = ("anthropic", ANTHROPIC_FOUNDRY_PROVIDER)
 
 _DEFAULT_BASE_URLS = {
     "groq": "https://api.groq.com/openai/v1",
     "openai": "https://api.openai.com/v1",
     "ollama": "http://localhost:11434/v1",
     "anthropic": "https://api.anthropic.com",
+    # anthropic_foundry has NO default: the Foundry endpoint is resource-specific and
+    # must always be supplied via LLM_BASE_URL (mirrors kb-builder's llm_endpoint.py).
 }
 
 _TIMEOUT_SECONDS = 120.0
@@ -51,7 +72,7 @@ def load_model_settings(env: dict[str, str] | None = None) -> ModelSettings:
     """Read the kb_agent-style LLM_* environment. Fails fast on missing values."""
     src = env if env is not None else dict(os.environ)
     provider = src.get("LLM_PROVIDER", "groq")
-    if provider not in (*_OPENAI_COMPATIBLE, "anthropic"):
+    if provider not in (*_OPENAI_COMPATIBLE, *_ANTHROPIC_LIKE):
         raise ModelAPIError(f"unsupported LLM_PROVIDER: {provider!r}")
     model = src.get("LLM_MODEL", "llama-3.3-70b-versatile" if provider == "groq" else "")
     if not model:
@@ -136,7 +157,15 @@ class OpenAICompatModelClient(_HttpModelClient):
 
 
 class AnthropicModelClient(_HttpModelClient):
-    """Anthropic Messages API over plain httpx."""
+    """Anthropic Messages API over plain httpx.
+
+    Handles BOTH `anthropic` (native, `https://api.anthropic.com`) and
+    `anthropic_foundry` (Claude on Azure AI Foundry, a caller-supplied resource URL) —
+    same Messages API shape and `anthropic-version` header for both, confirmed against
+    `anthropic.lib.foundry.AsyncAnthropicFoundry`. Foundry additionally expects an
+    `api-key` header alongside `x-api-key` (the SDK sends both, documented there as
+    "for backwards compatibility"); native `anthropic` sends only `x-api-key`.
+    """
 
     _API_VERSION = "2023-06-01"
 
@@ -151,6 +180,8 @@ class AnthropicModelClient(_HttpModelClient):
             "x-api-key": self._settings.api_key,
             "anthropic-version": self._API_VERSION,
         }
+        if self._settings.provider == ANTHROPIC_FOUNDRY_PROVIDER:
+            headers["api-key"] = self._settings.api_key
         body = await self._post_json(f"{self._settings.base_url}/v1/messages", headers, payload)
         blocks = body.get("content")
         if not isinstance(blocks, list):

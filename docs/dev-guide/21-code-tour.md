@@ -242,8 +242,10 @@ Graphify's LLM doc pipeline; `LLM_PROVIDER` defaults to a local Ollama), the who
 extractor, a `LocalHashEmbedder`, and the **persistent local JSON search projection** (ADR-0017 —
 default `./.kb-local-search-index.json`, printed as `search index : <path>`). Two collaborators
 are opt-in by env var: `RELATIONSHIP_JUDGE` (any non-empty value hands the phase-3B judge the chat
-model; unset ⇒ candidates are generated but never judged) and `EMBEDDINGS_PROVIDER` (enables the
-ADR-0019 semantic-linker pass via `OllamaEmbedder`; unset ⇒ that pass is skipped).
+model; unset ⇒ candidates are generated but never judged) and `EMBEDDINGS_PROVIDER` (validated —
+`ollama` or `openai`, selecting `OllamaEmbedder` or `OpenAIEmbedder` via `embeddings/factory.py`
+for the ADR-0019 semantic-linker pass; unset ⇒ that pass is skipped; any other value fails the
+build loudly — see [07 §3](07-providers-and-api-keys.md#3-embeddings)).
 
 Flags: `--backend {local,production}` (default `local`; `production` selects the GitHub/ADO
 factory of §4), `--validate-only` (config pre-flight only — no DB, no network; exit 0/1),
@@ -396,9 +398,10 @@ brief's explicit failure mode.
   `implements` (0.95), `documents`/`requests` (0.9), `mentions` (0.9).
 - `semantic.py` — fallback for concepts the deterministic pass could not link, behind the
   `SimilarityProvider` Protocol. Accepts similarity ≥ 0.82 as `implements` with the **raw score**
-  as confidence. Enabled by the `EMBEDDINGS_PROVIDER` env gate (ADR-0019 — an
-  `EmbeddingSimilarityProvider` over `OllamaEmbedder`); without it the build passes `None` and the
-  pass is skipped with a structured log.
+  as confidence. Enabled by the validated `EMBEDDINGS_PROVIDER` env var (ADR-0019 — an
+  `EmbeddingSimilarityProvider` over `OllamaEmbedder` or `OpenAIEmbedder`, selected by
+  `embeddings/factory.py`); unset ⇒ the build passes `None` and the pass is skipped with a
+  structured log; any other value fails the build loudly.
 - `write_edges.py` — **reconcile-in-place**: upserts target the partial unique index, so a rerun
   refreshes confidence/kb_version on the same row (`(xmax = 0)` distinguishes insert from refresh);
   edges absent from the computed set are deleted (`reason=evidence_gone`); edge types whose

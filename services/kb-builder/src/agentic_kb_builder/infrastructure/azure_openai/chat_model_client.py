@@ -9,8 +9,11 @@ model backend stays swappable. The provider->endpoint resolution is shared with 
 this module just builds the OpenAI/Azure SDK client from the resolved ``ModelEndpoint``.
 
 Configure via env (see the wiki "Run locally"):
-- `LLM_PROVIDER`: `ollama` (default) | `groq` | `openai` | `azure` | `anthropic_foundry`
-- OpenAI-compatible providers: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
+- `LLM_PROVIDER`: any string; `ollama` (default) | `groq` | `openai` | `azure` |
+  `anthropic_foundry` are the well-known ones — everything else falls through to the
+  generic OpenAI-compatible branch (`llm_endpoint.py`).
+- OpenAI-compatible providers: `LLM_BASE_URL`, `LLM_API_KEY` (falls back to `GROQ_API_KEY`
+  when unset), `LLM_MODEL`
 - Azure: `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`,
   `AZURE_OPENAI_API_VERSION`
 - Anthropic on Azure AI Foundry (`anthropic_foundry`): the Anthropic SDK's

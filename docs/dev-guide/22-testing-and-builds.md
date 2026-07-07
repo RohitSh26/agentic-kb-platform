@@ -370,13 +370,15 @@ export LLM_MODEL=<model-id>
 
 ### Two opt-in gates that unlock extra passes
 
-Two build passes are **off unless you set their env var** (any non-empty value enables; unset
-skips the pass entirely — the build stays deterministic and offline without them):
+Two build passes are **off unless you set their env var**; unset skips the pass entirely (the
+build stays deterministic and offline without them). `RELATIONSHIP_JUDGE` is still a pure on/off
+gate (any non-empty value); `EMBEDDINGS_PROVIDER` is **validated**, not just gated (task #39) —
+see [07 §3](07-providers-and-api-keys.md#3-embeddings):
 
 | Env var | What it unlocks | What it needs |
 |---|---|---|
 | `RELATIONSHIP_JUDGE` | The **phase-3B relationship judge**: the chat model rules on the bounded candidate pairs from phase-3A and promotes verdicts to `INFERRED_*`/`AMBIGUOUS` edges (`source='llm_judge'`). Unset ⇒ candidates are still generated and audited in `relationship_candidate`, but never judged — no `llm_judge` edges appear (§8.4). | The same `LLM_*` chat provider as docify; every judgment is gated by `relationship_judgment_cache`. |
-| `EMBEDDINGS_PROVIDER` | The **semantic-linker pass** (ADR-0019): real embedding similarity between prose concepts and code, on top of the deterministic linker. Unset ⇒ the semantic pass is skipped with a structured log. | An embeddings endpoint: `EMBEDDINGS_BASE_URL` (default `http://localhost:11434` — a local Ollama), `EMBEDDINGS_MODEL` (default `nomic-embed-text`, so `ollama pull nomic-embed-text` first), optional `EMBEDDINGS_API_KEY` for a hosted gateway. |
+| `EMBEDDINGS_PROVIDER` | The **semantic-linker pass** (ADR-0019): real embedding similarity between prose concepts and code, on top of the deterministic linker. Unset ⇒ the semantic pass is skipped with a structured log. Set to anything other than `ollama`/`openai` ⇒ the build fails immediately with a clear `RuntimeError` (never a silent no-op or a wrong-shape call). | `ollama` (default wire shape): `EMBEDDINGS_BASE_URL` (default `http://localhost:11434`), `EMBEDDINGS_MODEL` (default `nomic-embed-text`, so `ollama pull nomic-embed-text` first), optional `EMBEDDINGS_API_KEY`. `openai` (the `/v1/embeddings` shape): same vars, but `EMBEDDINGS_API_KEY` is **required**. |
 
 ```sh
 # example: enable both extra passes for one build

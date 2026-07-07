@@ -25,7 +25,9 @@ with the verbatim error fed back before the run gives up (evaluation-system.md �
 
 Env:
     DATABASE_URL      postgresql+asyncpg://user:pass@host:port/agentic_kb  (the active KB)
-    LLM_PROVIDER      groq | openai | anthropic_foundry | anthropic   (default groq)
+    LLM_PROVIDER      groq | openai | openai_compatible | anthropic_foundry | anthropic
+                      (default groq; any OTHER value also dispatches to the native Anthropic
+                      SDK path — see _make_client — so keep to this list deliberately)
     GROQ_API_KEY      Groq key (or LLM_API_KEY); used when provider=groq
     LLM_MODEL         model id (default groq: llama-3.3-70b-versatile; anthropic: required)
     LLM_BASE_URL      override; anthropic_foundry needs the .../anthropic endpoint

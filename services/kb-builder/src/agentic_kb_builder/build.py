@@ -53,7 +53,7 @@ from agentic_kb_builder.connectors.production_factory import production_backend_
 from agentic_kb_builder.docify import DocExtractor as RealDocExtractor
 from agentic_kb_builder.domain.durable_output_port import DurableOutputCache
 from agentic_kb_builder.embeddings import LocalHashEmbedder
-from agentic_kb_builder.embeddings.ollama_embedder import OllamaEmbedder
+from agentic_kb_builder.embeddings.factory import semantic_embedder_from_env
 from agentic_kb_builder.indexing import SearchDocUpserter, make_consistency_validator
 from agentic_kb_builder.infrastructure.azure_openai.chat_model_client import ChatModelClient
 from agentic_kb_builder.infrastructure.azure_search.search_client import SearchClient
@@ -92,14 +92,18 @@ def default_collaborators(session: AsyncSession, *, index_path: Path) -> Collabo
     same way the Azure index does — an incremental rebuild that upserts nothing still
     validates against the carried-forward membership.
 
-    When EMBEDDINGS_PROVIDER is set, a real (Ollama) embedding-similarity provider is wired
-    into the linker so the prose<->code semantic pass runs (ADR-0019); otherwise it stays
-    None and that pass is skipped, keeping the default build offline + deterministic."""
+    When EMBEDDINGS_PROVIDER is set to a valid value (`ollama` or `openai`), a real
+    embedding-similarity provider is wired into the linker so the prose<->code semantic
+    pass runs (ADR-0019); unset, it stays None and that pass is skipped, keeping the
+    default build offline + deterministic. Any OTHER value fails the build loudly
+    (`embeddings/factory.py`) rather than silently no-op'ing or speaking the wrong wire
+    protocol."""
     client = LocalFileSearchClient(index_path)
     model = ChatModelClient.from_env()
     similarity: SimilarityProvider | None = None
-    if os.environ.get("EMBEDDINGS_PROVIDER"):
-        similarity = EmbeddingSimilarityProvider(session, OllamaEmbedder.from_env())
+    embedder = semantic_embedder_from_env()
+    if embedder is not None:
+        similarity = EmbeddingSimilarityProvider(session, embedder)
     # The relationship judge (Phase 3B) promotes candidates — including the new
     # embedding-similarity ones — into trusted cross-domain edges. It costs one LLM
     # call per UNCACHED candidate (cached by content+prompt+model version), so it is

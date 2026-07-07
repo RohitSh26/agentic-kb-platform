@@ -6,12 +6,17 @@ api_key, model, max_tokens). Historically each re-derived this, and ``docify`` r
 ``chat_model_client._PROVIDER_DEFAULTS`` (a private name). This module is the single public
 home for that resolution so neither consumer touches the other's internals.
 
-Supported providers (``LLM_PROVIDER``, default ``ollama``):
-- OpenAI-compatible (``ollama`` / ``groq`` / ``openai`` / any custom ``LLM_BASE_URL``):
-  ``LLM_BASE_URL``, ``LLM_API_KEY``, ``LLM_MODEL``.
+Accepted ``{env_prefix}_PROVIDER`` values (``env_prefix`` defaults to ``LLM``; docify
+passes ``DOC_LLM``): ANY string is accepted — this resolver never rejects a provider name.
+- ``azure`` and ``anthropic_foundry`` get dedicated branches (below).
+- Everything else (``ollama`` / ``groq`` / ``openai`` / any custom name) is generic
+  OpenAI-compatible: ``{env_prefix}_BASE_URL``, ``{env_prefix}_API_KEY``, ``{env_prefix}_MODEL``.
+  The api key falls back to ``GROQ_API_KEY`` when ``{env_prefix}_API_KEY`` is unset (matching
+  ``scripts/kb_agent.py`` and review-panel's ``ModelClient`` shim), then to the provider's
+  built-in default (only ``ollama`` has one — a dummy key, since it needs no real auth).
 - ``azure`` (Azure OpenAI deployment): ``AZURE_OPENAI_ENDPOINT``, ``AZURE_OPENAI_API_KEY``,
   ``AZURE_OPENAI_DEPLOYMENT`` (the deployment IS the model), ``AZURE_OPENAI_API_VERSION``
-  (default ``2024-06-01``).
+  (default ``2024-06-01``). No ``GROQ_API_KEY`` fallback — Azure always needs its own key.
 
 A missing key/deployment fails loudly (a RuntimeError) — the build never silently drops work.
 The api_key lives on the returned dataclass but is NEVER logged (rule python.md).
@@ -146,7 +151,12 @@ def resolve_endpoint_from_env(*, max_tokens_default: int, env_prefix: str = "LLM
         provider, PROVIDER_DEFAULTS["ollama"]
     )
     base_url = os.environ.get(f"{env_prefix}_BASE_URL", default_base)
-    api_key = os.environ.get(f"{env_prefix}_API_KEY", default_key)
+    # {env_prefix}_API_KEY wins; else GROQ_API_KEY (matching kb_agent.py and review-panel's
+    # ModelClient shim, so all three consumers resolve a key the same way); else the
+    # provider's own default (only ollama has one — a dummy key, no real auth needed).
+    api_key = (
+        os.environ.get(f"{env_prefix}_API_KEY") or os.environ.get("GROQ_API_KEY") or default_key
+    )
     if not api_key:
         raise RuntimeError(f"{env_prefix}_API_KEY is required for provider {provider!r}")
     model = os.environ.get(f"{env_prefix}_MODEL", default_model)

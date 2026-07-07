@@ -1,10 +1,15 @@
 """Real semantic embedder behind the Embedder Protocol (ADR-0019).
 
-Calls an OpenAI-compatible / Ollama embeddings endpoint so the linker's
-SimilarityProvider can find prose<->code matches by MEANING — the cross-domain
-signal the LocalHashEmbedder (deterministic hash vector) cannot provide. Defaults
-to local Ollama `nomic-embed-text` (768-dim), free and offline; point it at a
-hosted endpoint by setting EMBEDDINGS_BASE_URL/-_MODEL/-_API_KEY with no code change.
+Calls an Ollama `/api/embeddings` endpoint so the linker's SimilarityProvider can find
+prose<->code matches by MEANING — the cross-domain signal the LocalHashEmbedder
+(deterministic hash vector) cannot provide. Defaults to local Ollama
+`nomic-embed-text` (768-dim), free and offline; point it at a hosted gateway that
+speaks the SAME native Ollama wire shape by setting EMBEDDINGS_BASE_URL/-_MODEL/-_API_KEY
+with no code change. This is Ollama's OWN request/response shape
+(`{"model", "prompt"} -> {"embedding"}`), NOT OpenAI's `/v1/embeddings` shape — for an
+OpenAI-compatible endpoint (incl. a real OpenAI/Azure OpenAI account), select
+`EMBEDDINGS_PROVIDER=openai` instead (`OpenAIEmbedder`); `embeddings/factory.py`
+validates the provider value so the two wire shapes can never be crossed silently.
 
 Embedding a code span here is a deterministic vector lookup with NO generated
 tokens, so it does not violate ADR-0018 (code is never summarised by a chat model).
@@ -18,21 +23,21 @@ import httpx
 
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.domain.embedding_port import EmbeddingResult
+from agentic_kb_builder.embeddings.http_embedder import HttpEmbedder
 from agentic_kb_builder.structured_logging import get_logger
 
 logger = get_logger(__name__)
 
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "nomic-embed-text"
-_TIMEOUT = 60.0
 
 
-class OllamaEmbedder:
+class OllamaEmbedder(HttpEmbedder):
     """Embedder Protocol impl backed by an Ollama `/api/embeddings` endpoint.
 
     Holds one AsyncClient for the build's lifetime (call aclose() when done). The
     endpoint is local by default, so no auth header is sent unless EMBEDDINGS_API_KEY
-    is set (for a hosted OpenAI-compatible gateway).
+    is set (for a hosted gateway that mimics Ollama's wire shape).
     """
 
     def __init__(
@@ -50,7 +55,7 @@ class OllamaEmbedder:
         key = api_key if api_key is not None else os.environ.get("EMBEDDINGS_API_KEY")
         headers = {"Authorization": f"Bearer {key}"} if key else {}
         # Injected client in tests (MockTransport); a real pooled client otherwise.
-        self._client = client or httpx.AsyncClient(timeout=_TIMEOUT, headers=headers)
+        super().__init__(client=client, headers=headers)
 
     @classmethod
     def from_env(cls) -> "OllamaEmbedder":
@@ -73,9 +78,6 @@ class OllamaEmbedder:
                 f"embeddings endpoint returned no vector for model {self.embedding_model}"
             )
         return EmbeddingResult(embedding_hash=content_hash(text), vector=[float(v) for v in vector])
-
-    async def aclose(self) -> None:
-        await self._client.aclose()
 
 
 __all__ = ["OllamaEmbedder"]

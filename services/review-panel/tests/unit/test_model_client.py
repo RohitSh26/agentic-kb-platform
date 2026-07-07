@@ -7,6 +7,8 @@ import pytest
 
 from review_panel.domain.errors import ModelAPIError
 from review_panel.infrastructure.model_client import (
+    _ANTHROPIC_LIKE,
+    _OPENAI_COMPATIBLE,
     AnthropicModelClient,
     ModelSettings,
     OpenAICompatModelClient,
@@ -77,3 +79,81 @@ async def test_http_error_becomes_model_api_error() -> None:
     client = OpenAICompatModelClient(_settings(), transport=httpx.MockTransport(handler))
     with pytest.raises(ModelAPIError):
         await client.complete(system="s", user="u")
+
+
+# --- anthropic_foundry (task #38b: was missing despite the "mirrors kb_agent.py" docstring) -----
+
+
+def test_settings_anthropic_foundry_requires_base_url_and_model() -> None:
+    settings = load_model_settings(
+        {
+            "LLM_PROVIDER": "anthropic_foundry",
+            "LLM_API_KEY": "k",
+            "LLM_MODEL": "claude-sonnet-4-6",
+            "LLM_BASE_URL": "https://my-resource.services.ai.azure.com/anthropic",
+        }
+    )
+    assert settings.base_url == "https://my-resource.services.ai.azure.com/anthropic"
+    with pytest.raises(ModelAPIError, match="LLM_BASE_URL is required"):
+        load_model_settings(
+            {"LLM_PROVIDER": "anthropic_foundry", "LLM_API_KEY": "k", "LLM_MODEL": "m"}
+        )
+    with pytest.raises(ModelAPIError, match="LLM_MODEL is required"):
+        load_model_settings(
+            {
+                "LLM_PROVIDER": "anthropic_foundry",
+                "LLM_API_KEY": "k",
+                "LLM_BASE_URL": "https://x.services.ai.azure.com/anthropic",
+            }
+        )
+
+
+def test_factory_dispatches_anthropic_foundry_to_the_anthropic_client() -> None:
+    settings = _settings("anthropic_foundry", "https://my-resource.services.ai.azure.com/anthropic")
+    assert isinstance(create_model_client(settings), AnthropicModelClient)
+
+
+async def test_anthropic_foundry_sends_both_x_api_key_and_api_key_headers() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/anthropic/v1/messages"  # base_url already has /anthropic
+        seen["x-api-key"] = request.headers.get("x-api-key")
+        seen["api-key"] = request.headers.get("api-key")
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "ok"}]})
+
+    settings = _settings("anthropic_foundry", "https://my-resource.services.ai.azure.com/anthropic")
+    client = AnthropicModelClient(settings, transport=httpx.MockTransport(handler))
+    assert await client.complete(system="s", user="u") == "ok"
+    assert seen["x-api-key"] == "k"
+    assert seen["api-key"] == "k"  # Foundry-only backwards-compat header
+
+
+async def test_native_anthropic_sends_only_x_api_key_not_api_key() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["api-key"] = request.headers.get("api-key")
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "ok"}]})
+
+    client = AnthropicModelClient(
+        _settings("anthropic", "https://llm.test"), transport=httpx.MockTransport(handler)
+    )
+    await client.complete(system="s", user="u")
+    assert seen["api-key"] is None
+
+
+# --- azure is deliberately unsupported (matches kb_agent.py, which never had it) ----------------
+
+
+def test_azure_provider_is_not_supported() -> None:
+    with pytest.raises(ModelAPIError, match="unsupported LLM_PROVIDER: 'azure'"):
+        load_model_settings({"LLM_PROVIDER": "azure", "LLM_API_KEY": "k", "LLM_MODEL": "m"})
+
+
+# --- drift guard: the accepted LLM_PROVIDER set must match the module docstring -----------------
+
+
+def test_accepted_provider_set_is_pinned() -> None:
+    assert _OPENAI_COMPATIBLE == ("groq", "openai", "openai_compatible", "ollama")
+    assert _ANTHROPIC_LIKE == ("anthropic", "anthropic_foundry")

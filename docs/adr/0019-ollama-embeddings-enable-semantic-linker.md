@@ -76,3 +76,20 @@ that matters for agent context. Embeddings-first is the cheapest high-impact mov
   already running locally and free, so it is the default for development.
 - **Relax zero-LLM-for-code with code summaries**: rejected. Summaries are not relationships and
   would mask the disabled linker under recurring cost; only a post-eval fallback (ADR-0018 Phase 3).
+
+## Amendment (2026-07-07): `EMBEDDINGS_PROVIDER` is validated; `openai` implemented for real (task #39)
+
+This ADR's "a hosted OpenAI-compatible endpoint (Azure/OpenAI) is a drop-in alternative with no
+code change" was aspirational, not true: `EMBEDDINGS_PROVIDER` was a pure on/off gate (the value
+was never inspected), and the one embedder, `OllamaEmbedder`, always spoke Ollama's native
+`/api/embeddings` shape (`{"model","prompt"} -> {"embedding"}`) — pointing `EMBEDDINGS_BASE_URL`
+at a real OpenAI/Azure OpenAI endpoint silently sent the wrong request shape and failed deep
+inside the call, not at build start.
+
+`EMBEDDINGS_PROVIDER` is now validated by `embeddings/factory.py::semantic_embedder_from_env`:
+`ollama` (unchanged `OllamaEmbedder`) or `openai` (new `OpenAIEmbedder`, the real `/v1/embeddings`
+shape — `{"model","input"} -> {"data":[{"embedding":[...]}]}`, `EMBEDDINGS_API_KEY` required).
+Any other value raises a `RuntimeError` at build start. Both embedders share a small `HttpEmbedder`
+base for client lifecycle (`embeddings/http_embedder.py`); `EmbeddingSimilarityProvider.aclose()`
+closes either via `isinstance(embedder, HttpEmbedder)`. See docs/dev-guide/07-providers-and-api-keys.md
+§3 for the full var/shape reference.

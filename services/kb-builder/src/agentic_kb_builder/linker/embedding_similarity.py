@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agentic_kb_builder.application.cache_gates import EmbeddingCacheGate
 from agentic_kb_builder.domain.content_hasher import content_hash
 from agentic_kb_builder.domain.embedding_port import Embedder, EmbeddingResult
-from agentic_kb_builder.embeddings.ollama_embedder import OllamaEmbedder
+from agentic_kb_builder.embeddings.http_embedder import HttpEmbedder
 from agentic_kb_builder.infrastructure.postgres.models import KnowledgeArtifact
 from agentic_kb_builder.linker.semantic import ScoredArtifact
 from agentic_kb_builder.structured_logging import get_logger
@@ -112,8 +112,12 @@ class EmbeddingSimilarityProvider:
         )
 
     async def aclose(self) -> None:
-        """Release the embedder's HTTP client (the build closes the provider when done)."""
-        if isinstance(self._embedder, OllamaEmbedder):
+        """Release the embedder's HTTP client (the build closes the provider when done).
+
+        Only HTTP-backed embedders (OllamaEmbedder, OpenAIEmbedder) hold a client to
+        close; the zero-cost LocalHashEmbedder opens none.
+        """
+        if isinstance(self._embedder, HttpEmbedder):
             await self._embedder.aclose()
 
     async def similar_code_symbols(

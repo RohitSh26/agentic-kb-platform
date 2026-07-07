@@ -17,7 +17,7 @@ so nothing here is asserted without a file to check it against.
 |---|---|---|---|
 | **Zero-LLM build** (code + git-metadata, `bootstrap.sh` default) | **No** | — | Always the default path. Code is extracted by Graphify's AST pass, commits by `GitMetadataConnector` — both deterministic, zero model calls. |
 | **docify** (doc/wiki/card summaries; `--with-docs`) | **Yes** | `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` (or `DOC_LLM_*` to run docs on a *different* model than the judge/agent) | Your sources include prose (`github_doc`, `azure_wiki`, `ado_card`). §2 below; runbook: [22 §4](22-testing-and-builds.md#4-choose-and-configure-an-llm-provider). |
-| **Embeddings / semantic linker** | Opt-in, key optional | `EMBEDDINGS_PROVIDER` (gate — any non-empty value; the value itself is never read), `EMBEDDINGS_BASE_URL`, `EMBEDDINGS_MODEL`, `EMBEDDINGS_API_KEY` | Unset ⇒ skipped entirely; artifact embeddings for search are **always** a free local hash (`LocalHashEmbedder`), never an API call. This gate only affects the prose↔code semantic-similarity pass (ADR-0019). |
+| **Embeddings / semantic linker** | Opt-in; key optional for `ollama`, **required** for `openai` | `EMBEDDINGS_PROVIDER` (validated: `ollama` \| `openai` — any other value fails the build loudly at startup), `EMBEDDINGS_BASE_URL`, `EMBEDDINGS_MODEL`, `EMBEDDINGS_API_KEY` | Unset ⇒ skipped entirely; artifact embeddings for search are **always** a free local hash (`LocalHashEmbedder`), never an API call. This gate only affects the prose↔code semantic-similarity pass (ADR-0019). |
 | **Relationship judge** (phase-3B inferred edges) | Opt-in, reuses docify's key | `RELATIONSHIP_JUDGE` (gate — any non-empty value) | Unset ⇒ candidates are generated and audited but never judged. Uses the **same** `LLM_*`/`DOC_LLM_*` provider as docify — no separate credentials. |
 | **mcp-server** (default: serving `kb_search` / `context.*` / `graph.*`) | **No** | — | The broker's default retrieval, budget, ACL, and receipt paths are 100% deterministic Postgres reads. Verified from `mcp/server.py::create_app` — no model client is constructed unless you opt in (next row). |
 | **mcp-server L3 entailment** (opt-in claim verifier) | Opt-in, key optional | `MCP_ENABLE_ENTAILMENT` (gate), `ENTAIL_LLM_PROVIDER` / `ENTAIL_LLM_API_KEY` / `ENTAIL_LLM_MODEL` / `ENTAIL_LLM_BASE_URL` (or `ENTAIL_AZURE_OPENAI_*`) | Unset (default) ⇒ the server stays LLM-free and `verify_answer` never runs L3 for any claim (L0-L2 deterministic checks still run). Set it and the server attaches an entailment client, cache-gated per claim. Defaults to local Ollama — **no key needed even when enabled**, unless you repoint it at Groq/OpenAI/Azure. |
@@ -41,14 +41,15 @@ global `LLM_*` config).
 ### Groq — recommended default
 ```sh
 export LLM_PROVIDER=groq
-export LLM_API_KEY=gsk_...                       # required; no GROQ_API_KEY fallback here
+export LLM_API_KEY=gsk_...                       # required (or GROQ_API_KEY, same fallback
+                                                  # scripts/kb_agent.py and review-panel have)
 export LLM_MODEL=llama-3.1-8b-instant            # default for groq if unset
 # LLM_BASE_URL defaults to https://api.groq.com/openai/v1
 ```
 Fast, cheap, OpenAI-compatible — the path the rest of the dev guide assumes for prose builds. Put
 the key in a repo-root `.env`: `bootstrap.sh --with-docs` and `kb_agent.py` load it themselves
 (§4); a plain `uv run python -m agentic_kb_builder.build` does **not** — export it in your shell.
-Defaults: `PROVIDER_DEFAULTS["groq"]`, `llm_endpoint.py` lines 34-38.
+Defaults: `PROVIDER_DEFAULTS["groq"]`, `llm_endpoint.py` lines 39-43.
 
 ### OpenAI
 ```sh
@@ -58,7 +59,7 @@ export LLM_MODEL=gpt-4o-mini                      # default for openai if unset
 # LLM_BASE_URL defaults to https://api.openai.com/v1
 ```
 Choose this if you already have an OpenAI account/quota and don't want a second provider.
-Defaults: `PROVIDER_DEFAULTS["openai"]`, `llm_endpoint.py` lines 34-38.
+Defaults: `PROVIDER_DEFAULTS["openai"]`, `llm_endpoint.py` lines 39-43.
 
 ### Azure OpenAI (`azure`)
 ```sh
@@ -72,7 +73,7 @@ A dedicated resolution branch — not the generic `LLM_BASE_URL` path. All three
 `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` / `AZURE_OPENAI_DEPLOYMENT` are required or the
 build fails loudly with a `RuntimeError` naming exactly which is missing (never a silent skip).
 Choose this when your org's model spend/quota already runs through Azure OpenAI.
-Source: `llm_endpoint.py` lines 93-118 (`AZURE_PROVIDER = "azure"`); Graphify itself has a
+Source: `llm_endpoint.py` lines 98-123 (`AZURE_PROVIDER = "azure"`); Graphify itself has a
 built-in `azure` backend that reads these same vars for docify (`docify/extract_fn.py` lines
 84-91).
 
@@ -92,7 +93,7 @@ for this provider and calls Claude directly (`docify/extract_fn.py::_make_anthro
 added in the ADR-0023 amendment "`anthropic_foundry` docs bypass Graphify"); the relationship
 judge dispatches the same way in `chat_model_client.py::_call_anthropic`. Choose this when your
 org standardizes on Claude and hosts it through Azure AI Foundry rather than Anthropic directly.
-Source: `llm_endpoint.py` lines 44-48, 120-143 (`ANTHROPIC_FOUNDRY_PROVIDER = "anthropic_foundry"`).
+Source: `llm_endpoint.py` lines 49-53, 125-148 (`ANTHROPIC_FOUNDRY_PROVIDER = "anthropic_foundry"`).
 
 ### Ollama — local, free fallback
 ```sh
@@ -102,7 +103,7 @@ export LLM_MODEL=phi4-mini       # default would be llama3.1
 ```
 No key, no cloud, no spend — the build's fallback when `LLM_PROVIDER` is unset. Slower and less
 reliable at verbatim-quotable extraction than a hosted model; fine for pipeline testing.
-Defaults: `PROVIDER_DEFAULTS["ollama"]`, `llm_endpoint.py` lines 34-38.
+Defaults: `PROVIDER_DEFAULTS["ollama"]`, `llm_endpoint.py` lines 39-43.
 
 > Any other provider name falls through to the generic OpenAI-compatible branch and just needs
 > `LLM_BASE_URL` + `LLM_API_KEY` + `LLM_MODEL` pointed at anything that speaks the
@@ -113,48 +114,73 @@ Defaults: `PROVIDER_DEFAULTS["ollama"]`, `llm_endpoint.py` lines 34-38.
 > override — a name like `foundry` or `custom` has no special meaning to the code, it's purely a
 > label.
 
-### Which components honor which providers — the matrix is NOT uniform
+### Which components honor which providers — kept in sync by drift tests
 
-Three different pieces of code resolve `LLM_PROVIDER`, and they do **not** accept the same set of
-values — verified against each one's source, not assumed from a shared docstring:
+Three different pieces of code resolve `LLM_PROVIDER`. They deliberately do **not** all accept
+the identical set of values (kb-builder's Azure-native and Foundry-native branches don't fit
+review-panel's plain-httpx shim's `LLM_*`-only config), but each accepted set is now pinned by a
+test in that consumer's own suite, so a silent divergence fails loudly instead of drifting unnoticed:
 
-| Consumer | Accepted `LLM_PROVIDER` values | Source |
-|---|---|---|
-| **kb-builder** (docify + judge, `resolve_endpoint_from_env`) | Any string. `azure` and `anthropic_foundry` get dedicated branches; everything else (`ollama`/`groq`/`openai`/anything) is generic OpenAI-compatible. | `llm_endpoint.py` |
-| **`scripts/kb_agent.py`** | `groq` \| `openai` \| `openai_compatible` (OpenAI SDK path) **plus** `anthropic` (native Anthropic SDK) **plus** `anthropic_foundry` (native `AnthropicFoundry` SDK) | `kb_agent.py` `_make_client()`, lines 396-422 |
-| **review-panel** (`ModelClient` shim) | `groq` \| `openai` \| `openai_compatible` \| `ollama` (OpenAI-compatible path) **plus** `anthropic` (native, but talking to `https://api.anthropic.com` directly — **not** Foundry). Anything else, **including `anthropic_foundry` and `azure`, raises `ModelAPIError`.** | `review_panel/infrastructure/model_client.py` lines 22, 54-55 |
+| Consumer | Accepted `LLM_PROVIDER` values | Source | Drift test |
+|---|---|---|---|
+| **kb-builder** (docify + judge, `resolve_endpoint_from_env`) | Any string. `azure` and `anthropic_foundry` get dedicated branches; everything else (`ollama`/`groq`/`openai`/anything) is generic OpenAI-compatible. | `llm_endpoint.py` | `tests/unit/test_llm_endpoint.py::test_accepted_provider_set_is_pinned` |
+| **`scripts/kb_agent.py`** | `groq` \| `openai` \| `openai_compatible` (OpenAI SDK path) **plus** `anthropic` (native Anthropic SDK) **plus** `anthropic_foundry` (native `AnthropicFoundry` SDK). Any other value is not rejected — it also dispatches to the native Anthropic SDK path (`_make_client`'s `else` branch), so treat this as the *intended* set, not an enforced one. | `kb_agent.py` `_is_openai()` / `_make_client()` | `scripts/test_kb_agent_provider_routing.py` |
+| **review-panel** (`ModelClient` shim) | `groq` \| `openai` \| `openai_compatible` \| `ollama` (OpenAI-compatible path) **plus** `anthropic` (native, `https://api.anthropic.com`) **plus** `anthropic_foundry` (Claude on Azure AI Foundry — same Messages API shape as `anthropic`, at a caller-supplied Foundry `LLM_BASE_URL`, adding an `api-key` header alongside `x-api-key`). `azure` still raises `ModelAPIError` — deliberately: `kb_agent.py`, the pattern this module mirrors, never supported `azure` either, and Azure OpenAI's deployment-based config doesn't fit this shim's `LLM_*`-only settings shape. | `review_panel/infrastructure/model_client.py` | `tests/unit/test_model_client.py::test_accepted_provider_set_is_pinned` |
 
-The review-panel module's own docstring says it "mirrors" `kb_agent.py`'s pattern — true for the
-OpenAI-compatible and native-Anthropic branches, but it is a **narrower** provider set: no
-`anthropic_foundry`, no `azure`. If you run Claude-on-Foundry reviews, that has to go through
-`kb_agent.py`-style code, not review-panel, today. `LLM_API_KEY` can fall back to `GROQ_API_KEY`
-in review-panel and `kb_agent.py` (`model_client.py` line 59; `kb_agent.py` line 406) — kb-builder
-has **no such fallback** (`llm_endpoint.py` line 149 reads only `{prefix}_API_KEY`).
+`LLM_API_KEY` falls back to `GROQ_API_KEY` in all three consumers now — kb-builder's
+`resolve_endpoint_from_env` gained the same fallback review-panel and `kb_agent.py` already had
+(`llm_endpoint.py`'s generic OpenAI-compatible branch; task #38).
 
 ---
 
-## 3. Embeddings — a narrower wire protocol than the var name implies
+## 3. Embeddings
 
+`EMBEDDINGS_PROVIDER` used to be a pure on/off gate: any non-empty value enabled the pass and the
+value itself was never inspected, so it silently always spoke Ollama's native wire shape even if
+`EMBEDDINGS_BASE_URL` pointed at a real OpenAI-style endpoint. It is now **validated** by
+`agentic_kb_builder.embeddings.factory.semantic_embedder_from_env` — exactly two values are
+accepted, and anything else fails the build loudly at startup, never a silent no-op or a
+wrong-shape call.
+
+### `ollama` (default wire shape, offline-friendly)
 ```sh
-export EMBEDDINGS_PROVIDER=ollama        # any non-empty value enables the pass; the VALUE is
-                                          # never read past the truthiness check (build.py)
+export EMBEDDINGS_PROVIDER=ollama
 export EMBEDDINGS_BASE_URL=http://localhost:11434   # default; no /v1 suffix
 export EMBEDDINGS_MODEL=nomic-embed-text             # default
 export EMBEDDINGS_API_KEY=...                        # optional Bearer header, for a hosted gateway
 ```
-Two things worth stating precisely because the name suggests more flexibility than the code has:
+`OllamaEmbedder` POSTs to `{EMBEDDINGS_BASE_URL}/api/embeddings` with `{"model", "prompt"}` and
+reads back `{"embedding": [...]}`  — Ollama's own shape, not OpenAI's. `EMBEDDINGS_API_KEY` is
+optional (a local Ollama server needs no auth); it only adds a Bearer header for a hosted gateway
+that mimics this same shape.
 
-1. `EMBEDDINGS_PROVIDER` is a pure on/off gate (`if os.environ.get("EMBEDDINGS_PROVIDER"): …` in
-   `build.py`'s `default_collaborators`) — its value is never inspected to select an implementation.
-   There is exactly one embedder, `OllamaEmbedder`.
-2. That embedder always POSTs to `{EMBEDDINGS_BASE_URL}/api/embeddings` — **Ollama's native wire
-   shape**, not OpenAI's `/v1/embeddings`. Pointing `EMBEDDINGS_BASE_URL` at a real OpenAI-style
-   endpoint will not work; it has to be Ollama itself or a gateway that mimics Ollama's
-   `/api/embeddings` request/response shape. `EMBEDDINGS_API_KEY` only adds a Bearer header for
-   such a gateway.
+### `openai` (the `/v1/embeddings` shape — OpenAI, or Azure OpenAI behind an OpenAI-compatible route)
+```sh
+export EMBEDDINGS_PROVIDER=openai
+export EMBEDDINGS_BASE_URL=https://api.openai.com/v1   # default
+export EMBEDDINGS_MODEL=text-embedding-3-small          # default
+export EMBEDDINGS_API_KEY=sk-...                         # REQUIRED — fails at construction if unset
+```
+`OpenAIEmbedder` POSTs to `{EMBEDDINGS_BASE_URL}/embeddings` with `{"model", "input"}` and reads
+back `{"data": [{"embedding": [...]}]}` — the shape a real OpenAI account or any
+`/v1/embeddings`-speaking gateway expects. Unlike `ollama`, `EMBEDDINGS_API_KEY` is **required**: a
+real hosted endpoint always authenticates, so a missing key fails loudly at construction instead
+of deep inside the first request.
 
-Source: `services/kb-builder/src/agentic_kb_builder/embeddings/ollama_embedder.py` lines 25-63;
-gate: `build.py` `default_collaborators`, line 101.
+### Any other value
+```sh
+export EMBEDDINGS_PROVIDER=azure   # NOT accepted — fails the build immediately
+```
+Raises `RuntimeError: EMBEDDINGS_PROVIDER='azure' is not supported; use one of ollama, openai`
+before any docify/graphify/embed work starts.
+
+Artifact embeddings for **search** are always the free local hash (`LocalHashEmbedder`), never an
+API call, regardless of `EMBEDDINGS_PROVIDER` — this gate only affects the optional prose↔code
+semantic-similarity pass (ADR-0019).
+
+Source: `services/kb-builder/src/agentic_kb_builder/embeddings/factory.py` (the gate/validation),
+`ollama_embedder.py` (the Ollama shape), `openai_embedder.py` (the OpenAI-compatible shape); both
+embedders share a common `HttpEmbedder` base (`http_embedder.py`) for client lifecycle.
 
 ---
 
@@ -221,7 +247,7 @@ or the JWKS verifier rejects it (401).
 
 - **Never in code, config, or logs** — house rule (`.claude/rules/python.md`: "No secrets in code,
   fixtures, or logs"). Every model-client constructor in this repo logs `provider`/`model` and
-  explicitly never the key (`llm_endpoint.py` module docstring; `chat_model_client.py` line 219;
+  explicitly never the key (`llm_endpoint.py` module docstring; `chat_model_client.py` line 222;
   `docify/extract_fn.py` lines 88, 140 — "the API key is captured in the closure and NEVER
   logged"). Source `auth.token_env` values (`GITHUB_TOKEN`/`ADO_PAT`) are resolved by *name* and
   never appear in stored config (`connectors/config_loader.py::resolve_token`).
@@ -230,9 +256,10 @@ or the JWKS verifier rejects it (401).
   posture: `docs/contracts/tracing.md` states spans **never** store `query_text` or
   `task_description` (line 143), and a broken trace sink logs only `name`/`service`/`status` on
   failure, never span attributes (line 99) — a trace can never leak what a call actually saw.
-- **A missing key fails loudly, never silently.** Every provider branch in `llm_endpoint.py` and
-  `review_panel/model_client.py` raises before making a call if a required var is unset — the
-  build/panel/agent never proceeds pretending it has a model when it doesn't.
+- **A missing key fails loudly, never silently.** Every provider branch in `llm_endpoint.py`,
+  `review_panel/model_client.py`, and `embeddings/openai_embedder.py` raises before making a call
+  if a required var is unset — the build/panel/agent never proceeds pretending it has a model when
+  it doesn't.
 - **TLS trust material** (`LLM_CA_CERT` / `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE`, and the last-resort
   `LLM_SSL_VERIFY=false`) is the one exception worth calling out separately: it's not a secret, but
   disabling verification is logged loudly (`event=llm_ssl_verify_disabled`) precisely so it's never
