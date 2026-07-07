@@ -1,12 +1,13 @@
-# 11 — Providers and API keys: what needs a key, and how to use one
+# 07 — Providers and API keys
 
-> **Reference, not a runbook.** Every LLM-shaped variable in this repo, what component reads it,
-> and exactly how to point that component at Groq, OpenAI, Azure OpenAI, Claude on Azure AI
-> Foundry, or a local Ollama. Written for the "which key do I need for *this* task" question —
-> if you're building your first KB, start at [00 — Quickstart](00-quickstart.md); if you're deep
-> in kb-builder's provider flags, [04 §4](04-kb-builder-testing.md#4-choose-and-configure-an-llm-provider)
-> has the copy-paste runbook this page cross-links to. Every variable below is cited to the source
-> that resolves it, so nothing here is asserted without a file to check it against.
+**Reference, not a runbook.** Every key and credential this platform can use — which component
+needs it, for what, and exactly how to point that component at Groq, OpenAI, Azure OpenAI, Claude
+on Azure AI Foundry, or a local Ollama. Written for the "which key do I need for *this* task"
+question — if you're building your first KB, start at
+[01 — Run the platform](01-run-the-platform.md); if you're deep in kb-builder's provider flags,
+[22 §4](22-testing-and-builds.md#4-choose-and-configure-an-llm-provider) has the copy-paste
+runbook this page cross-links to. Every variable below is cited to the source that resolves it,
+so nothing here is asserted without a file to check it against.
 
 ---
 
@@ -15,14 +16,14 @@
 | Component | Needs a key? | Vars | When |
 |---|---|---|---|
 | **Zero-LLM build** (code + git-metadata, `bootstrap.sh` default) | **No** | — | Always the default path. Code is extracted by Graphify's AST pass, commits by `GitMetadataConnector` — both deterministic, zero model calls. |
-| **docify** (doc/wiki/card summaries; `--with-docs`) | **Yes** | `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` (or `DOC_LLM_*` to run docs on a *different* model than the judge/agent) | Your sources include prose (`github_doc`, `azure_wiki`, `ado_card`). §2 below; runbook: [04 §4](04-kb-builder-testing.md#4-choose-and-configure-an-llm-provider). |
+| **docify** (doc/wiki/card summaries; `--with-docs`) | **Yes** | `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` (or `DOC_LLM_*` to run docs on a *different* model than the judge/agent) | Your sources include prose (`github_doc`, `azure_wiki`, `ado_card`). §2 below; runbook: [22 §4](22-testing-and-builds.md#4-choose-and-configure-an-llm-provider). |
 | **Embeddings / semantic linker** | Opt-in, key optional | `EMBEDDINGS_PROVIDER` (gate — any non-empty value; the value itself is never read), `EMBEDDINGS_BASE_URL`, `EMBEDDINGS_MODEL`, `EMBEDDINGS_API_KEY` | Unset ⇒ skipped entirely; artifact embeddings for search are **always** a free local hash (`LocalHashEmbedder`), never an API call. This gate only affects the prose↔code semantic-similarity pass (ADR-0019). |
 | **Relationship judge** (phase-3B inferred edges) | Opt-in, reuses docify's key | `RELATIONSHIP_JUDGE` (gate — any non-empty value) | Unset ⇒ candidates are generated and audited but never judged. Uses the **same** `LLM_*`/`DOC_LLM_*` provider as docify — no separate credentials. |
 | **mcp-server** (default: serving `kb_search` / `context.*` / `graph.*`) | **No** | — | The broker's default retrieval, budget, ACL, and receipt paths are 100% deterministic Postgres reads. Verified from `mcp/server.py::create_app` — no model client is constructed unless you opt in (next row). |
 | **mcp-server L3 entailment** (opt-in claim verifier) | Opt-in, key optional | `MCP_ENABLE_ENTAILMENT` (gate), `ENTAIL_LLM_PROVIDER` / `ENTAIL_LLM_API_KEY` / `ENTAIL_LLM_MODEL` / `ENTAIL_LLM_BASE_URL` (or `ENTAIL_AZURE_OPENAI_*`) | Unset (default) ⇒ the server stays LLM-free and `verify_answer` never runs L3 for any claim (L0-L2 deterministic checks still run). Set it and the server attaches an entailment client, cache-gated per claim. Defaults to local Ollama — **no key needed even when enabled**, unless you repoint it at Groq/OpenAI/Azure. |
 | **review-panel drafts** (four-lens PR review) | Yes, for a *new* draft only | `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` (/ `LLM_BASE_URL`) | Fetching an **already-stored** draft (same head SHA) needs zero LLM credentials — only computing a fresh one does. |
 | **evals A/B (T3 tier) + `kb_agent.py`** | Yes, for the LLM-armed comparison | `LLM_PROVIDER` / `LLM_API_KEY` (or `GROQ_API_KEY`) / `LLM_MODEL` / `LLM_BASE_URL` | `kb_agent.py` always needs one to run at all (it *is* the agent). The eval suite's T3 tier skips itself with a stated reason when creds are absent — T1/T2/T4 don't need one. |
-| **Hosts** (VS Code Copilot, OpenCode, Copilot CLI, `agent_runner.py`) | Their own model, plus a broker token | Each host's own model auth (out of this platform's scope) + `CONTEXT_BROKER_TOKEN` / `COPILOT_MCP_CONTEXT_BROKER_TOKEN` (a **real Entra token**, required for any non-loopback broker) | Against a **loopback, local-dev-auth** broker (ADR-0016), any non-empty bearer works. Against anything else, you need a real Entra access token for `MCP_ENTRA_AUDIENCE` — see [05 §4](05-running-the-mcp-server.md#4-auth-get-a-bearer-so-you-can-call-the-tools). |
+| **Hosts** (VS Code Copilot, OpenCode, Copilot CLI, `agent_runner.py`) | Their own model, plus a broker token | Each host's own model auth (out of this platform's scope) + `CONTEXT_BROKER_TOKEN` / `COPILOT_MCP_CONTEXT_BROKER_TOKEN` (a **real Entra token**, required for any non-loopback broker) | Against a **loopback, local-dev-auth** broker (ADR-0016), any non-empty bearer works. Against anything else, you need a real Entra access token for `MCP_ENTRA_AUDIENCE` — see §5 below. |
 | **Production source connectors** (`--backend production`) | Yes, per source | Whatever env var name each source's `auth.token_env` names in `sources.yaml` — conventionally `GITHUB_TOKEN` / `ADO_PAT` | `--backend local` (the default; what `bootstrap.sh` uses) never authenticates and needs **none** of these — it only reads workspace files. |
 
 ---
@@ -46,7 +47,7 @@ export LLM_MODEL=llama-3.1-8b-instant            # default for groq if unset
 ```
 Fast, cheap, OpenAI-compatible — the path the rest of the dev guide assumes for prose builds. Put
 the key in a repo-root `.env`: `bootstrap.sh --with-docs` and `kb_agent.py` load it themselves
-(§3); a plain `uv run python -m agentic_kb_builder.build` does **not** — export it in your shell.
+(§4); a plain `uv run python -m agentic_kb_builder.build` does **not** — export it in your shell.
 Defaults: `PROVIDER_DEFAULTS["groq"]`, `llm_endpoint.py` lines 34-38.
 
 ### OpenAI
@@ -106,7 +107,7 @@ Defaults: `PROVIDER_DEFAULTS["ollama"]`, `llm_endpoint.py` lines 34-38.
 > Any other provider name falls through to the generic OpenAI-compatible branch and just needs
 > `LLM_BASE_URL` + `LLM_API_KEY` + `LLM_MODEL` pointed at anything that speaks the
 > `chat/completions` shape (OpenRouter, vLLM, LM Studio, Anthropic's own OpenAI-compatibility
-> endpoint, …) — see [04 §4 blocks E-G](04-kb-builder-testing.md#4-choose-and-configure-an-llm-provider)
+> endpoint, …) — see [22 §4 blocks E-G](22-testing-and-builds.md#4-choose-and-configure-an-llm-provider)
 > for worked examples. `llm_endpoint.py` only special-cases `azure` and `anthropic_foundry`;
 > everything else is `PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["ollama"])` plus your
 > override — a name like `foundry` or `custom` has no special meaning to the code, it's purely a
@@ -178,7 +179,45 @@ gate: `build.py` `default_collaborators`, line 101.
 
 ---
 
-## 5. Security notes
+## 5. Broker bearer tokens (calling the MCP tools)
+
+Every broker tool call requires an authenticated session, and the verifier rejects any token whose
+signature, issuer, or `aud` doesn't match the server's `MCP_ENTRA_TENANT_ID` /
+`MCP_ENTRA_AUDIENCE` — intentionally, with **no override**. Two ways to hold a valid bearer:
+
+**Local-dev broker (loopback only).** When the server runs with `MCP_LOCAL_DEV_AUTH=1`
+([01 — Run the platform](01-run-the-platform.md) §"Server configuration reference"), any non-empty
+bearer string authorizes as the configured dev subject — this is why the shipped host configs use
+placeholder tokens. It only exists on `127.0.0.1`; nothing to acquire.
+
+**Real Entra token (everything else).** Acquire an access token for the audience the server was
+started with. Two common ways:
+
+```sh
+# az CLI (interactive) — mints a token for your app's audience/scope
+az login
+az account get-access-token --resource "api://agentic-kb" --query accessToken -o tsv
+```
+
+```python
+# MSAL client-credentials (a service identity calling the broker)
+import msal
+app = msal.ConfidentialClientApplication(
+    client_id="<app-client-id>",
+    authority="https://login.microsoftonline.com/<tenant-guid>",
+    client_credential="<client-secret-or-cert>",  # from your secret store, never hard-coded
+)
+token = app.acquire_token_for_client(scopes=["api://agentic-kb/.default"])["access_token"]
+```
+
+Then present `Authorization: Bearer <token>` on the MCP HTTP requests (hosts reference it by env
+var name — `CONTEXT_BROKER_TOKEN` / `COPILOT_MCP_CONTEXT_BROKER_TOKEN` — never as a pasted value).
+The token's `aud` **must** equal `MCP_ENTRA_AUDIENCE` and its issuer must be the server's tenant,
+or the JWKS verifier rejects it (401).
+
+---
+
+## 6. Security notes
 
 - **Never in code, config, or logs** — house rule (`.claude/rules/python.md`: "No secrets in code,
   fixtures, or logs"). Every model-client constructor in this repo logs `provider`/`model` and
@@ -202,7 +241,6 @@ gate: `build.py` `default_collaborators`, line 101.
 
 ---
 
-Related: [04 — KB-builder testing](04-kb-builder-testing.md) §4 (the full build-provider runbook),
-[05 — Running the MCP server](05-running-the-mcp-server.md) §4 (broker auth tokens),
-[06 — Review panel](06-review-panel.md) (its own env table), [08 — Observability](08-observability.md)
-(what the ledger/traces do and don't record).
+Related: [22 — Testing and builds](22-testing-and-builds.md) §4 (the full build-provider runbook),
+[04 — Review drafts](04-review-drafts.md) (its own env table),
+[06 — Observability](06-observability.md) (what the ledger/traces do and don't record).

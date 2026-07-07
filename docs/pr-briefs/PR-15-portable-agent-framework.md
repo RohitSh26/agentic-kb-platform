@@ -64,7 +64,8 @@ ADR-0009. `agents/README.md` (canonical manifest format). docs/contracts/agent-o
 - `agents/README.md` — note that `.copilot/` and `.opencode/` are renderings of this canon.
 - `CLAUDE.md` repo map — extend the two-agent-layers note: `.copilot/` and `.opencode/` are
   *product* renderings of `agents/`, not Claude Code build subagents.
-- `docs/dev-guide/02-implementation-tour.md` — section for the portable framework.
+- `docs/dev-guide/02-implementation-tour.md` (now `docs/dev-guide/21-code-tour.md`) — section for
+  the portable framework.
 
 ## Contracts
 

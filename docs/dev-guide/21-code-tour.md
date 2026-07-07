@@ -1,9 +1,14 @@
-# 02 — Implementation tour
+# 21 — Code tour
 
-> A guided walk through the code as it exists today, organized by subsystem. Read
-> [01 — Design deep dive](01-design-deep-dive.md) first for the *why*; this document is the *how*
-> and *where*. Paths are repo-relative; line numbers drift, so prefer the named symbols. PR/ADR
-> numbers appear as provenance — where a behavior came from — not as a reading order.
+> **Point in time: 2026-07-07** (migration head `0021`, MCP schema `1.10.0`). A code tour ages;
+> this one is dated so it can age honestly. Trust the *structure* — which subsystem lives where,
+> what talks to what — over the specifics, and verify any load-bearing detail against the code.
+
+> A guided walk through the code, organized by subsystem. Read
+> [20 — Architecture for contributors](20-architecture-for-contributors.md) first for the *why*;
+> this document is the *how* and *where*. Paths are repo-relative; line numbers drift, so prefer
+> the named symbols. PR/ADR numbers appear as provenance — where a behavior came from — not as a
+> reading order.
 
 ## Layout at a glance
 
@@ -15,7 +20,7 @@ services/mcp-server   the runtime plane: auth, telemetry, the 12-tool Context Br
                       tracing, health.
 services/review-panel the dev-gated review draft engine (ADR-0031): LangGraph fan-out of the four
                       reviewer lenses → reconcile → one stored draft. Owns only the dedicated
-                      `review_panel` schema. Operations: dev-guide 06.
+                      `review_panel` schema. Operations: dev-guide 04.
 docs/contracts/       markdown cross-service contracts — the only thing the services share
 agents/               the 12 product runtime agent manifests (not Claude Code agents)
 evals/                dev-only uv project: benchmark cases + harness + the consolidated tiered
@@ -478,7 +483,7 @@ into an already-secured, already-observable server.
   client secret at all. The test seam is fastmcp's `TokenVerifier` base class: tests inject a
   `FakeVerifier`; fastmcp wraps the `/mcp` endpoint in `RequireAuthMiddleware`, so requests
   without a valid token get 401 before any tool or middleware runs. (The opt-in, loopback-only
-  local-dev verifier is ADR-0016 — see dev-guide 05 §4b.)
+  local-dev verifier is ADR-0016 — see dev-guide 01 §"Server configuration reference".)
 - `telemetry/middleware.py` — one structured line per tool call:
   `event=mcp_request tool=... agent=... run_id=... latency_ms=... status=ok|error`. The agent is
   the verified token's subject (never a client-asserted field); `run_id` is read from the
@@ -491,8 +496,8 @@ into an already-secured, already-observable server.
   200 + the active `kb_version` (invariant 5: MCP serves the last successful active version),
   or 503 with `active_kb_version: null` when no build has been activated yet.
 - `config.py` — env-only configuration (`DATABASE_URL`, `MCP_ENTRA_TENANT_ID`,
-  `MCP_ENTRA_AUDIENCE` required; see dev-guide 05 §2 for the full reference). Identifiers, not
-  secrets.
+  `MCP_ENTRA_AUDIENCE` required; see dev-guide 01 §"Server configuration reference" for the full
+  table). Identifiers, not secrets.
 
 Tests (`services/mcp-server/tests/`) exercise the boundary at the right layer: auth tests
 (`tests/integration/`) go through the real HTTP app in-process (httpx ASGI transport — the
@@ -571,7 +576,7 @@ configured; `none` ⇒ null sink; anything else fails the boot) and hands a cons
 through `BrokerDeps.trace_sink`. `get_task_context` emits one root span + one span per node,
 `kb_search` one span per call, into the registry's `trace_span` table (migration 0021) — after the
 call's own work is done, fail-soft, never budget-charging. Contract: `docs/contracts/tracing.md`;
-operator queries: dev-guide [08](08-observability.md).
+operator queries: dev-guide [06](06-observability.md).
 
 **The governed tools:**
 
@@ -702,7 +707,7 @@ never runs Alembic (kb-builder owns the schema) and never requires Azure.
   `RunRecord` dataclasses; `metrics.py` computes the eleven §13 metrics DB-free (build-plane
   metrics emit `not_measured` with null values, never faked); `baseline.py` diffs against the
   committed `baseline.json` (±5% relative ⇒ improved/regressed, else flat); `dashboard.py` is the
-  ADR-0014 renderer behind `make dashboard` (dev-guide [08](08-observability.md)).
+  ADR-0014 renderer behind `make dashboard` (dev-guide [06](06-observability.md)).
 - `run.py` — the T1 entrypoint (`make eval-run`); writes `report.json` (gitignored), prints the
   table the `eval-runner` Claude Code subagent reads, `--update-baseline` reseeds the baseline.
 - `run_all.py` — the **consolidated tiered runner** (`make eval-all`): T1 golden sets, T2 live-KB
@@ -768,9 +773,10 @@ agent files** (the twelve roles + `_template`) and the **two** framework skills
 - `.copilot/` — `agents/*.agent.md` (`name`, `description`, `tools` in Copilot's MCP syntax:
   `context-broker/kb_search` plus the host's native aliases `read`/`search`/`edit` mapped from the
   canon's native tools), `skills/*.md` as host-neutral instruction modules, and
-  `mcp/repository-settings.json` (`$COPILOT_MCP_CONTEXT_BROKER_TOKEN`, **`tools: ["kb_search"]`**)
-  + `mcp/vscode-mcp.json` (`${input:context-broker-token}`). See dev-guide
-  [09](09-copilot-cli-end-to-end.md) for using it.
+  `mcp/repository-settings.json` (`$COPILOT_MCP_CONTEXT_BROKER_TOKEN`,
+  **`tools: ["get_task_context", "kb_search"]`**) + `mcp/vscode-mcp.json`
+  (`${input:context-broker-token}`). See dev-guide
+  [02](02-connect-your-editor.md) for using it.
 - `.opencode/` — `agents/*.md` (OpenCode frontmatter: `description`, `mode` — orchestrator
   `primary`, specialists `subagent` — and a `tools` map enabling `context-broker_kb_search` plus
   the native tools), `skills/<name>/SKILL.md`, and `opencode.json` (remote MCP entry with
@@ -805,7 +811,7 @@ subprocess (exit 0 on this repo, exit 1 on seeded tool drift or a literal-lookin
 ## 16. Review-panel draft engine (`services/review-panel`, PR-40)
 
 The third service (ADR-0030 §3 as amended by ADR-0031), summarized here for the tour — the
-operations guide is [06 — Review panel](06-review-panel.md) and the contract is
+operations guide is [04 — Review drafts](04-review-drafts.md) and the contract is
 `docs/contracts/review-panel.md`:
 
 - **One bounded job per PR**: a LangGraph fan-out of the four reviewer lenses (each one LLM call
@@ -868,7 +874,7 @@ Verified against the tree as of 2026-07-05 — recorded follow-ups, not forgotte
 ## 19. Reading order for a new dev
 
 1. `docs/architecture/00-overview.md` (15 min) — the blueprint.
-2. This guide's doc 01 — the invariants and why.
+2. [20 — Architecture for contributors](20-architecture-for-contributors.md) — the invariants and why.
 3. `services/kb-builder/src/agentic_kb_builder/domain/` — the vocabulary.
 4. `services/kb-builder/src/agentic_kb_builder/application/build_runner.py` top-to-bottom — the
    spine everything hangs on.

@@ -1,7 +1,7 @@
 # Local spin-up of the whole system (PR-17): Postgres (the truth store), a
 # one-shot kb-builder migration job (it owns the schema — ADR-0008), and the
 # MCP Context Broker. This is a local convenience, not the deployment story —
-# that is infra/ (Azure). Guide: docs/dev-guide/03-local-testing.md §Docker.
+# that is infra/ (Azure). Guide: docs/dev-guide/22-testing-and-builds.md §Docker.
 #
 # The Entra values are identifiers, never secrets; the placeholders boot the
 # stack, but no bearer token verifies until you set a real tenant (auth is

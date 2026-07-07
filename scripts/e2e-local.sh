@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hermetic local end-to-end demo (dev-guide 06).
+# Hermetic local end-to-end demo (dev-guide 04-review-drafts).
 #
 # Runs the WHOLE platform on your machine with only Postgres + uv — NO Ollama,
 # NO Azure, NO Entra. It: builds a tiny KB from this repo's git history (zero-LLM
@@ -23,7 +23,7 @@ SOURCES="${REPO_ROOT}/scripts/demo-sources.yaml"
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 
-command -v uv >/dev/null || { echo "uv not found — see dev-guide 06 §Prerequisites"; exit 1; }
+command -v uv >/dev/null || { echo "uv not found — see dev-guide 04-review-drafts §Prerequisites"; exit 1; }
 pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1 || {
   echo "Postgres not reachable at ${PGHOST}:${PGPORT}. Start it (e.g. brew services start postgresql) and retry."; exit 1; }
 # Refuse to run next to a stale server on the port: otherwise our new server fails

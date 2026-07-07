@@ -26,7 +26,8 @@ That is correct for production but creates friction for a local "did my build wo
 loop: the developer must stand up (or be granted access to) a real Entra app registration just to
 call a tool against a Postgres that lives entirely on their laptop.
 
-Today's honest, no-new-code answer (documented in docs/dev-guide/05-running-the-mcp-server.md):
+Today's honest, no-new-code answer (documented in docs/dev-guide/07-providers-and-api-keys.md
+§"Broker bearer tokens"):
 **point the server at a real Entra tenant and acquire a token** (device-code or client-credentials
 via MSAL / `az account get-access-token`). This keeps the production path and the dev path
 identical, which is its own virtue. The question this ADR raises is whether to *also* offer a
@@ -83,7 +84,7 @@ work:
   flag-on + real tenant ⇒ refuse; flag-on + public bind ⇒ refuse; ledger marker present.
 - `tests/contract/test_local_dev_auth_not_deployed.py` — asserts `MCP_LOCAL_DEV_AUTH` is absent from
   the Dockerfile, docker-compose, and `infra/` (guardrail 5).
-- `dev-guide/05-running-the-mcp-server.md` §4b documents the loop.
+- `dev-guide/01-run-the-platform.md` §"Server configuration reference" documents the loop.
 
 Option A (real Entra) remains the default path; Option B is purely additive.
 

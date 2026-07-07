@@ -1,9 +1,12 @@
-# 01 — Platform design deep dive
+# 20 — Architecture for contributors
 
-> Audience: an engineer who just joined and has never seen this codebase. After reading this you
-> should understand *what* we are building, *why* it is shaped this way, and *where* each design
-> rule is enforced in code. The implementation walkthrough is in
-> [02 — Implementation tour](02-implementation-tour.md).
+**This page is for people changing the platform, not running it** (to run it, start at
+[01 — Run the platform](01-run-the-platform.md)). It explains *what* we are building, *why* it is
+shaped this way, and *where* each design rule is enforced in code — ending in the
+invariants → enforcement map every change is reviewed against. For full depth, go to
+[`docs/architecture/`](../architecture/00-overview.md) and the decision-record index
+([`docs/adr/README.md`](../adr/README.md)); the code walkthrough is
+[21 — Code tour](21-code-tour.md).
 
 ## What we are building, in one paragraph
 
@@ -28,7 +31,7 @@ Build units: `docs/pr-briefs/PR-01`–`PR-40` (all implemented).
 |---|---|---|---|
 | **Build plane** | Nightly incremental refresh of the KB; activates a new `kb_version` only after validation + publish gates | `services/kb-builder` | Implemented through PR-38: connectors (local-FS + production GitHub/ADO, ADR-0015) → build engine (**per-source incremental commits**, ADR-0029; crash-durable model-output cache, ADR-0027/PR-35; single-builder advisory lock) → docify (Graphify LLM doc extraction, ADR-0023) → graphify (whole-tree extractor + deterministic `search_text`, PR-34) → linker (deterministic + cross-domain + candidate→LLM judge) → alias index (PR-38) → centrality prior (ADR-0028/PR-36) → version-membership invalidation → search indexer → enforcing publish gates; a single `build` CLI (`python -m agentic_kb_builder.build`) drives it end to end. Migration head: `0021_trace_span` |
 | **Runtime plane** | Serves agent requests through MCP — **12 tools at `MCP_SCHEMA_VERSION` 1.10.0**: the budgeted `kb_search` (PR-37, ADR-0025) and `get_task_context` (PR-39, ADR-0030 — a zero-LLM LangGraph fan-out) as the primary retrieval surface, plus the governed evidence packs, budgets, trust-aware graph traversal, the verifier ladder + signed receipts, client identity, intent-aware ranking, the retrieval ledger, and Postgres-first tracing (ADR-0032) | `services/mcp-server` | Implemented (PR-09 server base; PR-10 Context Broker; PR-11 agent manifests + output schemas; PR-13 security hardening: `team_acl_v1` filtering, injection flagging, audit logging; PR-23/24/30/31 the verifier ladder L0→L3 + signed receipts; PR-32 client/app identity + scopes; PR-33 temporal/intent ranking; PR-37 `kb_search`; PR-39 `get_task_context` + `trace_span` tracing) |
-| **Review draft engine** | On-demand, **dev-gated** PR review drafts (ADR-0031): LangGraph fan-out of the four reviewer lenses → deterministic reconcile → one stored draft. **Never posts to GitHub** — the developer pulls, edits, and publishes under their own auth | `services/review-panel` | Implemented (PR-40); owns only the dedicated `review_panel` Postgres schema (idempotent bootstrap DDL — a documented Alembic exemption). Operations guide: [06 — Review panel](06-review-panel.md) |
+| **Review draft engine** | On-demand, **dev-gated** PR review drafts (ADR-0031): LangGraph fan-out of the four reviewer lenses → deterministic reconcile → one stored draft. **Never posts to GitHub** — the developer pulls, edits, and publishes under their own auth | `services/review-panel` | Implemented (PR-40); owns only the dedicated `review_panel` Postgres schema (idempotent bootstrap DDL — a documented Alembic exemption). Operations guide: [04 — Review drafts](04-review-drafts.md) |
 | **Benchmark layer** | Dev-only eval harness: benchmark + golden-query cases through the real broker, token-cost metrics, baseline diffs — consolidated into the tiered `run_all.py` (`make eval-all`) | `evals/` | Implemented (PR-12; golden queries PR-25; consolidated tiers: `docs/architecture/evaluation-system.md`; contracts in `docs/contracts/evals-report.md` + `golden-query-evals.md`) |
 
 Nothing is shared at runtime (ADR-0008): each service is a self-contained `uv` project, and the
@@ -246,7 +249,7 @@ is a `Protocol` the caller owns:
 
 Two payoffs: tests are hermetic (in-memory fakes, no cloud), and each backend is swappable via ADR
 without touching call sites. This is also why **everything through PR-07 runs locally with zero
-Azure resources** — see [03 — Local testing](03-local-testing.md).
+Azure resources** — see [22 — Testing and builds](22-testing-and-builds.md).
 
 ## Security posture (enforced at the MCP boundary, PR-09+)
 

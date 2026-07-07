@@ -24,8 +24,9 @@ cd agentic-kb-platform
 About 2–3 minutes: synced dependencies → a migrated Postgres database → an **active, queryable
 knowledge base** built from this repo's own source (zero LLM calls, no API keys, no cloud
 accounts) → a real retrieval check proving it works → printed next steps to serve it and connect
-a host. The narrated walkthrough, troubleshooting table, and what to do next:
-[`docs/dev-guide/00-quickstart.md`](docs/dev-guide/00-quickstart.md).
+a host. The full walkthrough and what to do next:
+[`docs/dev-guide/01-run-the-platform.md`](docs/dev-guide/01-run-the-platform.md); when something
+misbehaves, [`docs/dev-guide/08-troubleshooting.md`](docs/dev-guide/08-troubleshooting.md).
 
 ## What's in the repo
 
@@ -44,9 +45,10 @@ interface, pinned by contract tests on both sides (including import-boundary tes
 
 Read in this order:
 
-1. **[`docs/dev-guide/`](docs/dev-guide/README.md)** — the reading path for a new developer:
-   quickstart → getting started → design deep dive → implementation tour, plus per-topic guides
-   (local testing, running the broker, the review panel, observability).
+1. **[`docs/dev-guide/`](docs/dev-guide/README.md)** — two tracks: *run and use the platform*
+   (01 run it → 02 connect your editor → 03 use the knowledge tools, plus review drafts, database
+   operations, observability, providers/keys, troubleshooting) and *work on the platform*
+   (20 architecture → 21 code tour → 22 testing and builds).
 2. **[`docs/contracts/`](docs/contracts/)** — living truth: the versioned cross-service
    agreements (the MCP tool surface, the registry schema, tracing, the review panel, agent output
    schemas). If prose and a contract disagree, the contract wins.
@@ -108,7 +110,7 @@ Integration tests need Postgres via `TEST_DATABASE_URL`.
 ## Status (2026-07-05)
 
 - All 40 build briefs implemented ([`docs/pr-briefs/README.md`](docs/pr-briefs/README.md));
-  decisions recorded through ADR-0032.
+  decisions recorded through ADR-0034.
 - Knowledge Registry migration head: `0021_trace_span`.
 - MCP tool surface: 12 registered tools at `MCP_SCHEMA_VERSION = "1.10.0"`
   ([`docs/contracts/mcp-tools-contract.md`](docs/contracts/mcp-tools-contract.md)).

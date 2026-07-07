@@ -3,7 +3,7 @@
 #
 # Policy source: the COMMITTED .copilot/mcp/repository-settings.json (the two-tool
 # allowlist). The Copilot CLI cannot consume that file in place, so — exactly as
-# dev-guide 09 §3 documents — its native ~/.copilot/mcp-config.json is GENERATED
+# dev-guide 02-connect-your-editor §3 documents — its native ~/.copilot/mcp-config.json is GENERATED
 # from the committed file, changing only the URL (local broker) and the bearer
 # (any non-empty value under ADR-0016 local-dev auth). The pre-existing user
 # config is backed up and restored on exit.

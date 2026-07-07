@@ -1,70 +1,39 @@
 # Developer Guide
 
-Onboarding documentation for engineers joining the Agentic KB Platform. Read it as a path: the
-three tiers below go from "make it run" to "understand it" to "operate it".
+How to run, use, and work on the Agentic KB Platform. The guide is split into two tracks: pages
+**01–08** are for anyone who wants to *run and use* the platform (task-first, no history, no
+architecture required); pages **20–22** are for people *changing* the platform. History —
+decisions, build records, measured results — lives in `docs/adr/`, `docs/pr-briefs/`, and
+`docs/reports/`, **not here**.
 
-## Start here
+## Run and use the platform
 
-1. **[00 — Quickstart](00-quickstart.md)** — in a hurry? The scripted 10-minute path: one command
-   (`scripts/bootstrap.sh`) from a fresh clone to an **active, queryable knowledge base**, plus a
-   real zero-LLM retrieval check proving it works. No tokens, no cloud accounts.
-2. **[00 — Getting Started](00-getting-started.md)** — the narrated version, and the one document
-   to follow on a brand-new machine: from `git clone` to GitHub Copilot in VS Code answering
-   questions about this codebase through the budgeted, audited KB — install, build (no
-   tokens/LLM), serve, connect, ask, audit, then real GitHub/ADO sources and the multi-agent
-   runner. Troubleshooting throughout.
-3. **[01 — Platform design deep dive](01-design-deep-dive.md)** — *what* we are building, *why* it
-   is shaped this way, and *where* each design rule is enforced in code: the planes, the Postgres
-   Knowledge Registry, the trust contract, and the architecture invariants.
+Read **01 → 02 → 03** in order; reach for **04–08** as the need arises.
 
-## When you need it
+| Page | One line |
+|---|---|
+| **[01 — Run the platform](01-run-the-platform.md)** | From clone to a built, served, verified KB: prerequisites, `bootstrap.sh`, what success looks like, serving the MCP server, incremental rebuilds, and the one-time fresh-rebuild case. |
+| **[02 — Connect your editor](02-connect-your-editor.md)** | VS Code Copilot (agent mode), GitHub Copilot CLI, and OpenCode — each connected in ≤5 steps with one real question walked through, plus the ledger proof it was governed. |
+| **[03 — Using the knowledge tools](03-using-the-knowledge-tools.md)** | `kb_search` and `get_task_context` day to day, budget notices, KB-first/file-fallback, and (as an aside) the governed citation-grade path. |
+| **[04 — Review drafts](04-review-drafts.md)** | Get a four-lens PR review draft, edit it, publish it under your own name — the panel never posts to GitHub. |
+| **[05 — Database operations](05-database-operations.md)** | Postgres recipes: connect, health checks, backup/restore, reset, the useful-queries cookbook, maintenance, test-DB quirks. |
+| **[06 — Observability](06-observability.md)** | "What happened, and what did it cost?" — `make dashboard`, the `v_*` views, per-step traces, and reading the retrieval ledger. |
+| **[07 — Providers and API keys](07-providers-and-api-keys.md)** | The one reference for every key: which component needs one, per-provider setup (Groq/OpenAI/Azure/Claude/Ollama), where keys live, broker bearer tokens. |
+| **[08 — Troubleshooting](08-troubleshooting.md)** | Every known failure mode by symptom: build gates, server health, ports, editors not seeing tools, budget notices, locks, database errors. |
 
-- **[02 — Implementation tour](02-implementation-tour.md)** — a guided walk through the code as it
-  exists today, organized by subsystem: contracts, schema (migration head 0021), connectors, the
-  incremental build engine, docify/graphify/linker, alias mining, indexing, the 12-tool Context
-  Broker surface, the verifier ladder and receipts, identity and ACLs, and the agent framework.
-- **[03 — Local testing](03-local-testing.md)** — run everything on a laptop with **uv + a local
-  Postgres** and in-memory fakes; no Azure resources, including the end-to-end `build` CLI and the
-  Obsidian vault export.
-- **[04 — KB-builder testing (from a bare machine)](04-kb-builder-testing.md)** — a complete
-  copy-paste runbook: install the toolchain, point at any LLM provider (Groq / OpenAI / Azure /
-  Ollama / Claude / any OpenAI-compatible endpoint), run local and production builds, export to
-  Obsidian, and a full database query reference for build health and cost checks.
-- **[05 — Running the MCP server (fresh separate machine)](05-running-the-mcp-server.md)** — start
-  the **Context Broker** against an already-built KB, with and without Docker: the
-  `DATABASE_URL` / `MCP_*` env reference, fail-closed Entra auth (and the ADR-0016 local-dev
-  alternative), the `/health` probe, and a worked walk through the **governed path**
-  (`create_pack → open_evidence → graph.get_neighbors → verify_answer`) for citation-grade answers.
-- **[07 — What "MCP ready" means](07-what-mcp-ready-means.md)** — a plain-language explainer of
-  the agent's context toolkit and the **KB-first/file-fallback** model (ADR-0025): the KB as a
-  fast, budgeted librarian — not a gate — with code arriving skeleton-first (ADR-0026).
-- **[09 — GitHub Copilot CLI against the broker](09-copilot-cli-end-to-end.md)** — drive a real
-  external agent (the GitHub Copilot CLI, using its own model) against the broker through the
-  repo's committed, policy-carrying MCP config, which exposes exactly the tools the twelve-role
-  canon grants: the budgeted `kb_search` and the one-call `get_task_context`. Every call —
-  including the ones the budget refused — lands in the ledger.
-- **[10 — VS Code (Copilot agent mode) against the broker](10-vscode-against-the-broker.md)** —
-  redirect stub: this flow is Parts 6–8 of [00 — Getting Started](00-getting-started.md); the
-  connection config ships at `.vscode/mcp.json`.
-- **[11 — Providers and API keys](11-providers-and-api-keys.md)** — the one reference table for
-  "which key does this system need, for what, and how do I use Groq / OpenAI / Azure OpenAI /
-  Claude on Azure AI Foundry / Ollama instead of the default." Covers every component (build,
-  mcp-server's opt-in L3 entailment, review-panel, evals, hosts, production connectors) and where
-  keys live (`.env` vs shell export), cited to source.
+## Work on the platform
 
-## Operating
+Read **20–22**, then go deep in [`docs/architecture/`](../architecture/00-overview.md) and the
+ADR index ([`docs/adr/README.md`](../adr/README.md)).
 
-- **[06 — Review panel](06-review-panel.md)** — run the **review draft engine**
-  (`services/review-panel`): a four-lens LangGraph review of a pull request that persists **one
-  draft** the developer pulls, edits, and publishes — the panel itself never posts to GitHub
-  (ADR-0031).
-- **[08 — Observability](08-observability.md)** — the dashboard, traces, and the retrieval ledger:
-  answer "what happened, and what did it cost?" read-only over Postgres — `make dashboard`, the
-  `v_*` views, `trace_span` / `TRACE_SINK` (ADR-0032), and ledger queries.
+| Page | One line |
+|---|---|
+| **[20 — Architecture for contributors](20-architecture-for-contributors.md)** | What we're building and why it's shaped this way, ending in the invariants → enforcement map every change is reviewed against. |
+| **[21 — Code tour](21-code-tour.md)** | A dated, subsystem-by-subsystem walk through the code — structure over specifics. |
+| **[22 — Testing and builds](22-testing-and-builds.md)** | The verify gate, test databases and fakes, Docker compose, and the complete bare-machine build runbook (providers, flags, SQL health reference). |
 
 ---
 
-Deep specs live in `docs/architecture/` (start with
-[`00-overview.md`](../architecture/00-overview.md)), cross-service agreements in
-`docs/contracts/`. Decisions run through ADR-0032 and build units PR-01–40, **all implemented** —
-see [`docs/adr/README.md`](../adr/README.md) and [`docs/pr-briefs/README.md`](../pr-briefs/README.md).
+Deep specs: [`docs/architecture/`](../architecture/00-overview.md). Cross-service agreements
+(the source of truth when prose disagrees): `docs/contracts/`. History: `docs/adr/` (decision
+records), `docs/pr-briefs/` (the implemented build units), `docs/reports/` (measured results).

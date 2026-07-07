@@ -1,12 +1,12 @@
-# 08 — Observability: the dashboard, traces, and the retrieval ledger
+# 06 — Observability
 
-> How to see what the platform did — retrieval outcomes, token spend, build health, per-step
-> latency — from the records the system writes about itself. For an operator or developer asking
-> "what happened, and what did it cost?". Everything here is read-only over Postgres: the ledger
-> (`retrieval_event`), the build audit (`kb_build_run`), the trace store (`trace_span`), and four
-> views projected over them. Contracts:
-> [`observability-dashboard.md`](../contracts/observability-dashboard.md) and
-> [`tracing.md`](../contracts/tracing.md).
+How to see what the platform did — retrieval outcomes, token spend, build health, per-step
+latency — from the records the system writes about itself. For an operator or developer asking
+"what happened, and what did it cost?". Everything here is read-only over Postgres: the ledger
+(`retrieval_event`), the build audit (`kb_build_run`), the trace store (`trace_span`), and four
+views projected over them; contracts:
+[`observability-dashboard.md`](../contracts/observability-dashboard.md) and
+[`tracing.md`](../contracts/tracing.md).
 
 ## The one-command view: `make dashboard`
 
@@ -194,7 +194,7 @@ ORDER BY build_seq DESC;
 
 One build-won't-start case that is not a gate: `build aborted: another builder is running` with
 `event=builder_lock_held` in the log — the single-builder Postgres advisory lock. See
-[04 — KB-builder testing](04-kb-builder-testing.md) troubleshooting.
+[08 — Troubleshooting](08-troubleshooting.md) §"Builder lock held".
 
 ## The health check: `make eval-all`
 

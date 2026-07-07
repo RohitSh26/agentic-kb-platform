@@ -244,7 +244,7 @@ _Post-verification counts._
 - **type**: documentation · **severity**: medium · **audit-key**: `docs/test-pointer-only-wrong`
 - **evidence**: `services/kb-builder/src/agentic_kb_builder/indexing/search_document.py:11-13` — "Pointer-only artifacts (code_file, endpoint, test) ... have no body to rank"
 - **evidence**: `services/kb-builder/src/agentic_kb_builder/graphify/to_artifacts.py:36-46` — `test` drafts are built with `body_text=_snippet(...)` and a span
-- **evidence**: `docs/contracts/azure-ai-search-index.md:41` repeats the wrong rationale; `docs/dev-guide/02-implementation-tour.md:206-208` states the correct behavior (contradiction)
+- **evidence**: `docs/contracts/azure-ai-search-index.md:41` repeats the wrong rationale; `docs/dev-guide/02-implementation-tour.md:206-208` (now `docs/dev-guide/21-code-tour.md`) states the correct behavior (contradiction)
 - **why it matters**: A load-bearing shared contract states a false rationale — `test` rows DO have a body but are deliberately excluded from the projection. A reader building L2 retrieval over tests via graph edges would be misled.
 - **suggested fix**: Reword the docstring + contract to: "`test` and `code_symbol` carry snippet bodies; `test` is excluded from the Search projection (reachable via graph edges); `code_file`/`endpoint` are genuinely pointer-only (`body_text=None`)."
 
@@ -257,14 +257,14 @@ _Post-verification counts._
 
 #### DOC-3 [LOW] Dev-guide "as-of" headers disagree with each other and with shipped scope
 - **type**: documentation · **severity**: low · **audit-key**: `docs/dev-guide-as-of-drift`
-- **evidence**: `docs/dev-guide/02-implementation-tour.md:1` — "(PR-01 → PR-15)" while body documents through PR-20
+- **evidence**: `docs/dev-guide/02-implementation-tour.md:1` (now `docs/dev-guide/21-code-tour.md`) — "(PR-01 → PR-15)" while body documents through PR-20
 - **evidence**: `docs/dev-guide/README.md:9` — "(PR-01 → PR-16)"
 - **why it matters**: Three different "current as of" markers make all of them untrustworthy.
 - **suggested fix**: Set both to "PR-01 → PR-21" (or drop the range and say "current main").
 
 #### DOC-4 [LOW] Implementation-tour migration list omits 0007 and 0008
 - **type**: documentation · **severity**: low · **audit-key**: `docs/dev-guide-migrations-incomplete`
-- **evidence**: `docs/dev-guide/02-implementation-tour.md:87-91` — enumerates 0001..0006 and stops
+- **evidence**: `docs/dev-guide/02-implementation-tour.md:87-91` (now `docs/dev-guide/21-code-tour.md`) — enumerates 0001..0006 and stops
 - **evidence**: `services/kb-builder/migrations/versions/0007_retrieval_event_status.py`, `0008_acl_teams.py` exist
 - **why it matters**: The omitted migrations back two heavily-documented features (ledger status, team ACLs).
 - **suggested fix**: Append 0007 (ledger status) and 0008 (acl_teams) to the walk.

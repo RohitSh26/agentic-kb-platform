@@ -1,4 +1,4 @@
-"""Smoke-call the running MCP broker through its public tool surface (dev-guide 06).
+"""Smoke-call the running MCP broker through its public tool surface (dev-guide 04-review-drafts).
 
 Drives the same five tools a real agent would, in order, against a locally-running
 server (loopback, dev-auth). Prints what each call proves. Exits non-zero if the
@@ -173,7 +173,7 @@ async def main() -> int:
         "  and returned cards by handle within budget, expanded one card's raw text on demand,\n"
         "  walked the Postgres graph, and issued a verification RECEIPT for a claim that cited its\n"
         "  evidence — and every step was written to the retrieval ledger (the audit trail above).\n"
-        "  See dev-guide 06 §'What just happened?' to inspect the ledger + receipts in Postgres."
+        "  See dev-guide 04-review-drafts §'What just happened?' to inspect the ledger + receipts in Postgres."
     )
     return 0
 

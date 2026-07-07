@@ -1,4 +1,4 @@
-# Code-only LOCAL build (dev-guide 08). Builds this repo's Python source from the
+# Code-only LOCAL build (dev-guide 06-observability). Builds this repo's Python source from the
 # local checkout via `--backend local` — NO GitHub/ADO tokens, NO LLM (code extraction
 # is deterministic/zero-LLM), NO Ollama. Produces code_symbols + search_text + the
 # defined_in/calls/imports graph: everything the MCP broker + agent runner need.

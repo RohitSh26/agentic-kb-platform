@@ -2,7 +2,7 @@
 
 Resolves every case in `evals/retrieval_cases/alias_golden_v1.yaml` against the LIVE
 `alias_reference` index of a real Postgres registry (a `build` run — see
-docs/dev-guide/03-local-testing.md "Running an end-to-end build locally"), and prints
+docs/dev-guide/22-testing-and-builds.md "Running an end-to-end build locally"), and prints
 per-case hit/miss plus top-1 accuracy. Target: >= 80% (docs/contracts/alias-reference.md).
 
 Imports `agentic_kb_builder.alias` directly (the resolution algorithm kb-builder owns —
@@ -49,7 +49,7 @@ async def _resolve_all(database_url: str) -> list[AliasResult]:
     if not entries:
         raise RuntimeError(
             "no live alias_reference rows found in this registry — build a local KB first "
-            "(docs/dev-guide/03-local-testing.md 'Running an end-to-end build locally')"
+            "(docs/dev-guide/22-testing-and-builds.md 'Running an end-to-end build locally')"
         )
     results: list[AliasResult] = []
     for case in suite.cases:
@@ -82,7 +82,7 @@ async def _main() -> int:
     if not database_url:
         print(
             "DATABASE_URL is not set — point it at a locally built KB registry "
-            "(docs/dev-guide/03-local-testing.md).",
+            "(docs/dev-guide/22-testing-and-builds.md).",
             file=sys.stderr,
         )
         return 2

@@ -1,10 +1,10 @@
-# 06 — Review panel: on-demand PR review drafts
+# 04 — Review drafts
 
-> How to run the **review-panel draft engine** (`services/review-panel`) and work with the drafts
-> it stores. For a developer who wants a four-lens review of a pull request *before* asking for
-> human review — and for anyone wondering where those drafts live and why the panel never posts
-> anything to GitHub. Contract: [`docs/contracts/review-panel.md`](../contracts/review-panel.md);
-> decision: ADR-0031.
+How to get a four-lens review of a pull request *before* asking for human review: run the
+**review draft engine** (`services/review-panel`), pull the stored draft, edit it, and publish it
+under your own name. Also covers where drafts live and why the panel never posts anything to
+GitHub itself. Contract: [`docs/contracts/review-panel.md`](../contracts/review-panel.md)
+(decision: ADR-0031).
 
 ## What the review panel is
 
@@ -44,7 +44,7 @@ Configuration is env-only — identifiers and references, never secret values on
 | `GITHUB_TOKEN` | private repos / rate limits | Optional **read-only** token for the PR fetch. Never a write credential. |
 | `REVIEW_PANEL_AGENTS_DIR` | non-repo checkouts | Path to the canonical `agents/` directory (the wrapper script sets it to the repo's `agents/`). |
 | `REVIEW_PANEL_MCP_URL` / `REVIEW_PANEL_MCP_TOKEN` | optional KB context | When set, the panel makes one `kb_search` call during `load_pr` and shares the (fenced, untrusted) result with all four lenses. Unset = no KB access; KB failures are fail-soft. |
-| `TRACE_SINK` | tuning tracing | `postgres` (default when `REVIEW_PANEL_DATABASE_URL` is set) or `none` — per-step spans, ADR-0032. See [08 — Observability](08-observability.md). |
+| `TRACE_SINK` | tuning tracing | `postgres` (default when `REVIEW_PANEL_DATABASE_URL` is set) or `none` — per-step spans (ADR-0032). See [06 — Observability](06-observability.md). |
 
 > `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` are **inert** — LangChain's native instrumentation is
 > surfaced only in the boot log and is not this platform's tracing story (ADR-0032 withdrew the
@@ -52,7 +52,7 @@ Configuration is env-only — identifiers and references, never secret values on
 
 > Note: the review panel's `LLM_PROVIDER` accepts a **narrower** set of values than kb-builder's —
 > no `azure`, no `anthropic_foundry`. See the provider-acceptance matrix in
-> [11 — Providers and API keys](11-providers-and-api-keys.md) before assuming a kb-builder provider
+> [07 — Providers and API keys](07-providers-and-api-keys.md) before assuming a kb-builder provider
 > config carries over here unchanged.
 
 ## Running it
@@ -154,7 +154,7 @@ root span per attempt (`review_panel.draft_run`) plus one span per node that act
 (`load_pr`, `review_bug`, `review_security`, `review_quality`, `review_test_coverage`,
 `reconcile`, `store_draft`). `trace_id` is the draft key, so a crash + resume correlates under one
 trace. Spans carry aggregate metadata only — never PR text or diffs. Queries and the full span
-shape: [08 — Observability](08-observability.md) and
+shape: [06 — Observability](06-observability.md) and
 [`docs/contracts/tracing.md`](../contracts/tracing.md).
 
 ## Troubleshooting

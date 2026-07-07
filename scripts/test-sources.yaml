@@ -1,4 +1,4 @@
-# Real-source test config (dev-guide 06). GitHub code is zero-LLM (graphify);
+# Real-source test config (dev-guide 04-review-drafts). GitHub code is zero-LLM (graphify);
 # github_doc / azure_wiki / ado_card go through wikify (LLM). Run with:
 #   --backend production   (GITHUB_TOKEN + ADO_PAT in the environment)
 version: 1

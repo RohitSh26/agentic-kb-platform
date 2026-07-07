@@ -37,8 +37,9 @@ build.
   16.x; kb-builder is the only service/Dockerfile that mentions alembic; mcp-server waits on
   `service_completed_successfully`; every `DATABASE_URL` uses the asyncpg driver; no literal
   credential beyond the documented compose-internal local default.
-- `docs/dev-guide/03-local-testing.md` — a "Docker" section: one-command spin-up, what each
-  container does, the placeholder-identifier and 503-on-fresh-registry honesty notes.
+- `docs/dev-guide/03-local-testing.md` (now `docs/dev-guide/22-testing-and-builds.md`) — a
+  "Docker" section: one-command spin-up, what each container does, the placeholder-identifier and
+  503-on-fresh-registry honesty notes.
 
 ## Acceptance criteria
 

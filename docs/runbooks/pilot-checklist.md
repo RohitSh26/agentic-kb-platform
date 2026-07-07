@@ -7,14 +7,14 @@
 
 ## For each pilot developer (~15 minutes to productive)
 
-1. **Bootstrap** — follow `docs/dev-guide/00-quickstart.md`: prerequisites (git, uv, Python 3.12,
+1. **Bootstrap** — follow `docs/dev-guide/01-run-the-platform.md`: prerequisites (git, uv,
    Postgres), then `./scripts/bootstrap.sh`. Expected: `build status : active` and a 25/25 alias
    smoke check. No credentials needed for the default build.
 2. **Optional full build** (doc summaries): put a Groq key in repo-root `.env`
    (`LLM_PROVIDER=groq`, `LLM_API_KEY=...`), rerun with `--with-docs`.
-3. **Serve + connect** — `docs/dev-guide/05` to run the MCP server, then your host:
-   OpenCode (`.opencode/` ships ready), VS Code Copilot agent mode (`.vscode/mcp.json`),
-   or Copilot CLI (`docs/dev-guide/09`). The tool surface is `kb_search` + `get_task_context`.
+3. **Serve + connect** — `docs/dev-guide/01` §"Serve it" to run the MCP server, then your host
+   per `docs/dev-guide/02`: OpenCode (`.opencode/` ships ready), VS Code Copilot agent mode
+   (`.vscode/mcp.json`), or Copilot CLI. The tool surface is `kb_search` + `get_task_context`.
 4. **Work normally.** Ask real questions about the codebase; start real tasks. When something
    feels wrong or slow, keep going — the ledger records it; don't self-censor.
 
@@ -39,11 +39,11 @@
 
 - Rebuilds are manual locally (`bootstrap.sh` rerun is incremental and fast); nightly scheduling
   arrives with the cloud move (ADR-0004).
-- The review draft engine runs via CLI (`docs/dev-guide/06`); the in-chat draft-fetch MCP tool is
-  PR-41 (queued).
+- The review draft engine runs via CLI (`docs/dev-guide/04-review-drafts.md`); the in-chat
+  draft-fetch MCP tool is PR-41 (queued).
 - One builder per registry (advisory lock aborts a second, loudly).
 - Cloud/multi-user (production connectors, team auth, scheduling) is the layer-2 track — nothing
   in the local pilot is throwaway; the same schema, tools, and configs move as-is.
 - If a pilot session opens THIS platform repo (rather than your own) in Copilot CLI, two
-  build-tooling artifacts leak into the session — see dev-guide 09 "Known behaviors" for why
+  build-tooling artifacts leak into the session — see dev-guide 02 "Known behaviors" for why
   they're harmless and absent from your own repos.
