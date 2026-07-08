@@ -277,11 +277,13 @@ def _rendered_bodies(role: str) -> dict[str, str]:
 
 
 def _shipped_files() -> list[Path]:
+    skip_dirs = {"node_modules", ".venv", "__pycache__", ".git"}  # vendored/generated,
+    # not shipped policy — opencode materializes node_modules when opened in this repo
     files = [
         path
         for tree in (OPENCODE_DIR, COPILOT_DIR)
         for path in sorted(tree.rglob("*"))
-        if path.is_file()
+        if path.is_file() and not skip_dirs.intersection(path.parts)
     ]
     assert files, "renderings missing"
     return files
@@ -533,10 +535,10 @@ def test_opencode_skills_follow_the_naming_rules() -> None:
 
 
 def test_copilot_skill_modules_mirror_the_opencode_skill_set() -> None:
-    copilot_set = {p.stem for p in (COPILOT_DIR / "skills").glob("*.md")}
+    copilot_set = {p.name for p in (COPILOT_DIR / "skills").iterdir() if p.is_dir()}
     assert copilot_set == set(_discovered_skills()), "skill sets differ between renderings"
     for skill in _discovered_skills():
-        path = COPILOT_DIR / "skills" / f"{skill}.md"
+        path = COPILOT_DIR / "skills" / skill / "SKILL.md"
         assert path.is_file() and path.read_text().strip(), f"copilot skill {skill} missing"
 
 
@@ -580,7 +582,7 @@ def test_copilot_credential_names_start_with_the_required_prefix() -> None:
 
 def test_no_secret_markers_anywhere_in_the_shipped_trees() -> None:
     for path in _shipped_files():
-        lowered = path.read_text().lower()
+        lowered = path.read_text(errors="replace").lower()
         for marker in SECRET_MARKERS:
             assert marker not in lowered, f"{path}: marker {marker!r} found"
 

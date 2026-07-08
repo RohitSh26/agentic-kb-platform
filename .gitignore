@@ -47,3 +47,9 @@ vault/
 
 # graphify scratch extraction output (audit runs)
 graphify-out/
+
+# opencode materializes these when opened in this repo — never shipped
+.opencode/node_modules/
+.opencode/package.json
+.opencode/package-lock.json
+.opencode/bun.lock*

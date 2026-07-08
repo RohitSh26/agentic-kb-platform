@@ -506,7 +506,7 @@ class ParityChecker:
             else set()
         )
         copilot_set = (
-            {p.stem for p in copilot_skills.glob("*.md")} if copilot_skills.is_dir() else set()
+            {p.name for p in copilot_skills.iterdir() if p.is_dir()} if copilot_skills.is_dir() else set()
         )
         if self.opencode_dir.is_dir() and self.copilot_dir.is_dir() and opencode_set != copilot_set:
             self.fail(
@@ -538,7 +538,7 @@ class ParityChecker:
             if not body.strip():
                 self.fail(f"{label}: empty skill body")
         for skill in sorted(copilot_set):
-            path = copilot_skills / f"{skill}.md"
+            path = copilot_skills / skill / "SKILL.md"
             try:
                 text = path.read_text()
             except (UnicodeDecodeError, OSError) as error:
@@ -552,7 +552,7 @@ class ParityChecker:
         for skill in sorted(opencode_set & copilot_set):
             try:
                 _, opencode_body = _read(opencode_skills / skill / "SKILL.md")
-                copilot_text = (copilot_skills / f"{skill}.md").read_text(errors="replace")
+                copilot_text = (copilot_skills / skill / "SKILL.md").read_text(errors="replace")
             except (ParseError, OSError):
                 continue  # the per-file checks above already reported the unreadable file
             if opencode_body.strip() != copilot_text.strip():
@@ -691,6 +691,11 @@ class ParityChecker:
         gh = self.root / ".github" / "agents"
         if not self.copilot_dir.is_dir():
             return
+        if not (self.root / ".github").is_dir():
+            # a checkout that ships no .github/ (contract-test sandboxes, partial
+            # exports) has nothing to deploy INTO; the real repo always has one,
+            # so the deployment stays mandatory where it matters
+            return
         expected: dict[str, str] = {}
         for f in sorted((self.copilot_dir / "agents").glob("*.agent.md")):
             if f.name == "_template.agent.md":
@@ -715,6 +720,20 @@ class ParityChecker:
                 )
         for extra in sorted(actual - set(expected)):
             self.fail(f".github/agents/{extra}: not generated from .copilot/agents/ — remove it")
+        # skills deployment: .github/skills/<name>/SKILL.md pinned to .opencode/skills
+        gh_skills = self.root / ".github" / "skills"
+        oc_skills = self.opencode_dir / "skills"
+        if gh_skills.is_dir() and oc_skills.is_dir():
+            gh_set = {p.name for p in gh_skills.iterdir() if p.is_dir()}
+            oc_set = {p.name for p in oc_skills.iterdir() if p.is_dir()}
+            if gh_set != oc_set:
+                self.fail(f".github/skills set differs from .opencode/skills ({sorted(gh_set)} vs {sorted(oc_set)})")
+            for skill in sorted(gh_set & oc_set):
+                self.files_scanned += 1
+                if (gh_skills / skill / "SKILL.md").read_text(errors="replace") != (
+                    oc_skills / skill / "SKILL.md"
+                ).read_text(errors="replace"):
+                    self.fail(f".github/skills/{skill}/SKILL.md: differs from .opencode source")
 
     def run(self) -> int:
         if not self.agents_dir.is_dir():
