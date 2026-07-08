@@ -24,11 +24,13 @@ stays parity-clean without this repo's test suite (stdlib-only, CI-friendly).
 The agent frontmatter carries no `mcp-servers` block on purpose: VS Code ignores it, so the
 broker connection ships separately in `mcp/` for both deployment shapes.
 
-This repository does not keep a duplicate, pre-copied set of `*.agent.md` files at root
-`.github/agents/` — a stale snapshot there silently rots the moment the canon in `agents/`
-changes, since nothing rebuilds it automatically. Generate (or copy) your repository's
-`.github/agents/` directly from the current renderings in `.copilot/agents/*.agent.md` — the
-twelve files parity-pinned above — at deploy time, and re-copy whenever `agents/*.md` changes.
+This repository DOES commit `.github/agents/` — VS Code's Copilot extension discovers repo
+agents only there, and without it the editor flags every `agents:`/`handoffs:` reference as
+"Unknown agent" (observed live, 2026-07-08). The rot problem that argued against a committed
+copy is solved structurally instead: the deployment is generated from `.copilot/agents/` via
+`make sync-github-agents` (filenames = frontmatter names, so references resolve under either
+matching rule), and `agents/check_parity.py` pins every deployed file byte-identical to its
+rendering — any drift fails parity with the regeneration command in the message.
 
 ## The one credential to set
 

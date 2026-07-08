@@ -680,6 +680,42 @@ class ParityChecker:
 
     # --- entry point --------------------------------------------------------------------------
 
+    def check_github_deployment(self) -> None:
+        """VS Code's Copilot extension discovers repo agents from .github/agents/, NOT
+        from .copilot/agents/ — without this deployment the editor flags every
+        `agents:`/`handoffs:` reference as "Unknown agent" (seen live 2026-07-08).
+        The June snapshot rotted because nothing pinned it; this check pins it:
+        .github/agents/<frontmatter name>.agent.md must be BYTE-IDENTICAL to its
+        .copilot/agents/ source, no extras, no misses. Regenerate:
+        `make sync-github-agents`."""
+        gh = self.root / ".github" / "agents"
+        if not self.copilot_dir.is_dir():
+            return
+        expected: dict[str, str] = {}
+        for f in sorted((self.copilot_dir / "agents").glob("*.agent.md")):
+            if f.name == "_template.agent.md":
+                continue
+            text = f.read_text()
+            match = re.search(r"^name:\s*(\S+)", text, re.M)
+            if match is None:
+                continue  # frontmatter shape is checked elsewhere
+            expected[f"{match.group(1)}.agent.md"] = text
+        if not gh.is_dir():
+            self.fail(".github/agents/ missing — run `make sync-github-agents`")
+            return
+        actual = {f.name for f in gh.glob("*.agent.md")}
+        for fname, text in expected.items():
+            self.files_scanned += 1
+            if fname not in actual:
+                self.fail(f".github/agents/{fname}: missing (make sync-github-agents)")
+            elif (gh / fname).read_text() != text:
+                self.fail(
+                    f".github/agents/{fname}: differs from its .copilot/agents/ source "
+                    f"(make sync-github-agents)"
+                )
+        for extra in sorted(actual - set(expected)):
+            self.fail(f".github/agents/{extra}: not generated from .copilot/agents/ — remove it")
+
     def run(self) -> int:
         if not self.agents_dir.is_dir():
             print(f"FAIL: no agents/ directory under {self.root}", file=sys.stderr)
@@ -716,6 +752,7 @@ class ParityChecker:
         self.check_skills(skills)
         self.check_templates()
         self.check_secrets()
+        self.check_github_deployment()
         if self.failures:
             for failure in self.failures:
                 print(f"FAIL: {failure}", file=sys.stderr)

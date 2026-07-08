@@ -1,7 +1,7 @@
 SERVICES := kb-builder mcp-server review-panel
 TEST_DATABASE_URL ?= postgresql+asyncpg://postgres:postgres@localhost:5432/agentic_kb_test
 
-.PHONY: sync lint types test verify migrate-test-db eval-run eval-all dashboard demo \
+.PHONY: sync lint types test verify migrate-test-db sync-github-agents eval-run eval-all dashboard demo \
 	sync-evals lint-evals types-evals test-evals verify-evals \
 	$(foreach s,$(SERVICES),sync-$(s) lint-$(s) types-$(s) test-$(s) verify-$(s))
 
@@ -25,6 +25,13 @@ $(SERVICES:%=lint-%): lint-%:
 
 $(SERVICES:%=types-%): types-%:
 	cd services/$* && uv run pyright
+
+# VS Code's Copilot extension discovers repo agents from .github/agents/ — this
+# regenerates that deployment from the committed .copilot/agents/ renderings
+# (filenames = frontmatter names, so agents:/handoffs: references resolve).
+# check_parity.py pins the two byte-identical.
+sync-github-agents:
+	python3 -c "import pathlib,re; src=pathlib.Path('.copilot/agents'); dst=pathlib.Path('.github/agents'); dst.mkdir(parents=True,exist_ok=True); [dst.joinpath(re.search(r'^name:\\s*(\\S+)',f.read_text(),re.M).group(1)+'.agent.md').write_text(f.read_text()) for f in sorted(src.glob('*.agent.md')) if f.name!='_template.agent.md']"
 
 # kb-builder owns the schema: mcp-server integration tests require a database
 # migrated here first (mcp-server never runs alembic). test-mcp-server and
