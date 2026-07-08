@@ -203,7 +203,7 @@ provenance is required; `kb_search` is the preferred first stop.
 - Per-agent allowances are keyed by the **authenticated session subject** and
   supplied per deployment via the optional `MCP_AGENT_ALLOWANCES` env var — a
   JSON object `{subject: {max_requests, max_tokens}}` (identifiers only, never
-  secrets). Unlisted subjects get the conservative default (1 request / 2,500
+  secrets). Unlisted subjects get the conservative default (1 request / 4,000
   tokens). `max_requests: 0` is valid and means the subject may never
   `request_more`. Malformed config (bad JSON, padded or duplicate subject
   keys, non-integer values) fails the boot — it never silently defaults.

@@ -49,7 +49,7 @@ AGENT_ALLOWANCES: dict[str, tuple[int, int]] = {
     "test_coverage_reviewer": (1, 2_000),
 }
 # Fallback for agents absent from the map — mirrors the broker's
-# DEFAULT_AGENT_ALLOWANCE (mcp-server context_broker/budgets.py: 1 request / 2500).
+# DEFAULT_AGENT_ALLOWANCE (mcp-server context_broker/budgets.py: 1 request / 4000 since 2026-07-07).
 DEFAULT_AGENT_MAX_REQUESTS = 1
 DEFAULT_AGENT_MAX_TOKENS = 2_500
 

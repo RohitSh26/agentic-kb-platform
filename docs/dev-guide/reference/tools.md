@@ -71,7 +71,7 @@ Two identical requests produce byte-identical JSON except the documented volatil
 
 The server enforces a **dual cap per (MCP session, authenticated subject)**: a call count AND a
 cumulative token total — whichever closes first. The caps come from `MCP_AGENT_ALLOWANCES` for
-your subject; a subject with no configured allowance gets the default of **1 request / 2,500
+your subject; a subject with no configured allowance gets the default of **1 request / 4,000
 tokens** (see [environment-variables.md](environment-variables.md)).
 
 A spent budget is a **response, never an error**: `results` comes back empty and `notice` carries

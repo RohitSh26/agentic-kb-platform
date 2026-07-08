@@ -14,7 +14,7 @@ defaults).
 | `DATABASE_URL` | **yes** | — | asyncpg URL of the Postgres holding the active KB. Must start `postgresql+asyncpg://`. May point at a remote Postgres (e.g. over an SSH tunnel); the server only ever serves what that registry holds. |
 | `MCP_ENTRA_TENANT_ID` | **yes** | — | Entra tenant id (an identifier, not a secret) the bearer's issuer must match. `local-dev` in local-dev mode. |
 | `MCP_ENTRA_AUDIENCE` | **yes** | — | The `aud` claim your access token must carry, e.g. `api://agentic-kb`. |
-| `MCP_AGENT_ALLOWANCES` | no | unset ⇒ defaults | Subject → per-agent budget JSON, e.g. `{"local-dev": {"max_requests": 50, "max_tokens": 50000}}`. Both keys are required per entry; parsed fail-fast. A subject not listed gets the default allowance of **1 request / 2,500 tokens**. |
+| `MCP_AGENT_ALLOWANCES` | no | unset ⇒ defaults | Subject → per-agent budget JSON, e.g. `{"local-dev": {"max_requests": 50, "max_tokens": 50000}}`. Both keys are required per entry; parsed fail-fast. A subject not listed gets the default allowance of **1 request / 4,000 tokens**. |
 | `MCP_CLIENT_REGISTRY` | no | unset | client_id → scopes + verification policy JSON. Identifiers + policy only; any client secret is referenced by env/Key Vault name, never a value. |
 | `MCP_HTTP_HOST` | no | `0.0.0.0` | Transport bind host. |
 | `MCP_HTTP_PORT` | no | `8000` | Transport port. |

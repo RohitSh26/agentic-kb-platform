@@ -477,8 +477,13 @@ async def test_configured_allowance_from_deployment_json_raises_the_request_cap(
 async def test_request_more_denied_when_token_allowance_would_be_exceeded(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # default per-agent token allowance is 2500
-    deps, pack_id, _ = await _pack_with_refund_follow_up(factory, budget_policy=BudgetPolicy())
+    # explicit 2,500-token allowance: this test pins denial arithmetic, not the default
+    deps, pack_id, _ = await _pack_with_refund_follow_up(
+        factory,
+        budget_policy=BudgetPolicy(
+            allowances={SUBJECT: AgentAllowance(max_requests=5, max_tokens=2500)}
+        ),
+    )
 
     response = await request_more(
         deps,
@@ -519,11 +524,15 @@ async def test_request_more_escalates_when_run_budget_is_too_small(
 async def test_request_more_denied_takes_priority_over_run_budget_escalation(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # the request exceeds BOTH the per-agent token allowance (default 2500) AND the
+    # the request exceeds BOTH the per-agent token allowance (explicit 2500) AND the
     # run budget (100); the contract orders denied before needs_human_approval, so
     # the per-agent denial must win — a reorder of the two checks would fail here
     deps, pack_id, _ = await _pack_with_refund_follow_up(
-        factory, budget_policy=BudgetPolicy(), budget_tokens=100
+        factory,
+        budget_policy=BudgetPolicy(
+            allowances={SUBJECT: AgentAllowance(max_requests=5, max_tokens=2500)}
+        ),
+        budget_tokens=100,
     )
 
     response = await request_more(
@@ -928,14 +937,21 @@ async def test_open_evidence_unknown_handle_errors_and_writes_error_row(
 async def test_open_evidence_over_agent_allowance_writes_denied_row_and_errors(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # default per-agent token allowance is 2500; cost = min(4000, 3000) = 3000
+    # explicit 2,500-token allowance (this test pins denial arithmetic, not the
+    # default); cost = min(4000, 3000) = 3000
     search = FakeSearchClient()
     async with factory() as session:
         artifact_id = await insert_artifact(
             session, title="Payment long doc", body_text="y" * 16_000
         )
     search.seed("payment", [SearchHit(artifact_id=artifact_id, score=1.0)])
-    deps = make_broker_deps(factory, search)
+    deps = make_broker_deps(
+        factory,
+        search,
+        budget_policy=BudgetPolicy(
+            allowances={SUBJECT: AgentAllowance(max_requests=5, max_tokens=2500)}
+        ),
+    )
     created = await create_pack(deps, _create_pack_request(), REQUESTER)
 
     with pytest.raises(ToolError, match="agent token allowance exceeded"):

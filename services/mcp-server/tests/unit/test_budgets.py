@@ -14,7 +14,7 @@ def test_unknown_subject_gets_the_conservative_default() -> None:
     policy = BudgetPolicy()
     assert policy.allowance_for("anyone") == DEFAULT_AGENT_ALLOWANCE
     assert DEFAULT_AGENT_ALLOWANCE.max_requests == 1
-    assert DEFAULT_AGENT_ALLOWANCE.max_tokens == 2500
+    assert DEFAULT_AGENT_ALLOWANCE.max_tokens == 4000
 
 
 def test_explicit_allowance_overrides_the_default() -> None:

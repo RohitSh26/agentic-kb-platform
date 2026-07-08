@@ -81,7 +81,7 @@ REPO_ROOT = Path(os.environ.get("REPO_ROOT", Path(__file__).resolve().parent.par
 SEARCH_BUDGET = int(os.environ.get("KB_SEARCH_BUDGET", "4"))
 # ADR-0025 section 4: the one enforced restriction is "call count + token budget". The token cap
 # bounds total KB bytes pulled even if each call is cheap (token-budgets.md: 3k-4k for impl agent).
-KB_TOKEN_BUDGET = int(os.environ.get("KB_SEARCH_TOKEN_BUDGET", "3000"))
+KB_TOKEN_BUDGET = int(os.environ.get("KB_SEARCH_TOKEN_BUDGET", "4000"))
 MAX_STEPS = int(os.environ.get("KB_AGENT_MAX_STEPS", "20"))
 _TOP = 6
 
